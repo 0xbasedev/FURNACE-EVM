@@ -7,11 +7,13 @@
   "scripts": {
     "config:hash": "tsx scripts/config-hash.ts",
     "config:verify-hash": "tsx scripts/config-hash.ts --expect",
+    "check:config": "tsx scripts/check-config.ts",
     "verify:create3": "tsx scripts/verify-create3.ts",
-    "check": "pnpm config:verify-hash && pnpm verify:create3"
+    "test:review": "tsx test/furnace.review.test.ts",
+    "check": "pnpm config:verify-hash && pnpm verify:create3 && pnpm test:review"
   },
   "devDependencies": {
-    "@noble/hashes": "^2.0.1",
+    "@noble/hashes": "^1.8.0",
     "tsx": "^4.20.6"
   }
 }
