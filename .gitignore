@@ -1,0 +1,5 @@
+node_modules/
+# Solana program/mint keypairs (spec §23) — never commit, back them up offline
+keys/
+.env
+.env.*

@@ -1,0 +1,17 @@
+{
+  "name": "furnace-evm",
+  "version": "5.3.1",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.28.0",
+  "scripts": {
+    "config:hash": "tsx scripts/config-hash.ts",
+    "config:verify-hash": "tsx scripts/config-hash.ts --expect",
+    "verify:create3": "tsx scripts/verify-create3.ts",
+    "check": "pnpm config:verify-hash && pnpm verify:create3"
+  },
+  "devDependencies": {
+    "@noble/hashes": "^2.0.1",
+    "tsx": "^4.20.6"
+  }
+}
