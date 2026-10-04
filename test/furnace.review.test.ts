@@ -6,6 +6,7 @@
 // hash-registry.json, which is not available. It now checks against the
 // address table published in spec §23 (an independent source from the
 // config). Set REGISTRY=path to use a reviewer registry file instead.
+// v5.3.2 updates exactly one assertion (empty-bucket split), marked inline.
 import cfg, {
   validateConfig, heatAgeAfterWithdrawal, cooledAgeAfterWithdrawal, deedHeatAge,
   create3Address, isValidEvmAddress, isValidSolanaPubkey, epochAllocation,
@@ -132,7 +133,9 @@ t('sealer escrow = additive cap 30.6868', near(ce.escrow[0], 30.686799805163172,
 t('literal cap (112.0) NOT used', ce.escrow[0] < 50);
 t('conservation Σordinary+Σescrow = E', near(ce.ordinary.reduce((a, b) => a + b, 0) + ce.escrow.reduce((a, b) => a + b, 0), 10_000, 1e-6));
 const empty = epochAllocation(10_000, [{ stake: 1, heat: 1, sealBonus: 0 }, { stake: 1, heat: 3, sealBonus: 0 }]);
-t('empty bucket: equal stakes 1×/3× → 31.75% / 68.25%', near(empty.ordinary[0] / 10_000, 0.3175) && near(empty.ordinary[1] / 10_000, 0.6825));
+// v5.3.2 (Decision 1): the unused bucket returns pro-rata, so 30/70 holds:
+// flat 30% → 15% each; Heat 70% split 1:3 → 17.5% / 52.5%. (v5.3.1 expected 31.75% / 68.25%.)
+t('empty bucket: equal stakes 1×/3× → 32.5% / 67.5% (v5.3.2 pro-rata)', near(empty.ordinary[0] / 10_000, 0.325) && near(empty.ordinary[1] / 10_000, 0.675));
 t('empty bucket returns all of K', near(empty.returned, 1000));
 // property: 1,000 random cohorts conserve budget and never exceed caps
 let prop = true, seed = 42; const rnd = () => (seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31;

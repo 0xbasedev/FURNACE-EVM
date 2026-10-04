@@ -1,5 +1,5 @@
 // ══════════════════════════════════════════════════════════════════════════════
-// FURNACE PROTOCOL — Master Configuration File · v5.3.1
+// FURNACE PROTOCOL — Master Configuration File · v5.3.2
 // ══════════════════════════════════════════════════════════════════════════════
 // The single source of truth for the whole protocol. Read by:
 //   contracts/   Foundry deploy scripts (EVM) and Anchor deploy scripts (Solana)
@@ -327,6 +327,20 @@
 //     fees would have been unrecoverable. Now explicitly unset + validated.
 //   Corrected: hash length is 26,829 chars / 26,875 UTF-8 bytes (v5.3.0).
 //   Open (policy decisions, not silently chosen): see REVIEW-RESPONSE.md.
+//
+// v5.3.2 changelog (from v5.3.1) — resolves REVIEW-RESPONSE Decisions 1 and 2.
+// Economic change: emission routing within an epoch. Totals, caps, fees,
+// timers and supply are unchanged. Hash: run `pnpm config:hash`.
+//   Decision 1: unused Conviction bucket returns PRO-RATA to the flat and
+//     Heat pools (convictionTracks.bucketCap.unallocatedFlowsTo: 'proRata').
+//     The 30/70 newcomer/loyalty split now holds in every epoch, sealed or
+//     not (was 27/73 when nobody sealed). Sealed escrow caps (L·s·b/W, L =
+//     70% of the non-bucket budget) are unchanged.
+//   Decision 2: Casting is per pool (casting.singleTokenCast). LP pools →
+//     cast LP into the source lot (unchanged). Ember Vault → the cast share
+//     joins the source lot as EMBER at that lot's age; no pairing, no match
+//     reserve draw. Cold Storage (and any other single-token pool) → liquid
+//     EMBER, as in v5.3.1.
 // ══════════════════════════════════════════════════════════════════════════════
 // v5.3 changelog (from v5.2.0) — seven fixes, two completions. Every v5.2
 // mechanic stands; v5.3 makes the numbers agree with each other:
@@ -664,11 +678,15 @@ export interface CastingConfig {
    */
   entersAs: 'sourceLotAge';
   /**
-   * Review fix §4.3: LP cannot be added to a single-token (EMBER, USDC) balance.
-   * For stakeKind==='lp' pools: cast LP goes to the source lot (above).
-   * For stakeKind==='single' pools: the cast share is paid as liquid EMBER instead.
+   * Casting for stakeKind==='single' pools (v5.3.2, review Decision 2). LP
+   * cannot join a single-token balance, so:
+   *   ember: a pool staking EMBER (Ember Vault) — the cast share joins the
+   *          SOURCE LOT as EMBER at that lot's age. No pairing, no match
+   *          reserve draw, nothing paid liquid.
+   *   other: any other single-token pool (Cold Storage) — paid as liquid EMBER.
+   * stakeKind==='lp' pools are unaffected: cast LP goes to the source lot.
    */
-  singleTokenFallback: 'liquidEmber';
+  singleTokenCast: { ember: 'sourceLot'; other: 'liquidEmber' };
 }
 
 export interface PyreTierConfig {
@@ -837,10 +855,13 @@ export interface ConvictionTracksConfig {
    */
   bucketCap: {
     enabled: true;
-    /** Cap each sealed position at sealBonus × its heat-pool earnings. */
+    /** Additive cap per sealed position: L · stake · sealBonus / W (never sealBonus × earnings). */
     capToSealBonusOfHeatShare: true;
-    /** Where the unallocated bucket goes: back into the 70% Heat pool. */
-    unallocatedFlowsTo: 'heatPool';
+    /**
+     * Where the unallocated bucket goes (v5.3.2): back into the flat and Heat
+     * pools pro-rata to emissions.split, so 30/70 holds in every epoch.
+     */
+    unallocatedFlowsTo: 'proRata';
   };
   /**
    * True escrow: the bonus is minted per epoch INTO ESCROW as part of the
@@ -1519,7 +1540,7 @@ export const namePresets = { furnace: FURNACE_NAMES, tephra: TEPHRA_NAMES } as c
 
 // ─── The config ─────────────────────────────────────────────────────────────
 export const furnaceConfig = {
-  version: '5.3.1',
+  version: '5.3.2',
 
   brand: {
     protocolName: 'FURNACE',
@@ -1618,6 +1639,8 @@ export const furnaceConfig = {
       stokeFallback: 'The {matchReserve} is dry, so this Stoke will zap: half of it sells for the quote asset on the pool. Stoke into {capstone} instead to sell nothing.',
       pyreBurn: 'Burning {amount} {symbol} is permanent and irreversible. The {pyre} badge is soulbound — it can never be sold — and its +{boost}× {multiplier} lasts forever.',
       castingNote: '{pct}% of every emission is {casting}: paired with the {matchReserve} and staked back into the lot that earned it, at that lot\'s age. It never dilutes your {multiplier} — a 365-day lot\'s cast lands at 365 days. It can never be dumped — only withdrawn like the rest of your stake.',
+      castingNoteSingleEmber: '{pct}% of every emission is {casting}: it joins the lot that earned it as EMBER, at that lot\'s age — no pairing, nothing sold. It can never be dumped — only withdrawn like the rest of your stake.',
+      castingNoteSingleOther: 'This pool can\'t hold LP, so its {casting} share is paid as liquid EMBER.',
       trackForfeit: 'Leaving before day {days} forfeits the unvested +{bonus}× {tracks} bonus. Your principal is never locked and never slashed — it still exits through the normal {withdraw} timer.',
       deedSale: 'Selling this {deed} moves the LP, {capstone}, escrow and rewards to the buyer — the pool never loses liquidity. The buyer inherits {heatCarry}% of your {multiplier} age; your {streak} resets and your badges stay with you. A completed {seal} term leaves a permanent Seal Scar on the {deed}; your Keystone Relic stays in your wallet forever. {marketFee}% goes to the {feeRouter}.',
       deedBuy: 'This {deed} carries {heatAge} days of {multiplier} age ({heatCarry}% of what the seller earned). The {streak} starts at 0 for you; badges are earned, never bought.',
@@ -1902,8 +1925,8 @@ export const furnaceConfig = {
       autoStake: true,
       castLot: 'sourceLot',
       entersAs: 'sourceLotAge',
-      // review fix §4.3: single-token pool positions receive liquid EMBER for the cast share
-      singleTokenFallback: 'liquidEmber' as const,
+      // v5.3.2: Ember Vault casts EMBER into the source lot; Cold Storage pays liquid EMBER
+      singleTokenCast: { ember: 'sourceLot', other: 'liquidEmber' } as const,
     },
     pyre: {
       enabled: true,
@@ -1924,13 +1947,13 @@ export const furnaceConfig = {
         { days: 365, bonus: 0.5, name: 'Eternal' },
       ],
       vestAtTermEnd: true, // bonus accrues daily, pays out only at term end; early exit forfeits the unvested part
-      // Per-position bucket cap: no sealed position collects more than
-      // sealBonus × its heat-pool earnings in an epoch; the rest flows back
-      // into the Heat pool. The 4.15× ceiling binds.
+      // Per-position bucket cap (additive): no sealed position collects more
+      // than L · stake · sealBonus / W in an epoch; the rest flows back to the
+      // flat and Heat pools pro-rata (v5.3.2). The 4.15× ceiling binds.
       bucketCap: {
         enabled: true,
         capToSealBonusOfHeatShare: true,
-        unallocatedFlowsTo: 'heatPool',
+        unallocatedFlowsTo: 'proRata',
       },
       // True escrow, FIXED budget: the bonus accrues daily INTO ESCROW from the
       // 10% Conviction bucket (ordinary share stays claimable). totalBaseMint
@@ -2061,10 +2084,10 @@ export const furnaceConfig = {
     //   candidate_i = K * s_i*h_i*b_i / V
     //   cap_i       = L * s_i*b_i / W    (additive: bonus earns b/h fraction extra)
     //   escrow_i    = min(candidate_i, cap_i)
-    //   returned    = K - Σ(escrow_i)  → back into the Heat pool that epoch
-    //   ordinary_i  = F*s_i/S + (L+returned)*s_i*h_i/W
-    // When no positions are sealed, returned=K; effective split is 27%/73%,
-    // not the nominal 30/70. The split field describes the pre-bucket base.
+    //   returned    = K - Σ(escrow_i)  → back pro-rata that epoch (v5.3.2)
+    //   ordinary_i  = (F + flat%·returned)*s_i/S + (L + heat%·returned)*s_i*h_i/W
+    // When no positions are sealed, returned=K and the effective split is
+    // exactly 30/70 (v5.3.1 returned to the Heat pool only: 27/73).
     convictionBucketPct: 10,
     ashfall: {
       enabled: true,
@@ -2366,12 +2389,12 @@ export interface CohortPosition { stake: number; heat: number; sealBonus: number
  *   candidate_i = K · s·h·b / V
  *   cap_i       = L · s·b / W        ← additive: +b multiplier units, never b × earnings
  *   escrow_i    = min(candidate_i, cap_i)
- *   returned    = K − Σescrow       → back into the Heat pool, same epoch
- *   ordinary_i  = F·s/S + (L + returned)·s·h/W
+ *   returned    = K − Σescrow       → back pro-rata to flat/Heat, same epoch (v5.3.2)
+ *   ordinary_i  = (F + flat%·returned)·s/S + (L + heat%·returned)·s·h/W
  *
  * Conservation: Σordinary + Σescrow = E exactly (up to float error).
- * With nobody sealed, the effective split is (flat × (1−bucket)) / rest:
- * 27% raw / 73% Heat at the FURNACE parameters — not 30/70.
+ * With nobody sealed, the effective split is exactly flat/heat = 30/70.
+ * (v5.3.1 returned to the Heat pool only, giving 27/73.)
  */
 export function epochAllocation(
   epochBudget: number,
@@ -2398,8 +2421,10 @@ export function epochAllocation(
     return Math.min(candidate, cap);
   });
   const returned = K - escrow.reduce((a, x) => a + x, 0);
+  const flatPool = F + (e.split.flatPct / 100) * returned;
+  const heatPool = L + (e.split.heatPct / 100) * returned;
   const ordinary = positions.map((p) =>
-    (S > 0 ? (F * p.stake) / S : 0) + (W > 0 ? ((L + returned) * p.stake * p.heat) / W : 0));
+    (S > 0 ? (flatPool * p.stake) / S : 0) + (W > 0 ? (heatPool * p.stake * p.heat) / W : 0));
   return { ordinary, escrow, returned };
 }
 
@@ -2489,6 +2514,37 @@ export function castEmissionSplit(
   const want = emission * (c.casting.lpSharePct / 100);
   const cast = Math.max(0, Math.min(want, Math.max(0, reserveQuoteValue)));
   return { liquid: emission - cast, cast };
+}
+
+export type CastDestination = 'sourceLotLp' | 'sourceLotEmber' | 'liquidEmber';
+
+/** Where a pool's cast share lands (v5.3.2, review Decision 2). */
+export function castDestination(
+  pool: { stakeKind: 'lp' | 'single'; stakeToken: string },
+  c: ForgeConfig = furnaceConfig.forge,
+  emberSymbol: string = furnaceConfig.token.symbol,
+): CastDestination {
+  if (pool.stakeKind === 'lp') return 'sourceLotLp';
+  const rule = pool.stakeToken === emberSymbol ? c.casting.singleTokenCast.ember : c.casting.singleTokenCast.other;
+  return rule === 'sourceLot' ? 'sourceLotEmber' : 'liquidEmber';
+}
+
+/**
+ * Per-pool cast split. LP pools are bounded by match-reserve quote coverage
+ * (castEmissionSplit); Ember Vault needs no quote, so its whole cast share
+ * re-stakes; other single-token pools receive everything liquid.
+ */
+export function castForPool(
+  emission: number,
+  reserveQuoteValue: number,
+  pool: { stakeKind: 'lp' | 'single'; stakeToken: string },
+  c: ForgeConfig = furnaceConfig.forge,
+): { liquid: number; cast: number; destination: CastDestination } {
+  const destination = castDestination(pool, c);
+  if (destination === 'sourceLotLp') return { ...castEmissionSplit(emission, reserveQuoteValue, c), destination };
+  if (destination === 'liquidEmber' || !c.casting.enabled) return { liquid: emission, cast: 0, destination };
+  const cast = emission * (c.casting.lpSharePct / 100);
+  return { liquid: emission - cast, cast, destination };
 }
 
 /**
@@ -2817,9 +2873,12 @@ export function validateConfig(c: FurnaceConfig = furnaceConfig): string[] {
   // Casting follows provenance: into the lot that earned it, never a rolling lot.
   if (c.forge.casting.castLot !== 'sourceLot') errors.push('casting must stake back into the lot that earned it');
   if (c.forge.casting.entersAs !== 'sourceLotAge') errors.push('cast LP must enter at the earning lot\'s age');
+  if (c.forge.casting.singleTokenCast?.ember !== 'sourceLot' || c.forge.casting.singleTokenCast?.other !== 'liquidEmber') {
+    errors.push('casting.singleTokenCast must be { ember: sourceLot, other: liquidEmber } (v5.3.2)');
+  }
   // Conviction bucket per-position cap: the 4.15× ceiling must bind.
   if (c.forge.convictionTracks.bucketCap.enabled !== true) errors.push('conviction bucketCap must be enabled');
-  if (c.forge.convictionTracks.bucketCap.unallocatedFlowsTo !== 'heatPool') errors.push('unallocated conviction bucket must flow back to the Heat pool');
+  if (c.forge.convictionTracks.bucketCap.unallocatedFlowsTo !== 'proRata') errors.push('unallocated conviction bucket must flow back pro-rata to the flat and Heat pools (v5.3.2)');
   if (c.forge.fees.depositPct !== 1) errors.push('post-genesis deposit fee must be exactly 1');
   if (c.forge.fees.depositPct > c.security.feeCeilings.depositPct) errors.push('deposit fee above ceiling');
   if (c.forge.fees.withdrawPct !== 1) errors.push('withdraw fee must be exactly 1');

@@ -435,6 +435,8 @@
     "warnings": {
       "capstone": "{capstone} earns no emissions. It adds up to +{maxBonus}× {multiplier} when it is worth {ratioForMax}% of your LP, and it never sells.",
       "castingNote": "{pct}% of every emission is {casting}: paired with the {matchReserve} and staked back into the lot that earned it, at that lot's age. It never dilutes your {multiplier} — a 365-day lot's cast lands at 365 days. It can never be dumped — only withdrawn like the rest of your stake.",
+      "castingNoteSingleEmber": "{pct}% of every emission is {casting}: it joins the lot that earned it as EMBER, at that lot's age — no pairing, nothing sold. It can never be dumped — only withdrawn like the rest of your stake.",
+      "castingNoteSingleOther": "This pool can't hold LP, so its {casting} share is paid as liquid EMBER.",
       "claimVsCompound": "{compoundVerb} is instant and keeps your {multiplier}. Claiming starts a {claimHours} h timer.",
       "deedAuction": "This {deed} sells by {auctionHours}-hour auction at a reserve of {reserve} {currency}. Highest bid at close wins; {marketFee}% of the final price goes to the {feeRouter}. No instant sale — the only instant exit is the emergency route.",
       "deedBuy": "This {deed} carries {heatAge} days of {multiplier} age ({heatCarry}% of what the seller earned). The {streak} starts at 0 for you; badges are earned, never bought.",
@@ -717,7 +719,10 @@
       "fallback": "liquidEmber",
       "lpSharePct": 25,
       "quoteSource": "matchReserve",
-      "singleTokenFallback": "liquidEmber"
+      "singleTokenCast": {
+        "ember": "sourceLot",
+        "other": "liquidEmber"
+      }
     },
     "compound": {
       "defaultTarget": "capstoneThenLp",
@@ -732,7 +737,7 @@
       "bucketCap": {
         "capToSealBonusOfHeatShare": true,
         "enabled": true,
-        "unallocatedFlowsTo": "heatPool"
+        "unallocatedFlowsTo": "proRata"
       },
       "enabled": true,
       "escrow": {
@@ -1363,5 +1368,5 @@
       "showRelicMarkers": true
     }
   },
-  "version": "5.3.1"
+  "version": "5.3.2"
 }
