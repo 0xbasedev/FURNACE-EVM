@@ -1,62 +1,84 @@
 # FURNACE-EVM
 
-EVM workspace for **FURNACE Protocol v5.3.1**, an omnichain loyalty-staking protocol built on EMBER, ASH, liquidity and earned time.
+EVM workspace for **FURNACE Protocol**, an omnichain loyalty-staking protocol built on EMBER, ASH, liquidity and earned time. The config is at **v5.3.2**; see [`docs/REVISIONS.md`](docs/REVISIONS.md).
 
-> **Status: pre-implementation.** No contracts exist yet. Nothing here is audited, deployed, or production-ready. The spec says no audit has happened.
+> **Status: early implementation.** It contains math libraries and the home-chain EMBER token. Nothing is audited or deployed, and nothing here is production-ready. The spec says no audit has happened, and mainnet requires at least two independent audits.
 
 ## Layout
 
 | Path | What it is |
 |---|---|
-| `furnace.config.ts` | **Canonical v5.3.1 config**, unmodified from the supplied file. It holds the data, the `validateConfig()` validator, and pure helpers such as `epochAllocation`, `heatMultiplier`, `totalMintForEpoch`, `create3Address` and `contractAddress`. |
-| `config/furnace.config.canonical.json` | The canonical JSON form of the default export. `pnpm check` fails if the two drift apart. |
-| `test/furnace.review.test.ts` | The 66-check review suite, transcribed from `docs/sources/furnace.review.test.pdf`. See *Changes to the review suite* below. |
-| `scripts/` | `config:hash` (spec §23 serialization), `check:config`, and `verify:create3` (an independent CREATE3 re-derivation). |
-| `docs/sources/` | The supplied source documents, unmodified. |
+| `furnace.config.ts` | **Canonical config.** It holds the data, `validateConfig()`, and the reference helpers (`epochAllocation`, `heatMultiplier`, `totalMintForEpoch`, `castForPool`, `create3Address`, …). |
+| `config/furnace.config.canonical.json` | Canonical JSON mirror of the default export (`pnpm config:json`). |
+| `contracts/src/generated/FurnaceParams.sol` | Solidity constants **generated from the config** (`pnpm gen`). Contracts never hand-copy a protocol number. |
+| `contracts/src/libraries/HeatMath.sol` | lotHeat (√ ramp plus prorated milestone bumps), position Heat, cap-first cooling, Deed age carry. |
+| `contracts/src/libraries/EmissionMath.sol` | Half-life curve with floor, and the shared base + Ashfall headroom budget. |
+| `contracts/src/EmberToken.sol` | Home-chain EMBER: immutable, zero tax, enforces the 21M live ceiling, single minter. See [ADR 0001](docs/adr/0001-ember-canonical-supply.md). |
+| `contracts/test/` | Differential tests against vectors from the TS oracle, fuzz properties, and invariants. |
+| `test/` | Review suite (66 checks) and v5.3.2 decision tests (19 checks). |
+| `scripts/` | `config:hash`, `check:config`, `verify:create3`, `gen`. |
+| `tools/solc` | solc-js shim for forge (see *Toolchain*). |
+| `docs/sources/` | The supplied source documents, unmodified (spec v5.3.1, review, instructions). |
+
+## Commands
 
 ```sh
+git submodule update --init   # lib/forge-std
 pnpm install
-pnpm check          # CI gate: hash + mirror, CREATE3, review suite (66/66)
-pnpm check:config   # full validateConfig(); fails until deploy identities are set
-pnpm config:hash
+pnpm check          # everything below; this is the CI gate
+pnpm typecheck
+pnpm config:hash    # keccak256 of the canonical config
+pnpm test:review    # 66-check review suite
+pnpm test:config    # v5.3.2 decision tests
+pnpm gen            # regenerate FurnaceParams.sol + oracle vectors after any config change
+pnpm test:sol       # forge test
+pnpm check:config   # full validateConfig(): fails until deploy identities are set (by design)
 ```
 
-## Verified in this repo (pnpm check)
+## Verified (pnpm check, current head)
 
-- `keccak256(canonical(furnace.config.ts))` = `0x9ecedb63d5d10951caaf506032a1cf6d14b9e2196f236e2d2a45c200870463f7` (27,108 chars / 27,158 bytes). This matches the spec header and the review response.
-- All 9 CreateX CREATE3 addresses re-derive from their salts. Two separate implementations check this: the config's `create3Address` and `scripts/verify-create3.ts`. Both match the spec §23 table. The addresses are bound to the placeholder deployer.
-- The review suite passes 66/66. All 28 reviewer mutations are rejected, all 9 positive controls fire, and the conviction oracle reproduces 30.686800.
-- The baseline `validateConfig()` returns 19 errors, all of them deploy blockers (listed below).
+- Config v5.3.2 hash is `0xbaeb97a2a062763bc986f78e270812214d439bba2044fcdbdc99ad5c00b17270`, and the JSON mirror matches it. The v5.3.1 hash (`0x9ecedb63…63f7`) was reproduced exactly from the supplied file before the revision.
+- All 9 CREATE3 addresses re-derive from their salts. They are provisional because they're bound to the placeholder deployer.
+- Review suite: 66/66. Decision tests: 19/19.
+- Forge: 26/26.
+  - Solidity math matches the TS oracle to within 1e-12 relative at every vector.
+  - Fuzzing checks that Heat is bounded and monotone with no cliffs, that the emission curve is monotone and floored, and that base + Ashfall never exceed headroom.
+  - Invariants: `totalSupply ≤ 21M`, and balances sum to supply.
+- The generated Solidity is fresh relative to the config.
 
-## Changes to the review suite
+## Toolchain
 
-The supplied suite needed a reviewer `hash-registry.json` that is not available. The CREATE3 section now checks against the address table published in spec §23 by default. Set `REGISTRY=path` to use a registry file instead. The suite also now exits non-zero on failure so it can gate CI. The checks themselves are unchanged.
+Foundry's installer, GitHub releases and the solc binary host are blocked in the cloud dev environment, so both compilers come from npm:
+- `@foundry-rs/forge` (pinned) provides `forge`.
+- `tools/solc` wraps solc-js 0.8.28 (npm `solc`, pinned).
 
-## Not yet in the repo
+Builds are therefore reproducible from `pnpm install` alone. EVM target: `cancun`.
 
-- `pnpm mine:salts` and the deploy scripts referenced by the config. They were not supplied, and no replacements have been written.
-- Any contracts (Foundry / Anchor).
+## Deploy blockers (in the config by design)
 
-## Deploy blockers (present in the config by design)
+- `deployment.evm.deployer` is the placeholder `0x1111…1111`, so every mined address, and `FurnaceParams`, is **provisional**. Set the real deployer, then run `pnpm mine:salts` and `pnpm gen`.
+- `deployment.evm.treasurySafe.saltNonce` is `null`. `treasury.controller.signers` is `[]` (spec §27 recommends 3-of-5).
+- `treasury.addresses.*` and `security.guardian.*` are unset on every chain. `chains[*].lz.dvns` is `[]`, but at least 2 are required.
+- `deployment.svm.upgradeAuthority` is `""`. The Solana keypairs under `keys/` are gitignored.
+- `pnpm mine:salts` and the deploy scripts referenced by the config were not supplied. They have not been written yet.
 
-- `deployment.evm.deployer` is the placeholder `0x1111…1111`, so all 9 mined addresses are **provisional**.
-- `deployment.evm.treasurySafe.saltNonce` is `null`.
-- `treasury.addresses.*` and `security.guardian.*` are zero or empty on every chain.
-- `treasury.controller.signers` is `[]`. `threshold: 2` has no signer count. Spec §27 recommends 3-of-5.
-- `chains[*].lz.dvns` is `[]` on every chain, but `requiredDvnCount` is 2.
-- `deployment.svm.upgradeAuthority` is `""`. The Solana keypairs under `keys/` are not in the repo (gitignored).
+## Decisions
 
-## Open decisions (recorded, not resolved)
+**Resolved in v5.3.2** (details in `docs/REVISIONS.md`):
+1. The unused Conviction bucket returns **pro-rata**, so 30/70 holds in every epoch.
+2. Casting is **per pool**: LP pools cast LP into the source lot; Ember Vault casts EMBER into the source lot; Cold Storage pays liquid EMBER.
 
-1. **Emission split.** The config stores `split: {flatPct: 30, heatPct: 70}` and `convictionBucketPct: 10`. **`epochAllocation()` currently implements the spec §10 reading.** The 30/70 split applies to the 90% non-conviction budget (27/63/10), and unused conviction budget returns to the Heat pool only (27/73 when nobody is sealed). The review suite asserts this ("empty bucket → 31.75% / 68.25%"). The review response's Decision 1 recommends pro-rata return so that 30/70 holds in every epoch. That decision is still open. Adopting it would be an economic change to the config and the helper, and it would change the hash.
-2. **Casting in Ember Vault.** The config sends both single-token pools to liquid EMBER (`casting.singleTokenFallback: "liquidEmber"`). Review Decision 2 recommends a per-pool rule: Ember Vault → source-lot EMBER, Cold Storage → liquid EMBER. Not yet adopted.
-3. **Deed age wording.** §5 says "inherits 80% of age"; §25 says "80% haircut". The config has `heatCarryPct: 80`.
-4. **Pyre self-rebate.** §8 says no rebate; §12 allows partial self-recapture (0.25·p).
-5. **Green UI elements.** §11 says Withdraw Now is the only green element, but Claim Now is also green.
-6. **`heatAgeAfterDeposit()`** returns a stake-weighted *blended* age. It is fine for display. It must not drive lot accounting, which is per-lot (`depositDilution: "perLot"`).
-7. **Contract-layer items** from review §8: a global supply ledger that counts in-flight OFT, funded Kindling refunds, bounded accrual, and integer settlement with explicit residuals.
+**Proposed in ADR 0001** (EMBER supply): mint only on Ethereum; bridge through an OFT lockbox adapter; a single minter (the Forge emission controller); the Kindling seed minted in the constructor; satellite burns reopen headroom only after reconciliation.
+
+**Still open:**
+- **Deed age wording.** §5 says "inherits 80% of age"; §25 says "80% haircut". The implementation follows §5 (`deedHeatAge` = 80% of the capped age).
+- **Pyre self-rebate.** §8 says no rebate; §12 allows partial self-recapture (0.25·p). The config follows §12.
+- **Green UI elements.** §11 says Withdraw Now is the only green element, but Claim Now is also green.
+- **`heatAgeAfterDeposit()`** returns a blended age. It is for display only; lot accounting is per-lot.
+- **Review §8 contract items** still open: funded Kindling refunds, bounded accrual, and integer settlement with explicit residuals.
 
 ## Next steps
 
-1. Resolve decisions 1–2 above before porting `epochAllocation`, Casting, or Forge reward accounting to contracts.
-2. Set up Foundry for the core contracts: EmberToken/AshToken OFTs, Forge, FeeRouter, Deeds, Relics, Hearth, Ignition, Kindling. Write invariant tests per spec §27.8.
+1. FeeRouter and the Vent: fee vault, 40/40/10/10 split, fail-closed burn lane (TWAP, price band, chunking, router allowlist).
+2. Forge core: lots (max 32), Stoke with provenance, cooling timers (freeze/cancel/expiry), epoch accrual with `epochAllocation` in integer math.
+3. The LayerZero layer from ADR 0001: the OFT adapter, the satellite OFT with CREATE3-compatible init, and burn reconciliation.

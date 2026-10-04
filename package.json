@@ -10,14 +10,22 @@
     "check:config": "tsx scripts/check-config.ts",
     "verify:create3": "tsx scripts/verify-create3.ts",
     "test:review": "tsx test/furnace.review.test.ts",
-    "check": "pnpm typecheck && pnpm config:verify-hash && pnpm verify:create3 && pnpm test:review && pnpm test:config",
+    "check": "pnpm typecheck && pnpm config:verify-hash && pnpm verify:create3 && pnpm test:review && pnpm test:config && pnpm gen:check && pnpm test:sol",
     "config:json": "tsx scripts/write-json-mirror.ts",
     "typecheck": "tsc --noEmit",
-    "test:config": "tsx test/v5_3_2.test.ts"
+    "test:config": "tsx test/v5_3_2.test.ts",
+    "gen": "tsx scripts/gen-solidity.ts",
+    "gen:check": "tsx scripts/gen-solidity.ts --check",
+    "build:sol": "forge build",
+    "test:sol": "forge test"
   },
   "devDependencies": {
+    "@foundry-rs/forge": "1.7.1",
     "@noble/hashes": "^1.8.0",
+    "@openzeppelin/contracts": "5.4.0",
     "@types/node": "^22.20.5",
+    "solady": "0.1.26",
+    "solc": "0.8.28",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3"
   }
