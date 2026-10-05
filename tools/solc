@@ -1,0 +1,19 @@
+#!/usr/bin/env node
+// solc shim for forge: the native solc binary download host is blocked in some
+// environments, so this wraps solc-js (npm `solc`, pinned in package.json).
+// Supports `--version` and `--standard-json` (stdin → stdout), which is all
+// forge uses. Forge inlines every source's content, so no import callback.
+const solc = require('solc');
+const args = process.argv.slice(2);
+if (args.includes('--version')) {
+  process.stdout.write(`solc, the solidity compiler commandline interface\nVersion: ${solc.version()}\n`);
+  process.exit(0);
+}
+if (!args.includes('--standard-json')) {
+  process.stderr.write('tools/solc: only --version and --standard-json are supported\n');
+  process.exit(1);
+}
+let input = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (d) => (input += d));
+process.stdin.on('end', () => process.stdout.write(solc.compile(input)));

@@ -1,0 +1,11 @@
+export declare function bytes(hex: string): Uint8Array;
+export declare function hex(data: Uint8Array): string;
+export declare function concat(...parts: Uint8Array[]): Uint8Array;
+export declare function keccak(data: string | Uint8Array): string;
+export declare function isEvmAddress(v: unknown): v is string;
+export declare function isNonzeroEvm(v: unknown): v is string;
+export declare function checksum(address: string): string;
+export declare function isChecksummed(v: unknown): v is string;
+export declare function isSolanaAddress(v: unknown): v is string;
+export declare function predictCreate3(factory: string, sender: string, salt: string): string;
+export declare function canonical(value: unknown): string;

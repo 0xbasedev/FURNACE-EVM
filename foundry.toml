@@ -1,0 +1,31 @@
+[profile.default]
+src = "contracts/src"
+test = "contracts/test"
+script = "contracts/script"
+out = "out"
+cache_path = "cache/forge"
+libs = ["lib", "node_modules"]
+# solc-js shim (see tools/solc); version pinned via package.json "solc".
+solc = "tools/solc"
+offline = true
+evm_version = "cancun"
+optimizer = true
+optimizer_runs = 10_000
+bytecode_hash = "none"
+# Differential tests read vectors generated from furnace.config.ts (pnpm gen); no ffi.
+ffi = false
+fs_permissions = [{ access = "read", path = "./contracts/test/fixtures" }]
+remappings = [
+  "forge-std/=lib/forge-std/src/",
+  "@openzeppelin/contracts/=node_modules/@openzeppelin/contracts/",
+  "solady/=node_modules/solady/src/",
+]
+
+[fuzz]
+runs = 512
+seed = "0xf1e5"
+
+[invariant]
+runs = 128
+depth = 64
+fail_on_revert = false

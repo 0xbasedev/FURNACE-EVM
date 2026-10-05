@@ -1,0 +1,92 @@
+{
+  "stage": "deployment",
+  "scope": "local configuration only; not code, chain state, or audit approval",
+  "releaseApproved": false,
+  "diagnostics": [
+    {
+      "code": "IDENTITY_UNSET",
+      "path": "assets.ethereum.WETH/USDC.address",
+      "message": "Operational identity has not been supplied"
+    },
+    {
+      "code": "UNMINED",
+      "path": "deployment.evm.contracts.BlastPool",
+      "message": "Salt and address are unmined"
+    },
+    {
+      "code": "UNMINED",
+      "path": "deployment.evm.contracts.Flow",
+      "message": "Salt and address are unmined"
+    },
+    {
+      "code": "UNMINED",
+      "path": "deployment.evm.contracts.GenesisFeeEscrow",
+      "message": "Salt and address are unmined"
+    },
+    {
+      "code": "UNMINED",
+      "path": "deployment.evm.contracts.Mantle",
+      "message": "Salt and address are unmined"
+    },
+    {
+      "code": "UNMINED",
+      "path": "deployment.evm.contracts.SmelterPool",
+      "message": "Salt and address are unmined"
+    },
+    {
+      "code": "UNMINED",
+      "path": "deployment.evm.contracts.Timelock",
+      "message": "Salt and address are unmined"
+    },
+    {
+      "code": "UNMINED",
+      "path": "deployment.evm.contracts.TreasuryVesting",
+      "message": "Salt and address are unmined"
+    },
+    {
+      "code": "DEPLOYER_PLACEHOLDER",
+      "path": "deployment.evm.deployer",
+      "message": "Set the actual deployer; fixture salts prove no key control"
+    },
+    {
+      "code": "SAFE_CREATION_INPUT",
+      "path": "deployment.evm.treasurySafe.initCodeHash",
+      "message": "Pin the complete Safe creation inputs"
+    },
+    {
+      "code": "SAFE_CREATION_INPUT",
+      "path": "deployment.evm.treasurySafe.initializerHash",
+      "message": "Pin the complete Safe creation inputs"
+    },
+    {
+      "code": "SAFE_NONCE",
+      "path": "deployment.evm.treasurySafe.saltNonce",
+      "message": "Set a valid uint256 nonce"
+    },
+    {
+      "code": "IDENTITY_UNSET",
+      "path": "deployment.evm.treasurySafe.singleton",
+      "message": "Operational identity has not been supplied"
+    },
+    {
+      "code": "START_TIME",
+      "path": "ignition.startTimestamp",
+      "message": "Set the actual launch start timestamp"
+    },
+    {
+      "code": "IDENTITY_UNSET",
+      "path": "security.guardian.ethereum",
+      "message": "Operational identity has not been supplied"
+    },
+    {
+      "code": "IDENTITY_UNSET",
+      "path": "treasury.addresses.ethereum",
+      "message": "Operational identity has not been supplied"
+    },
+    {
+      "code": "SAFE_3_OF_5",
+      "path": "treasury.controller",
+      "message": "Requires three approvals from five distinct real owners"
+    }
+  ]
+}

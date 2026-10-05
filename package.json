@@ -1,19 +1,31 @@
 {
   "name": "furnace-evm",
-  "version": "5.3.1",
+  "version": "5.5.0",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.28.0",
   "scripts": {
+    "typecheck": "tsc --noEmit",
+    "canonical:sums": "node scripts/verify-canonical.mjs",
+    "canonical:test": "npm --prefix canonical install --no-audit --no-fund --no-package-lock && npm --prefix canonical test && npm --prefix canonical run check:config && node scripts/verify-canonical.mjs",
     "config:hash": "tsx scripts/config-hash.ts",
     "config:verify-hash": "tsx scripts/config-hash.ts --expect",
-    "check:config": "tsx scripts/check-config.ts",
     "verify:create3": "tsx scripts/verify-create3.ts",
-    "test:review": "tsx test/furnace.review.test.ts",
-    "check": "pnpm config:verify-hash && pnpm verify:create3 && pnpm test:review"
+    "gen": "tsx scripts/gen-solidity.ts",
+    "gen:check": "tsx scripts/gen-solidity.ts --check",
+    "build:sol": "forge build",
+    "test:sol": "forge test",
+    "check": "pnpm typecheck && pnpm canonical:sums && pnpm config:verify-hash && pnpm verify:create3 && pnpm gen:check && pnpm test:sol",
+    "check:all": "pnpm check && pnpm canonical:test"
   },
   "devDependencies": {
+    "@foundry-rs/forge": "1.7.1",
     "@noble/hashes": "^1.8.0",
-    "tsx": "^4.20.6"
+    "@openzeppelin/contracts": "5.4.0",
+    "@types/node": "^22.20.5",
+    "solady": "0.1.26",
+    "solc": "0.8.28",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
   }
 }

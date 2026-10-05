@@ -3,3 +3,7 @@ node_modules/
 keys/
 .env
 .env.*
+out/
+cache/
+canonical/node_modules/
+canonical/package-lock.json
