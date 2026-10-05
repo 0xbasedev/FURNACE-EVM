@@ -1,23 +1,22 @@
 {
   "name": "furnace-evm",
-  "version": "5.3.2",
+  "version": "5.5.0",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.28.0",
   "scripts": {
+    "typecheck": "tsc --noEmit",
+    "canonical:sums": "node scripts/verify-canonical.mjs",
+    "canonical:test": "npm --prefix canonical install --no-audit --no-fund --no-package-lock && npm --prefix canonical test && npm --prefix canonical run check:config && node scripts/verify-canonical.mjs",
     "config:hash": "tsx scripts/config-hash.ts",
     "config:verify-hash": "tsx scripts/config-hash.ts --expect",
-    "check:config": "tsx scripts/check-config.ts",
     "verify:create3": "tsx scripts/verify-create3.ts",
-    "test:review": "tsx test/furnace.review.test.ts",
-    "check": "pnpm typecheck && pnpm config:verify-hash && pnpm verify:create3 && pnpm test:review && pnpm test:config && pnpm gen:check && pnpm test:sol",
-    "config:json": "tsx scripts/write-json-mirror.ts",
-    "typecheck": "tsc --noEmit",
-    "test:config": "tsx test/v5_3_2.test.ts",
     "gen": "tsx scripts/gen-solidity.ts",
     "gen:check": "tsx scripts/gen-solidity.ts --check",
     "build:sol": "forge build",
-    "test:sol": "forge test"
+    "test:sol": "forge test",
+    "check": "pnpm typecheck && pnpm canonical:sums && pnpm config:verify-hash && pnpm verify:create3 && pnpm gen:check && pnpm test:sol",
+    "check:all": "pnpm check && pnpm canonical:test"
   },
   "devDependencies": {
     "@foundry-rs/forge": "1.7.1",

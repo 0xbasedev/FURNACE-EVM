@@ -6,39 +6,40 @@ import {ERC20Burnable} from "@openzeppelin/contracts/token/ERC20/extensions/ERC2
 import {ERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";
 import {FurnaceParams as P} from "./generated/FurnaceParams.sol";
 
-/// @title EmberToken — home-chain (Ethereum) EMBER
-/// @notice Immutable core token. No owner, no pause, no transfer tax, no upgrade path.
-///  - Live-supply ceiling: totalSupply never exceeds 21,000,000 (P.EMBER_MAX_SUPPLY).
-///    It is a live ceiling, not a cumulative-mint ceiling: burns reopen headroom.
-///  - The Kindling seed (420,000) is minted once, in the constructor, to the Kindling
-///    registry address. No other allocation is pre-minted; the team allocation is 0.
-///  - Every later mint (base emissions, Ashfall, treasury vesting) comes from one
-///    minter: the emission controller hosted by the Forge (P.FORGE). That contract
-///    owns the epoch schedule and the shared headroom budget (EmissionMath).
-///  - Argument-free constructor for CREATE3 (deployment.evm.argumentFreeConstructors).
-/// @dev Omnichain: on Ethereum this token is canonical and bridges through a
-///      LayerZero OFT adapter (lockbox), so totalSupply here IS the global supply,
-///      in-flight transfers included. See docs/adr/0001-ember-canonical-supply.md.
+/// @title EmberToken — home-chain (Ethereum) EMBER, spec v5.5
+/// @notice Immutable core token: no owner, no pause, no transfer tax, no upgrade path.
+///  - Local backstop for the live-supply ceiling: totalSupply never exceeds 21,000,000.
+///    The ECONOMIC ceiling is enforced by the Mantle's global ledger (reservations,
+///    transport claims, burn credits); this check only guarantees the token can never
+///    be the component that breaks it.
+///  - The only minter is the Mantle (the home-chain issuance authority). It reserves the
+///    Kindling seed, Treasury vesting, base and Ashfall budgets before minting. Nothing is
+///    pre-minted here; the team allocation is zero.
+///  - The Mantle address is a constructor argument: v5.5 allows constructor arguments
+///    under CREATE3 (the address does not depend on init code), and the Mantle's own
+///    registry entry is not mined yet.
 contract EmberToken is ERC20, ERC20Burnable, ERC20Permit {
     uint256 public constant MAX_SUPPLY = P.EMBER_MAX_SUPPLY;
-    address public constant MINTER = P.FORGE;
     bytes32 public constant CONFIG_HASH = P.CONFIG_HASH;
+    address public immutable MANTLE;
 
-    error NotMinter(address caller);
+    error ZeroMantle();
+    error NotMantle(address caller);
     error SupplyCeilingExceeded(uint256 supplyAfter);
 
-    constructor() ERC20(P.EMBER_NAME, P.EMBER_SYMBOL) ERC20Permit(P.EMBER_NAME) {
-        _mint(P.KINDLING, P.EMBER_KINDLING_SEED);
+    constructor(address mantle) ERC20(P.EMBER_NAME, P.EMBER_SYMBOL) ERC20Permit(P.EMBER_NAME) {
+        if (mantle == address(0)) revert ZeroMantle();
+        MANTLE = mantle;
     }
 
-    /// @notice Remaining live-supply headroom: 21M − totalSupply.
-    function headroom() external view returns (uint256) {
+    /// @notice Local view of 21M − totalSupply. Not the economic headroom (see Mantle).
+    function localHeadroom() external view returns (uint256) {
         return MAX_SUPPLY - totalSupply();
     }
 
-    /// @notice Only the emission controller mints, and never past the ceiling.
+    /// @notice Only the Mantle mints, and never past the ceiling.
     function mint(address to, uint256 amount) external {
-        if (msg.sender != MINTER) revert NotMinter(msg.sender);
+        if (msg.sender != MANTLE) revert NotMantle(msg.sender);
         _mint(to, amount);
     }
 

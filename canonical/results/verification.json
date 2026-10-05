@@ -1,0 +1,224 @@
+{
+  "version": "5.5.0",
+  "status": "canonical-design-not-deployed",
+  "node": "v22.16.0",
+  "compiler": "Version 5.8.3",
+  "scope": "New config, source-level validator and reference arithmetic; no deployed contract, Foundry or Anchor audit.",
+  "baseline": {
+    "version": "5.4.0",
+    "sourceSha256": "9860e9ed03fffb6ab6995addf26e0d5d14a1cee91679197026b36c6c9a67713c",
+    "dataHash": "0x22c9dea60d12ac753e5eb02e64810514f4cbaec5e0ee65d998d19666d82a33b0",
+    "unchangedEconomicProfile": [
+      "EMBER live cap",
+      "seed and Treasury allocation",
+      "emission start/half-life/floor",
+      "ASH allocation tree",
+      "nominal fees",
+      "Heat curve/milestones",
+      "90/10 Genesis LP",
+      "25% compatible Casting",
+      "10% capped Conviction"
+    ]
+  },
+  "tests": {
+    "namedTests": 75,
+    "passed": 75,
+    "failed": 0,
+    "seededBudgetScenarios": 1000,
+    "doesNotEstablish": "Contract security, VM overflow safety, bridge authentication, oracle correctness or release readiness"
+  },
+  "validation": {
+    "economics": [],
+    "deployment": [
+      {
+        "code": "IDENTITY_UNSET",
+        "path": "assets.ethereum.WETH/USDC.address",
+        "message": "Operational identity has not been supplied"
+      },
+      {
+        "code": "UNMINED",
+        "path": "deployment.evm.contracts.BlastPool",
+        "message": "Salt and address are unmined"
+      },
+      {
+        "code": "UNMINED",
+        "path": "deployment.evm.contracts.Flow",
+        "message": "Salt and address are unmined"
+      },
+      {
+        "code": "UNMINED",
+        "path": "deployment.evm.contracts.GenesisFeeEscrow",
+        "message": "Salt and address are unmined"
+      },
+      {
+        "code": "UNMINED",
+        "path": "deployment.evm.contracts.Mantle",
+        "message": "Salt and address are unmined"
+      },
+      {
+        "code": "UNMINED",
+        "path": "deployment.evm.contracts.SmelterPool",
+        "message": "Salt and address are unmined"
+      },
+      {
+        "code": "UNMINED",
+        "path": "deployment.evm.contracts.Timelock",
+        "message": "Salt and address are unmined"
+      },
+      {
+        "code": "UNMINED",
+        "path": "deployment.evm.contracts.TreasuryVesting",
+        "message": "Salt and address are unmined"
+      },
+      {
+        "code": "DEPLOYER_PLACEHOLDER",
+        "path": "deployment.evm.deployer",
+        "message": "Set the actual deployer; fixture salts prove no key control"
+      },
+      {
+        "code": "SAFE_CREATION_INPUT",
+        "path": "deployment.evm.treasurySafe.initCodeHash",
+        "message": "Pin the complete Safe creation inputs"
+      },
+      {
+        "code": "SAFE_CREATION_INPUT",
+        "path": "deployment.evm.treasurySafe.initializerHash",
+        "message": "Pin the complete Safe creation inputs"
+      },
+      {
+        "code": "SAFE_NONCE",
+        "path": "deployment.evm.treasurySafe.saltNonce",
+        "message": "Set a valid uint256 nonce"
+      },
+      {
+        "code": "IDENTITY_UNSET",
+        "path": "deployment.evm.treasurySafe.singleton",
+        "message": "Operational identity has not been supplied"
+      },
+      {
+        "code": "START_TIME",
+        "path": "ignition.startTimestamp",
+        "message": "Set the actual launch start timestamp"
+      },
+      {
+        "code": "IDENTITY_UNSET",
+        "path": "security.guardian.ethereum",
+        "message": "Operational identity has not been supplied"
+      },
+      {
+        "code": "IDENTITY_UNSET",
+        "path": "treasury.addresses.ethereum",
+        "message": "Operational identity has not been supplied"
+      },
+      {
+        "code": "SAFE_3_OF_5",
+        "path": "treasury.controller",
+        "message": "Requires three approvals from five distinct real owners"
+      }
+    ]
+  },
+  "registry": [
+    {
+      "name": "EmberToken",
+      "derived": "0xf1e5b7820a8c6f6349a576db516142c8d341dcc4",
+      "matches": true
+    },
+    {
+      "name": "AshToken",
+      "derived": "0xa5e55c164036f63e9b6e6337c465eedead49fb5b",
+      "matches": true
+    },
+    {
+      "name": "FeeRouter",
+      "derived": "0xfee5356949802d661959360a5e4004e1d8c685a2",
+      "matches": true
+    },
+    {
+      "name": "Forge",
+      "derived": "0xf09551c13e2ca9cbeed634452a1f37d89a25532d",
+      "matches": true
+    },
+    {
+      "name": "Ignition",
+      "derived": "0x19172ad5c06ccc86a6e2712d06500f1028cf185b",
+      "matches": true
+    },
+    {
+      "name": "Kindling",
+      "derived": "0x5a1d6ee608bf6e94b53789824705427ea40f2746",
+      "matches": true
+    },
+    {
+      "name": "Hearth",
+      "derived": "0xea272470c2529afe408d13bf6057b72a1a8763ce",
+      "matches": true
+    },
+    {
+      "name": "Relics",
+      "derived": "0x2e1c923b32c214c4b7b2b8bd30daeb9f0a183dbd",
+      "matches": true
+    },
+    {
+      "name": "Deeds",
+      "derived": "0xdeed54948eab9875d89a77cc383714d6a5d7dc6d",
+      "matches": true
+    },
+    {
+      "name": "Mantle",
+      "status": "unmined"
+    },
+    {
+      "name": "BlastPool",
+      "status": "unmined"
+    },
+    {
+      "name": "SmelterPool",
+      "status": "unmined"
+    },
+    {
+      "name": "Flow",
+      "status": "unmined"
+    },
+    {
+      "name": "GenesisFeeEscrow",
+      "status": "unmined"
+    },
+    {
+      "name": "TreasuryVesting",
+      "status": "unmined"
+    },
+    {
+      "name": "Timelock",
+      "status": "unmined"
+    }
+  ],
+  "example": {
+    "conviction": {
+      "payouts": [
+        {
+          "id": "sealed",
+          "ordinary": "285480206",
+          "escrow": "30686799"
+        },
+        {
+          "id": "rest",
+          "ordinary": "9683832994",
+          "escrow": "0"
+        }
+      ],
+      "flatBudget": "2700000000",
+      "heatBudget": "7269313201",
+      "escrowPaid": "30686799",
+      "residue": "1"
+    },
+    "oneDayFresh": {
+      "stakeSeconds": "86400",
+      "heatSeconds": "91539525548322303541432870947596",
+      "sealSeconds": "0",
+      "candidateSeconds": "0"
+    },
+    "oneYearHeatIntegral": "74610720000000000000000000000000000",
+    "oneYearSquaredIntegral": "183203439357750595883152759779037906877250106114136911238360508"
+  },
+  "currentConfigHash": "0x24f38f4aa11919503354bb5f8263978c7b3edc29723760928cb1eecdbafbe5ae"
+}

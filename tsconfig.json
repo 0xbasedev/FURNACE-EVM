@@ -3,10 +3,11 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "Bundler",
+    "allowImportingTsExtensions": false,
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["furnace.config.ts", "scripts/**/*.ts", "test/**/*.ts"]
+  "include": ["scripts/**/*.ts"]
 }

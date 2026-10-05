@@ -1,0 +1,6 @@
+{
+  "stage": "economics",
+  "scope": "local configuration only; not code, chain state, or audit approval",
+  "releaseApproved": false,
+  "diagnostics": []
+}

@@ -1,6 +1,6 @@
 # ADR 0001: EMBER canonical supply, minting and bridging
 
-**Status:** Proposed. `EmberToken` (home chain) is implemented. The OFT adapter, the satellite OFT and burn reconciliation are not built yet.
+**Status:** **Superseded by canonical v5.5** (2026-10-05). v5.5 makes the home-chain **Mantle** the single economic issuance authority, with a global ledger that counts reservations, outstanding transport claims and authenticated burn credits. It launches Ethereum-only with bridging disabled. `EmberToken` now takes the Mantle as its only minter and pre-mints nothing. The analysis below is kept for history. The lockbox-adapter idea may still inform the Mantle's transport design when satellites are activated in a separate release.
 **Date:** 2026-10-04 · **Config:** v5.3.2
 
 ## Context

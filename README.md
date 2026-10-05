@@ -1,50 +1,45 @@
 # FURNACE-EVM
 
-EVM workspace for **FURNACE Protocol**, an omnichain loyalty-staking protocol built on EMBER, ASH, liquidity and earned time. The config is at **v5.3.2**; see [`docs/REVISIONS.md`](docs/REVISIONS.md).
+EVM workspace for **FURNACE Protocol**, a loyalty-staking protocol built on EMBER, ASH, liquidity and earned time. The canonical design is **v5.5.0**, kept unchanged in [`canonical/`](canonical/README.md). Revision history is in [`docs/REVISIONS.md`](docs/REVISIONS.md).
 
-> **Status: early implementation.** It contains math libraries and the home-chain EMBER token. Nothing is audited or deployed, and nothing here is production-ready. The spec says no audit has happened, and mainnet requires at least two independent audits.
+> **Status: early implementation.** It contains math libraries and the home-chain EMBER token. Nothing is audited or deployed, and nothing here is production-ready. v5.5 requires at least two independent audits before activation. Initial launch is Ethereum-only.
 
 ## Layout
 
 | Path | What it is |
 |---|---|
-| `furnace.config.ts` | **Canonical config.** It holds the data, `validateConfig()`, and the reference helpers (`epochAllocation`, `heatMultiplier`, `totalMintForEpoch`, `castForPool`, `create3Address`, …). |
-| `config/furnace.config.canonical.json` | Canonical JSON mirror of the default export (`pnpm config:json`). |
-| `contracts/src/generated/FurnaceParams.sol` | Solidity constants **generated from the config** (`pnpm gen`). Contracts never hand-copy a protocol number. |
-| `contracts/src/libraries/HeatMath.sol` | lotHeat (√ ramp plus prorated milestone bumps), position Heat, cap-first cooling, Deed age carry. |
-| `contracts/src/libraries/EmissionMath.sol` | Half-life curve with floor, and the shared base + Ashfall headroom budget. |
-| `contracts/src/EmberToken.sol` | Home-chain EMBER: immutable, zero tax, enforces the 21M live ceiling, single minter. See [ADR 0001](docs/adr/0001-ember-canonical-supply.md). |
-| `contracts/test/` | Differential tests against vectors from the TS oracle, fuzz properties, and invariants. |
-| `test/` | Review suite (66 checks) and v5.3.2 decision tests (19 checks). |
-| `scripts/` | `config:hash`, `check:config`, `verify:create3`, `gen`. |
+| `canonical/` | **Canonical v5.5 package, byte-for-byte as supplied**: the config, `accounting.ts` integer reference, validators, spec, decisions, contract map, deployment gates, and its own 75 tests. CI verifies its `SHA256SUMS.json`. |
+| `contracts/src/generated/FurnaceParams.sol` | Solidity constants **generated from the canonical config** (`pnpm gen`). Only mined registry addresses become constants. |
+| `contracts/src/libraries/HeatMath.sol` | RAY-scale Heat. `heatPrimitive`, `integrateHeat`, `cooledAge` and `deedAge` are **exact ports** of `canonical/accounting.ts`. |
+| `contracts/src/libraries/EmissionMath.sol` | Half-life schedule; `allocateMint` (shared base + Ashfall headroom with tagged residue) and `accruedPoolBudget` are **exact ports**. |
+| `contracts/src/EmberToken.sol` | Home-chain EMBER: immutable, zero tax, 21M local backstop, and the Mantle as its only minter. Nothing is pre-minted. |
+| `contracts/test/` | Exact differential tests against BigInt vectors, fuzz properties, and invariants. |
+| `scripts/` | Independent checks: canonical checksums, config hash, CREATE3, and `gen`. |
 | `tools/solc` | solc-js shim for forge (see *Toolchain*). |
-| `docs/sources/` | The supplied source documents, unmodified (spec v5.3.1, review, instructions). |
+| `docs/` | ADRs, revision log, and the original v5.3.1 sources (`docs/sources/`, historical). |
 
 ## Commands
 
 ```sh
 git submodule update --init   # lib/forge-std
 pnpm install
-pnpm check          # everything below; this is the CI gate
-pnpm typecheck
-pnpm config:hash    # keccak256 of the canonical config
-pnpm test:review    # 66-check review suite
-pnpm test:config    # v5.3.2 decision tests
-pnpm gen            # regenerate FurnaceParams.sol + oracle vectors after any config change
-pnpm test:sol       # forge test
-pnpm check:config   # full validateConfig(): fails until deploy identities are set (by design)
+pnpm check          # typecheck, canonical checksums, config hash, CREATE3, gen freshness, forge tests
+pnpm canonical:test # the canonical package's own tests + economics gate (pinned TypeScript 5.8.3)
+pnpm check:all      # both (CI runs both)
+pnpm gen            # regenerate FurnaceParams.sol + oracle vectors after a canonical revision
+pnpm config:hash
 ```
 
-## Verified (pnpm check, current head)
+## Verified (current head)
 
-- Config v5.3.2 hash is `0xbaeb97a2a062763bc986f78e270812214d439bba2044fcdbdc99ad5c00b17270`, and the JSON mirror matches it. The v5.3.1 hash (`0x9ecedb63…63f7`) was reproduced exactly from the supplied file before the revision.
-- All 9 CREATE3 addresses re-derive from their salts. They are provisional because they're bound to the placeholder deployer.
-- Review suite: 66/66. Decision tests: 19/19.
-- Forge: 26/26.
-  - Solidity math matches the TS oracle to within 1e-12 relative at every vector.
-  - Fuzzing checks that Heat is bounded and monotone with no cliffs, that the emission curve is monotone and floored, and that base + Ashfall never exceed headroom.
-  - Invariants: `totalSupply ≤ 21M`, and balances sum to supply.
-- The generated Solidity is fresh relative to the config.
+- **Canonical package:** all 54 files match `SHA256SUMS.json`, and they still match after the package's own build. Its 75 tests pass. The economics gate reports no diagnostics. Its deployment gate fails, by design, until real operators are supplied.
+- **Config hash:** v5.5.0 is `0x24f38f4aa11919503354bb5f8263978c7b3edc29723760928cb1eecdbafbe5ae` (31,451 bytes). This repo reproduces it independently with noble Keccak and its own serializer, and it equals the package manifest.
+- **CREATE3:** the 9 mined addresses re-derive from their salts; they are provisional because the deployer is still the placeholder. Seven modules are unmined by design: Mantle, BlastPool, SmelterPool, Flow, GenesisFeeEscrow, TreasuryVesting and Timelock.
+- **Forge, 30/30:**
+  - The integer ports equal `canonical/accounting.ts` **exactly** on generated vectors. A deliberate 1-wei rounding change fails the suite.
+  - The Heat integral telescopes exactly under checkpoint subdivision (fuzzed).
+  - Mint conservation holds: base + Ashfall + residue = available ≤ headroom.
+  - Invariants: supply ≤ 21M, and balances sum to supply.
 
 ## Toolchain
 
@@ -52,33 +47,18 @@ Foundry's installer, GitHub releases and the solc binary host are blocked in the
 - `@foundry-rs/forge` (pinned) provides `forge`.
 - `tools/solc` wraps solc-js 0.8.28 (npm `solc`, pinned).
 
-Builds are therefore reproducible from `pnpm install` alone. EVM target: `cancun`.
+EVM target: `cancun`.
 
-## Deploy blockers (in the config by design)
+## Deploy blockers (v5.5 deployment gate; see `canonical/DEPLOYMENT.md`)
 
-- `deployment.evm.deployer` is the placeholder `0x1111…1111`, so every mined address, and `FurnaceParams`, is **provisional**. Set the real deployer, then run `pnpm mine:salts` and `pnpm gen`.
-- `deployment.evm.treasurySafe.saltNonce` is `null`. `treasury.controller.signers` is `[]` (spec §27 recommends 3-of-5).
-- `treasury.addresses.*` and `security.guardian.*` are unset on every chain. `chains[*].lz.dvns` is `[]`, but at least 2 are required.
-- `deployment.svm.upgradeAuthority` is `""`. The Solana keypairs under `keys/` are gitignored.
-- `pnpm mine:salts` and the deploy scripts referenced by the config were not supplied. They have not been written yet.
+- The real Ethereum deployer. The current one is a placeholder, so every mined address and `FurnaceParams` are provisional. Seven modules still need salts.
+- A 3-of-5 Treasury Safe with five real owners, plus the Safe's factory inputs, nonce and predicted address. Also the Timelock identity.
+- The guardian and treasury identities for Ethereum, the external WETH/USDC receipt, and the start time.
+- Built and audited custody, settlement, escrow and auction contracts.
 
-## Decisions
+## Next steps (v5.5 `CONTRACTS.md`)
 
-**Resolved in v5.3.2** (details in `docs/REVISIONS.md`):
-1. The unused Conviction bucket returns **pro-rata**, so 30/70 holds in every epoch.
-2. Casting is **per pool**: LP pools cast LP into the source lot; Ember Vault casts EMBER into the source lot; Cold Storage pays liquid EMBER.
-
-**Proposed in ADR 0001** (EMBER supply): mint only on Ethereum; bridge through an OFT lockbox adapter; a single minter (the Forge emission controller); the Kindling seed minted in the constructor; satellite burns reopen headroom only after reconciliation.
-
-**Still open:**
-- **Deed age wording.** §5 says "inherits 80% of age"; §25 says "80% haircut". The implementation follows §5 (`deedHeatAge` = 80% of the capped age).
-- **Pyre self-rebate.** §8 says no rebate; §12 allows partial self-recapture (0.25·p). The config follows §12.
-- **Green UI elements.** §11 says Withdraw Now is the only green element, but Claim Now is also green.
-- **`heatAgeAfterDeposit()`** returns a blended age. It is for display only; lot accounting is per-lot.
-- **Review §8 contract items** still open: funded Kindling refunds, bounded accrual, and integer settlement with explicit residuals.
-
-## Next steps
-
-1. FeeRouter and the Vent: fee vault, 40/40/10/10 split, fail-closed burn lane (TWAP, price band, chunking, router allowlist).
-2. Forge core: lots (max 32), Stoke with provenance, cooling timers (freeze/cancel/expiry), epoch accrual with `epochAllocation` in integer math.
-3. The LayerZero layer from ADR 0001: the OFT adapter, the satellite OFT with CREATE3-compatible init, and burn reconciliation.
+1. **Mantle:** the global issuance ledger, reservations (Kindling seed, Treasury vesting), epoch authorization and the burn-credit registry, built on `EmissionMath.allocateMint`.
+2. **Forge core:** 32 source lots, checkpointed time-integrated measures (`HeatMath.integrateHeat`), cooling plans, and bounded 32-lot settlement pages. Principal exits never wait on settlement.
+3. **FeeRouter (Vent)** with the 0.5% per-call and per-window throughput limits, and **GenesisFeeEscrow** for Kindling.
+4. The Heat² primitive (`squaredHeatPrimitive`) port for Ashfall.
