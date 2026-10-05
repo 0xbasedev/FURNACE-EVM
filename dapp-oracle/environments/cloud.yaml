@@ -1,0 +1,6 @@
+name: crucible-env
+config:
+  type: cloud
+  networking:
+    type: limited
+    allow_package_managers: true
