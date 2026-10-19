@@ -30,7 +30,8 @@ The invariant `accounted + reserved ≤ 21M` is fuzzed. `totalSupply ≤ account
 
 **3. Epoch budgets work on a pull model.**
 - **Finalizing:** `finalizeEpoch()` is permissionless and finalizes one epoch per call, strictly in order, after the epoch ends. Catch-up is bounded per call.
-- **Budget size:** it reserves `baseEmissionPerDay(e) × homeShare` (exact, ADR 0002) plus the authorized Ashfall. Both are scaled pro-rata by `allocateMint` when headroom is short. The floor-rounding residue is tagged per epoch and never minted.
+- **Budget size:** it reserves the full **global** `baseEmissionPerDay(e)` (exact, ADR 0002) plus the authorized Ashfall.
+- **Chain shares:** they are never applied as a multiplier on the mint side. The distributor routes satellite shares out of the budget as funded transfers. EMBER's `MANTLE` is immutable, so a mint-side multiplier would under-issue for good if a later config lowered the home share. `pnpm gen` instead checks that the enabled shares sum to 100. Both are scaled pro-rata by `allocateMint` when headroom is short. The floor-rounding residue is tagged per epoch and never minted.
 - **Pulls:** the DISTRIBUTOR (the Forge's emission controller) pulls with `mintBase` and `mintAshfall`. Supply equals what was actually paid out.
 - **Unpaid base:** `releaseBase` returns base the distributor will never pay (for example, empty-pool time) to headroom. It is never re-issued to anyone, and each later epoch is still capped by its own schedule target, so releasing creates no windfall.
 
@@ -59,4 +60,5 @@ The invariant `accounted + reserved ≤ 21M` is fuzzed. `totalSupply ≤ account
   - Vesting matches canonical `vested()` exactly.
   - Daily releases sum to exactly 500,000.
   - The near-cap scenario scales base and Ashfall pro-rata and queues the Ashfall shortfall.
-  - Mutation checks fail the suite when the shortfall queue or the Ashfall lag is removed.
+  - Mutation checks fail the suite when the shortfall queue or the Ashfall lag is removed, or when Ashfall budgets are left out of the reservation.
+  - The invariant suite starts with about 50,000 EMBER of headroom, so the ceiling, pro-rata scaling and shortfall paths really are exercised. Two equalities are enforced: Ashfall credits are conserved exactly, and `epochReserved` matches the budgets still outstanding.

@@ -67,9 +67,13 @@ c('uint256', 'EMISSION_FLOOR_PER_DAY', `${cfg.emissions.base.floorPerDay}e18`);
 c('uint256', 'EMISSION_HALF_LIFE_DAYS', cfg.emissions.base.halfLifeDays);
 c('uint256', 'CONVICTION_BUCKET_PCT', cfg.emissions.convictionBucketPct);
 c('uint256', 'SPLIT_FLAT_PCT', cfg.emissions.split.flatPct);
+// The Mantle issues the full GLOBAL target; chain shares are routed out of the distributor's
+// budget, never applied as a mint-side multiplier (an immutable Mantle must not under-issue
+// if a later config lowers the home share). Guard the share table here instead.
 const home = cfg.chains.find((ch) => ch.role === 'home' && ch.enabled);
 if (!home || home.key !== cfg.emissions.controllerChain) throw new Error('home chain must be the enabled emissions controller');
-c('uint256', 'HOME_EMISSION_SHARE_PCT', home.fixedEmissionSharePct, `${home.key}; Mantle mints only the home share`);
+const shareSum = cfg.chains.filter((ch) => ch.enabled).reduce((n, ch) => n + ch.fixedEmissionSharePct, 0);
+if (shareSum !== 100) throw new Error(`enabled chain emission shares must sum to 100, got ${shareSum}`);
 
 section('Ashfall (burn recycling, one-epoch lag)');
 const ash = cfg.emissions.ashfall;

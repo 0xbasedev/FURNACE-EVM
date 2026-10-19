@@ -164,7 +164,7 @@ contract MantleTest is MantleFixture {
         (uint128 base0,,,,,) = mantle.budgets(0);
         (uint128 base1,,,,,) = mantle.budgets(1);
         (uint128 base2,,,,,) = mantle.budgets(2);
-        assertEq(base0, EmissionMath.baseEmissionPerDay(0), "home share 100% at launch");
+        assertEq(base0, EmissionMath.baseEmissionPerDay(0), "full global target");
         assertEq(base2, EmissionMath.baseEmissionPerDay(2));
         assertEq(mantle.epochReserved(), uint256(base0) + base1 + base2);
     }
@@ -343,8 +343,41 @@ contract MantleInvariantTest is MantleFixture {
     function setUp() public {
         _deploy();
         vm.warp(start);
+        // Start with only ~50,000 EMBER of headroom so pro-rata scaling, the Ashfall
+        // shortfall queue and residues are exercised (and the ceiling invariant can bite).
+        mantle.setAccountedForTest(P.EMBER_MAX_SUPPLY - mantle.reserved() - 50_000e18);
         handler = new MantleHandler(ember, mantle, start);
         targetContract(address(handler));
+    }
+
+    /// Reserved epoch budget equals exactly what finalized budgets still owe (base + Ashfall).
+    function invariant_epochReservedMatchesBudgets() public view {
+        uint256 n = mantle.nextEpoch();
+        uint256 owed;
+        for (uint256 e; e < n; ++e) {
+            (uint128 base, uint128 ash, uint128 bMinted, uint128 aMinted, uint128 bReleased, uint128 aRolled) = mantle.budgets(e);
+            owed += (base - bMinted - bReleased) + (ash - aMinted - aRolled);
+        }
+        assertEq(mantle.epochReserved(), owed);
+    }
+
+    /// Ashfall credits are conserved exactly: every recognized credit is unconsumed, queued,
+    /// minted, or still outstanding in a finalized budget (rolled amounts sit in the queue).
+    function invariant_ashfallCreditConservation() public view {
+        uint256 n = mantle.nextEpoch();
+        uint256 outstanding;
+        for (uint256 e; e < n; ++e) {
+            (, uint128 ash,, uint128 minted,, uint128 rolled) = mantle.budgets(e);
+            outstanding += ash - minted - rolled;
+        }
+        uint256 unconsumed;
+        uint256 last = mantle.epochAt(block.timestamp);
+        for (uint256 e = n == 0 ? 0 : n - 1; e <= last; ++e) unconsumed += mantle.creditsOf(e);
+        assertEq(
+            handler.totalCredits(),
+            unconsumed + mantle.queuedAshfall() + handler.totalAshfallMinted() + outstanding,
+            "credits leaked or created"
+        );
     }
 
     function invariant_ceiling() public view {

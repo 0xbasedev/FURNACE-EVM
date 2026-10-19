@@ -28,9 +28,11 @@ interface IEmberMintBurn {
 /// stranded (conservative by design; see ADR 0003).
 ///
 /// Epochs (daily, from START) are finalized in order, one per call, by anyone. Finalizing
-/// reserves the epoch's base target (home share) plus authorized Ashfall credits from the
+/// reserves the epoch's full GLOBAL base target plus authorized Ashfall credits from the
 /// previous epoch's registered burns, scaled pro-rata if headroom is short. The DISTRIBUTOR
-/// (the Forge's emission controller) then pulls mints from those budgets.
+/// (the Forge's emission controller) then pulls mints from those budgets. Chain emission shares
+/// are routed out of that budget by the distributor, never applied here: v5.5 makes the Mantle the
+/// global issuance authority, and satellites receive funded budgets without mint rights.
 contract Mantle {
     // ── Immutable wiring ────────────────────────────────────────────────
     IEmberMintBurn public immutable EMBER;
@@ -179,7 +181,7 @@ contract Mantle {
         uint256 endsAt = START + (epoch + 1) * P.EPOCH_SECONDS;
         if (block.timestamp < endsAt) revert EpochNotOver(epoch, endsAt);
 
-        uint256 baseTarget = (EmissionMath.baseEmissionPerDay(epoch) * P.HOME_EMISSION_SHARE_PCT) / 100;
+        uint256 baseTarget = EmissionMath.baseEmissionPerDay(epoch); // global target
         uint256 ashfallTarget = queuedAshfall;
         if (epoch >= P.ASHFALL_LAG_EPOCHS) ashfallTarget += creditsOf[epoch - P.ASHFALL_LAG_EPOCHS];
 

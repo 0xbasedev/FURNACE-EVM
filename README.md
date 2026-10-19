@@ -36,13 +36,13 @@ pnpm config:hash
 - **Canonical package:** all 54 files match `SHA256SUMS.json`, and they still match after the package's own build. Its 75 tests pass. The economics gate reports no diagnostics. Its deployment gate fails, by design, until real operators are supplied.
 - **Config hash:** v5.5.0 is `0x24f38f4aa11919503354bb5f8263978c7b3edc29723760928cb1eecdbafbe5ae` (31,451 bytes). This repo reproduces it independently with noble Keccak and its own serializer, and it equals the package manifest.
 - **CREATE3:** the 9 mined addresses re-derive from their salts; they are provisional because the deployer is still the placeholder. Seven modules are unmined by design: Mantle, BlastPool, SmelterPool, Flow, GenesisFeeEscrow, TreasuryVesting and Timelock.
-- **Forge, 47/47:**
+- **Forge, 49/49:**
   - The integer ports equal `canonical/accounting.ts` **exactly** on generated vectors. A deliberate 1-wei rounding change fails the suite.
   - The emission schedule is exact on every day from 0 to 1700 plus far-out days (ADR 0002). Day 365 is exactly 10,800 EMBER, and the floor is first reached on day 1,619.
   - The Heat integral telescopes exactly under checkpoint subdivision (fuzzed).
   - Mint conservation holds: base + Ashfall + residue = available ≤ headroom.
   - Invariants: supply ≤ 21M, and balances sum to supply.
-  - Mantle invariants under random action sequences: `accounted + reserved ≤ 21M`, `totalSupply ≤ accounted`, the seed is all-or-nothing, vesting never runs ahead of V(t), Ashfall is always backed by recognized credits, and base never exceeds the schedule.
+  - Mantle invariants under random action sequences, starting about 50,000 EMBER below the ceiling: `accounted + reserved ≤ 21M`, exact Ashfall credit conservation, `epochReserved` equal to the outstanding budgets, `totalSupply ≤ accounted`, the seed is all-or-nothing, vesting never runs ahead of V(t), Ashfall is always backed by recognized credits, and base never exceeds the schedule.
 
 ## Toolchain
 
