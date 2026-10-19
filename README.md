@@ -12,6 +12,7 @@ EVM workspace for **FURNACE Protocol**, a loyalty-staking protocol built on EMBE
 | `contracts/src/generated/` | `FurnaceParams.sol` (constants **generated from the canonical config**; only mined registry addresses) and `ScheduleTable.sol` (exact emission factors), both from `pnpm gen`. |
 | `contracts/src/libraries/HeatMath.sol` | RAY-scale Heat. `heatPrimitive`, `integrateHeat`, `cooledAge` and `deedAge` are **exact ports** of `canonical/accounting.ts`. |
 | `contracts/src/libraries/EmissionMath.sol` | **Exact** half-life schedule (integer table, [ADR 0002](docs/adr/0002-exact-emission-schedule.md)); `allocateMint` (shared base + Ashfall headroom with tagged residue) and `accruedPoolBudget` are **exact ports**. |
+| `contracts/src/Mantle.sol` | **Issuance ledger** (the only EMBER minter): reserves the seed, vesting and epoch budgets; burns are registered through it; one-epoch-lag Ashfall; no owner. See [ADR 0003](docs/adr/0003-mantle-ledger.md). |
 | `contracts/src/EmberToken.sol` | Home-chain EMBER: immutable, zero tax, 21M local backstop, and the Mantle as its only minter. Nothing is pre-minted. |
 | `contracts/test/` | Exact differential tests against BigInt vectors, fuzz properties, and invariants. |
 | `scripts/` | Independent checks: canonical checksums, config hash, CREATE3, and `gen`. |
@@ -35,12 +36,13 @@ pnpm config:hash
 - **Canonical package:** all 54 files match `SHA256SUMS.json`, and they still match after the package's own build. Its 75 tests pass. The economics gate reports no diagnostics. Its deployment gate fails, by design, until real operators are supplied.
 - **Config hash:** v5.5.0 is `0x24f38f4aa11919503354bb5f8263978c7b3edc29723760928cb1eecdbafbe5ae` (31,451 bytes). This repo reproduces it independently with noble Keccak and its own serializer, and it equals the package manifest.
 - **CREATE3:** the 9 mined addresses re-derive from their salts; they are provisional because the deployer is still the placeholder. Seven modules are unmined by design: Mantle, BlastPool, SmelterPool, Flow, GenesisFeeEscrow, TreasuryVesting and Timelock.
-- **Forge, 31/31:**
+- **Forge, 47/47:**
   - The integer ports equal `canonical/accounting.ts` **exactly** on generated vectors. A deliberate 1-wei rounding change fails the suite.
   - The emission schedule is exact on every day from 0 to 1700 plus far-out days (ADR 0002). Day 365 is exactly 10,800 EMBER, and the floor is first reached on day 1,619.
   - The Heat integral telescopes exactly under checkpoint subdivision (fuzzed).
   - Mint conservation holds: base + Ashfall + residue = available ≤ headroom.
   - Invariants: supply ≤ 21M, and balances sum to supply.
+  - Mantle invariants under random action sequences: `accounted + reserved ≤ 21M`, `totalSupply ≤ accounted`, the seed is all-or-nothing, vesting never runs ahead of V(t), Ashfall is always backed by recognized credits, and base never exceeds the schedule.
 
 ## Toolchain
 
@@ -59,7 +61,7 @@ EVM target: `cancun`.
 
 ## Next steps (v5.5 `CONTRACTS.md`)
 
-1. **Mantle:** the global issuance ledger, reservations (Kindling seed, Treasury vesting), epoch authorization and the burn-credit registry, built on `EmissionMath.allocateMint`.
+1. ~~Mantle~~ (done; see ADR 0003 for the provisional defaults). Transport claims stay unimplemented while bridging is disabled.
 2. **Forge core:** 32 source lots, checkpointed time-integrated measures (`HeatMath.integrateHeat`), cooling plans, and bounded 32-lot settlement pages. Principal exits never wait on settlement.
 3. **FeeRouter (Vent)** with the 0.5% per-call and per-window throughput limits, and **GenesisFeeEscrow** for Kindling.
 4. The Heat² primitive (`squaredHeatPrimitive`) port for Ashfall.

@@ -22,6 +22,13 @@ library FurnaceParams {
     uint256 internal constant EMISSION_HALF_LIFE_DAYS = 365;
     uint256 internal constant CONVICTION_BUCKET_PCT = 10;
     uint256 internal constant SPLIT_FLAT_PCT = 30;
+    uint256 internal constant HOME_EMISSION_SHARE_PCT = 100; // ethereum; Mantle mints only the home share
+
+    // ── Ashfall (burn recycling, one-epoch lag) ──
+    uint256 internal constant ASHFALL_LAG_EPOCHS = 1;
+    uint256 internal constant RECYCLE_PROTOCOL_BURN_PCT = 50;
+    uint256 internal constant RECYCLE_PYRE_BURN_PCT = 25;
+    uint256 internal constant RECYCLE_UNSOLICITED_PCT = 0; // unregistered burns are never recognized
 
     // ── Heat, RAY (1e27) scale; ages in seconds ──
     uint256 internal constant RAY = 1e27;

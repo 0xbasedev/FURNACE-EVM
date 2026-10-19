@@ -13,7 +13,7 @@ import cfg, { CREATEX_FACTORY, heatMultiplier, baseEmissionPerDay } from '../can
 import { emissionPerDay, factorTable, HALF_LIFE } from './schedule';
 import {
   RAY, AGE_CAP, ray, parseUnits, heatPrimitive, integrateHeat, cooledAge, deedAge,
-  allocateMint, accruedPoolBudget,
+  allocateMint, accruedPoolBudget, vested, DAY as DAY_N,
 } from '../canonical/accounting';
 import { canonicalize, keccakHex } from './canonical';
 import { keccak_256 } from '@noble/hashes/sha3.js';
@@ -67,6 +67,17 @@ c('uint256', 'EMISSION_FLOOR_PER_DAY', `${cfg.emissions.base.floorPerDay}e18`);
 c('uint256', 'EMISSION_HALF_LIFE_DAYS', cfg.emissions.base.halfLifeDays);
 c('uint256', 'CONVICTION_BUCKET_PCT', cfg.emissions.convictionBucketPct);
 c('uint256', 'SPLIT_FLAT_PCT', cfg.emissions.split.flatPct);
+const home = cfg.chains.find((ch) => ch.role === 'home' && ch.enabled);
+if (!home || home.key !== cfg.emissions.controllerChain) throw new Error('home chain must be the enabled emissions controller');
+c('uint256', 'HOME_EMISSION_SHARE_PCT', home.fixedEmissionSharePct, `${home.key}; Mantle mints only the home share`);
+
+section('Ashfall (burn recycling, one-epoch lag)');
+const ash = cfg.emissions.ashfall;
+if (ash.lagEpochs !== 1) throw new Error('Mantle implements a one-epoch Ashfall lag');
+c('uint256', 'ASHFALL_LAG_EPOCHS', ash.lagEpochs);
+c('uint256', 'RECYCLE_PROTOCOL_BURN_PCT', ash.recycleRates.protocolBurns);
+c('uint256', 'RECYCLE_PYRE_BURN_PCT', ash.recycleRates.pyreBurns);
+c('uint256', 'RECYCLE_UNSOLICITED_PCT', ash.recycleRates.unsolicited, 'unregistered burns are never recognized');
 
 section('Heat, RAY (1e27) scale; ages in seconds');
 c('uint256', 'RAY', '1e27');
@@ -163,6 +174,10 @@ const budgets = Array.from({ length: 12 }, (_, i) => {
   const occ = i === 0 ? 0n : i === 1 ? DAY : rnd(DAY + 1n);
   return { target, occ, out: accruedPoolBudget(target, occ, DAY) };
 });
+const vestTotal = parseUnits(cfg.token.allocations.treasury.amount, 18);
+const vestDuration = BigInt(cfg.token.allocations.treasury.vestingDays) * DAY_N;
+const vestElapsed = [0n, 1n, 59n, DAY_N, 7n * DAY_N, vestDuration / 2n, vestDuration - 1n, vestDuration, vestDuration + 1n, 10n * vestDuration,
+  ...Array.from({ length: 16 }, () => rnd(vestDuration + DAY_N))];
 const emissionDays = [...Array.from({ length: 1701 }, (_, d) => d), 2000, 5000, 9124, 9125, 100000, 1000000];
 // Sanity: the exact schedule tracks v5.5's float helper to float precision.
 for (const d of emissionDays) {
@@ -182,6 +197,7 @@ const vectors = {
     accounted: S(mints.map((m) => m.acc)), reserved: S(mints.map((m) => m.res)), base: S(mints.map((m) => m.b)), ashfall: S(mints.map((m) => m.a)),
     outBase: S(mints.map((m) => m.out.base)), outAshfall: S(mints.map((m) => m.out.ashfall)), outResidue: S(mints.map((m) => m.out.unmintedResidue)),
   },
+  vesting: { elapsed: S(vestElapsed), out: S(vestElapsed.map((t) => vested(vestTotal, t, vestDuration))) },
   poolBudget: { target: S(budgets.map((x) => x.target)), occupied: S(budgets.map((x) => x.occ)), out: S(budgets.map((x) => x.out)) },
   // Float display helper (no integer reference exists): compared within 1e-12 relative.
   lotHeat: { ageSeconds: heatDays.map((d) => String(Math.round(d * 86_400))), ray: heatDays.map((d) => fixed(heatMultiplier(Math.round(d * 86_400) / 86_400), 27)) },
