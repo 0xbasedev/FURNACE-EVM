@@ -1,0 +1,18 @@
+import {furnaceConfig as c,validateConfigDetailed} from '../dist/furnace.config.js';
+import {predictCreate3,canonical,keccak} from '../dist/crypto.js';
+import {settleBaseEpoch,ray,RAY,segmentMeasures,integrateHeat,integrateSquaredHeat,DAY} from '../dist/accounting.js';
+import {readFileSync,writeFileSync} from 'node:fs';
+import {createHash} from 'node:crypto';
+import {spawnSync} from 'node:child_process';
+const output=new URL('../results/',import.meta.url);
+const original=readFileSync(new URL('../source-v5.4/furnace.config.ts',import.meta.url));
+const copied=JSON.parse(readFileSync(new URL('../source-v5.4/config.data.json',import.meta.url),'utf8'));
+const registry=Object.entries(c.deployment.evm.contracts).map(([name,e])=>e.salt?{name,derived:predictCreate3(c.deployment.evm.factory,c.deployment.evm.deployer,e.salt),matches:predictCreate3(c.deployment.evm.factory,c.deployment.evm.deployer,e.salt).toLowerCase()===e.address.toLowerCase()}:{name,status:'unmined'});
+const p=[{id:'sealed',stakeSeconds:10n,heatSeconds:10n*ray('3.65'),sealSeconds:10n*ray('0.5'),candidateSeconds:10n*ray('3.65')/2n},{id:'rest',stakeSeconds:990n,heatSeconds:990n*RAY,sealSeconds:0n,candidateSeconds:0n}];
+const tests=readFileSync(new URL('tests.log',output),'utf8');
+const testCount=Number(tests.match(/# tests (\d+)/)?.[1]??0),passed=Number(tests.match(/# pass (\d+)/)?.[1]??0),failed=Number(tests.match(/# fail (\d+)/)?.[1]??0);
+const compiler=spawnSync('tsc',['--version'],{encoding:'utf8'});
+const result={version:c.version,status:'canonical-design-not-deployed',node:process.version,compiler:compiler.stdout.trim(),scope:'New config, source-level validator and reference arithmetic; no deployed contract, Foundry or Anchor audit.',baseline:{version:copied.version,sourceSha256:createHash('sha256').update(original).digest('hex'),dataHash:keccak(canonical(copied)),unchangedEconomicProfile:['EMBER live cap','seed and Treasury allocation','emission start/half-life/floor','ASH allocation tree','nominal fees','Heat curve/milestones','90/10 Genesis LP','25% compatible Casting','10% capped Conviction']},tests:{namedTests:testCount,passed,failed,seededBudgetScenarios:1000,doesNotEstablish:'Contract security, VM overflow safety, bridge authentication, oracle correctness or release readiness'},validation:{economics:validateConfigDetailed(c,'economics'),deployment:validateConfigDetailed(c,'deployment')},registry,example:{conviction:settleBaseEpoch(10000n*1000000n,p),oneDayFresh:segmentMeasures(1n,0n,DAY),oneYearHeatIntegral:integrateHeat(0n,365n*DAY),oneYearSquaredIntegral:integrateSquaredHeat(0n,365n*DAY)},currentConfigHash:keccak(canonical(c))};
+writeFileSync(new URL('verification.json',output),JSON.stringify(result,(_,v)=>typeof v==='bigint'?v.toString():v,2)+'\n');
+console.log(JSON.stringify({tests:result.tests,economicErrors:result.validation.economics.length,deploymentDiagnostics:result.validation.deployment.length,configHash:result.currentConfigHash},null,2));
+if(failed||testCount!==passed||!testCount||result.validation.economics.length)process.exitCode=1;

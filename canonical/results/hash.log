@@ -1,0 +1,22 @@
+
+> furnace-canonical-design@5.5.0 config:hash
+> npm run build && node scripts/config-hash.mjs
+
+
+> furnace-canonical-design@5.5.0 build
+> node scripts/build.mjs
+
+{
+  "version": "5.5.0",
+  "fullConfigHash": "0x24f38f4aa11919503354bb5f8263978c7b3edc29723760928cb1eecdbafbe5ae",
+  "policyIdentityHash": "0x131faee9935c93434723a962ca9f966456a57bda09e589b85fb26a6fecaf64c0",
+  "utf8Bytes": 31451,
+  "sources": {
+    "furnace.config.ts": "8cbca6ab68da1bb918f28dfe770581cb37e920cec5782e0b4aa2bcc7d5001109",
+    "accounting.ts": "1fac0f41f5fdcd0ca2ddfabee6679a9806c37f33c32c49a328b06fd2fc2df430",
+    "validation.ts": "cac5adf4aea176f0b6b544db1e0a1e28b9998d9986c4326b17d5399b87d8327c",
+    "identity-rules.ts": "de73f0414b4f95e85e9da27efae8ab7a32c43dcc3a64345bc5b717ca991da68e",
+    "crypto.ts": "ccc8cfc8a09f513d99591ca265b81b97319fa4004165fd9f74f7c77533329918"
+  },
+  "scope": "Configuration and reviewed policy commitments; not deployed bytecode or initialized storage"
+}

@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": false,
+    "outDir": "dist",
+    "declaration": true
+  },
+  "include": ["*.ts", "vendor/js-sha3/sha3.d.cts"],
+  "exclude": ["source-v5.4", "dist"]
+}

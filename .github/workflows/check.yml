@@ -3,15 +3,20 @@ on:
   push:
   pull_request:
 jobs:
-  config:
+  check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # config hash + JSON mirror, CREATE3 re-derivation, 66-check review suite
+      # typecheck, canonical checksums, independent config hash, CREATE3,
+      # generated Solidity freshness, forge build + test (forge and solc from npm)
       - run: pnpm check
+      # the canonical package's own 75 tests + economics gate (pinned TypeScript 5.8.3), then re-verify its checksums
+      - run: pnpm canonical:test
