@@ -3,6 +3,7 @@ pragma solidity 0.8.28;
 
 import {EmissionMath} from "../src/libraries/EmissionMath.sol";
 import {FurnaceParams as P} from "../src/generated/FurnaceParams.sol";
+import {ScheduleTable} from "../src/generated/ScheduleTable.sol";
 import {OracleVectors} from "./utils/OracleVectors.sol";
 
 contract EmissionHarness {
@@ -38,20 +39,30 @@ contract EmissionMathTest is OracleVectors {
         for (uint256 i; i < t.length; ++i) assertEq(EmissionMath.accruedPoolBudget(t[i], o[i], P.EPOCH_SECONDS), want[i]);
     }
 
-    function test_baseEmission_matchesFloatOracle() public view {
+    /// Exhaustive over days 0..1700 plus far-out days: exact equality with scripts/schedule.ts.
+    function test_baseEmission_exact() public view {
         uint256[] memory day = _uints(".emission.day");
         uint256[] memory want = _uints(".emission.wad");
-        for (uint256 i; i < day.length; ++i) _assertNearFloat(EmissionMath.baseEmissionPerDay(day[i]), want[i], "baseEmissionPerDay");
+        for (uint256 i; i < day.length; ++i) assertEq(EmissionMath.baseEmissionPerDay(day[i]), want[i], "baseEmissionPerDay");
+    }
+
+    function test_scheduleTable_shape() public pure {
+        assertEq(ScheduleTable.LENGTH, P.EMISSION_HALF_LIFE_DAYS);
+        assertEq(ScheduleTable.factor(0), 1e18, "F[0] = 1");
+        for (uint256 r = 1; r < ScheduleTable.LENGTH; ++r) assertLt(ScheduleTable.factor(r), ScheduleTable.factor(r - 1), "strictly decreasing");
+        assertGt(ScheduleTable.factor(ScheduleTable.LENGTH - 1), 0.5e18, "F[H-1] > 1/2");
     }
 
     // ── Spec anchors ─────────────────────────────────────────────────────
     function test_curveAnchors() public pure {
         assertEq(EmissionMath.baseEmissionPerDay(0), 21_600e18);
-        assertApproxEqRel(EmissionMath.baseEmissionPerDay(365), 10_800e18, 1e6, "one half-life");
+        assertEq(EmissionMath.baseEmissionPerDay(365), 10_800e18, "exactly one half-life");
+        assertEq(EmissionMath.baseEmissionPerDay(730), 5_400e18, "exactly two half-lives");
         // 21,600 · 2^(−d/365) = 1,000 at d ≈ 1,618.03 (spec: "around day 1,618").
         assertGt(EmissionMath.baseEmissionPerDay(1618), 1_000e18);
         assertEq(EmissionMath.baseEmissionPerDay(1619), 1_000e18);
         assertEq(EmissionMath.baseEmissionPerDay(type(uint64).max), 1_000e18, "no overflow far out");
+        assertEq(EmissionMath.baseEmissionPerDay(type(uint256).max), 1_000e18, "q >= 256 guard");
     }
 
     function test_poolBudget_rejectsBadInterval() public {

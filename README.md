@@ -9,9 +9,9 @@ EVM workspace for **FURNACE Protocol**, a loyalty-staking protocol built on EMBE
 | Path | What it is |
 |---|---|
 | `canonical/` | **Canonical v5.5 package, byte-for-byte as supplied**: the config, `accounting.ts` integer reference, validators, spec, decisions, contract map, deployment gates, and its own 75 tests. CI verifies its `SHA256SUMS.json`. |
-| `contracts/src/generated/FurnaceParams.sol` | Solidity constants **generated from the canonical config** (`pnpm gen`). Only mined registry addresses become constants. |
+| `contracts/src/generated/` | `FurnaceParams.sol` (constants **generated from the canonical config**; only mined registry addresses) and `ScheduleTable.sol` (exact emission factors), both from `pnpm gen`. |
 | `contracts/src/libraries/HeatMath.sol` | RAY-scale Heat. `heatPrimitive`, `integrateHeat`, `cooledAge` and `deedAge` are **exact ports** of `canonical/accounting.ts`. |
-| `contracts/src/libraries/EmissionMath.sol` | Half-life schedule; `allocateMint` (shared base + Ashfall headroom with tagged residue) and `accruedPoolBudget` are **exact ports**. |
+| `contracts/src/libraries/EmissionMath.sol` | **Exact** half-life schedule (integer table, [ADR 0002](docs/adr/0002-exact-emission-schedule.md)); `allocateMint` (shared base + Ashfall headroom with tagged residue) and `accruedPoolBudget` are **exact ports**. |
 | `contracts/src/EmberToken.sol` | Home-chain EMBER: immutable, zero tax, 21M local backstop, and the Mantle as its only minter. Nothing is pre-minted. |
 | `contracts/test/` | Exact differential tests against BigInt vectors, fuzz properties, and invariants. |
 | `scripts/` | Independent checks: canonical checksums, config hash, CREATE3, and `gen`. |
@@ -26,7 +26,7 @@ pnpm install
 pnpm check          # typecheck, canonical checksums, config hash, CREATE3, gen freshness, forge tests
 pnpm canonical:test # the canonical package's own tests + economics gate (pinned TypeScript 5.8.3)
 pnpm check:all      # both (CI runs both)
-pnpm gen            # regenerate FurnaceParams.sol + oracle vectors after a canonical revision
+pnpm gen            # regenerate FurnaceParams.sol, ScheduleTable.sol + oracle vectors
 pnpm config:hash
 ```
 
@@ -35,8 +35,9 @@ pnpm config:hash
 - **Canonical package:** all 54 files match `SHA256SUMS.json`, and they still match after the package's own build. Its 75 tests pass. The economics gate reports no diagnostics. Its deployment gate fails, by design, until real operators are supplied.
 - **Config hash:** v5.5.0 is `0x24f38f4aa11919503354bb5f8263978c7b3edc29723760928cb1eecdbafbe5ae` (31,451 bytes). This repo reproduces it independently with noble Keccak and its own serializer, and it equals the package manifest.
 - **CREATE3:** the 9 mined addresses re-derive from their salts; they are provisional because the deployer is still the placeholder. Seven modules are unmined by design: Mantle, BlastPool, SmelterPool, Flow, GenesisFeeEscrow, TreasuryVesting and Timelock.
-- **Forge, 30/30:**
+- **Forge, 31/31:**
   - The integer ports equal `canonical/accounting.ts` **exactly** on generated vectors. A deliberate 1-wei rounding change fails the suite.
+  - The emission schedule is exact on every day from 0 to 1700 plus far-out days (ADR 0002). Day 365 is exactly 10,800 EMBER, and the floor is first reached on day 1,619.
   - The Heat integral telescopes exactly under checkpoint subdivision (fuzzed).
   - Mint conservation holds: base + Ashfall + residue = available ≤ headroom.
   - Invariants: supply ≤ 21M, and balances sum to supply.

@@ -2,27 +2,28 @@
 pragma solidity 0.8.28;
 
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
-import {FixedPointMathLib} from "solady/utils/FixedPointMathLib.sol";
 import {FurnaceParams as P} from "../generated/FurnaceParams.sol";
+import {ScheduleTable} from "../generated/ScheduleTable.sol";
 
 /// @title EmissionMath
 /// @notice Base schedule, shared mint headroom and occupied-time pool budgets (spec v5.5).
-///         allocateMint / accruedPoolBudget are EXACT ports of canonical/accounting.ts.
+///         allocateMint / accruedPoolBudget are EXACT ports of canonical/accounting.ts;
+///         baseEmissionPerDay is the EXACT port of scripts/schedule.ts (ADR 0002).
 library EmissionMath {
     uint256 internal constant WAD = 1e18;
-    uint256 internal constant LN2_WAD = 693147180559945309;
-    /// @dev Past 59 half-lives 2^-d ≈ 1.7e-18: the curve term is zero at WAD precision.
-    uint256 internal constant NEGLIGIBLE_HALF_LIVES = 59;
 
     error InvalidOccupiedInterval(uint256 occupiedSeconds, uint256 epochSeconds);
 
-    /// @notice Network-wide daily target at epoch-day `day`: max(floor, start · 2^(−day/halfLife)).
+    /// @notice Network-wide daily target at epoch-day `day`: max(floor, start · 2^(−day/halfLife)),
+    ///         evaluated exactly: q = day / H, r = day % H,
+    ///         curve = ⌊START · F[r] / 1e18⌋ >> q  (nested floors commute, so the order of the
+    ///         division and the shift cannot change the result; ADR 0002).
     ///         A TARGET evaluated at epoch start; what mints is bounded by allocateMint.
     function baseEmissionPerDay(uint256 day) internal pure returns (uint256) {
+        uint256 q = day / P.EMISSION_HALF_LIFE_DAYS;
         uint256 curve;
-        if (day < NEGLIGIBLE_HALF_LIVES * P.EMISSION_HALF_LIFE_DAYS) {
-            int256 x = -int256((LN2_WAD * day) / P.EMISSION_HALF_LIFE_DAYS);
-            curve = Math.mulDiv(P.EMISSION_START_PER_DAY, uint256(FixedPointMathLib.expWad(x)), WAD);
+        if (q < 256) {
+            curve = (P.EMISSION_START_PER_DAY * ScheduleTable.factor(day % P.EMISSION_HALF_LIFE_DAYS)) / WAD >> q;
         }
         return curve > P.EMISSION_FLOOR_PER_DAY ? curve : P.EMISSION_FLOOR_PER_DAY;
     }

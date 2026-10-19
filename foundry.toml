@@ -18,7 +18,6 @@ fs_permissions = [{ access = "read", path = "./contracts/test/fixtures" }]
 remappings = [
   "forge-std/=lib/forge-std/src/",
   "@openzeppelin/contracts/=node_modules/@openzeppelin/contracts/",
-  "solady/=node_modules/solady/src/",
 ]
 
 [fuzz]

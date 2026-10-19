@@ -20,9 +20,6 @@ importers:
       '@types/node':
         specifier: ^22.20.5
         version: 22.20.5
-      solady:
-        specifier: 0.1.26
-        version: 0.1.26
       solc:
         specifier: 0.8.28
         version: 0.8.28
@@ -281,9 +278,6 @@ packages:
     resolution: {integrity: sha512-cBznnQ9KjJqU67B52RMC65CMarK2600WFnbkcaiwWq3xy/5haFJlshgnpjovMVJ+Hff49d8GEn0b87C5pDQ10g==}
     hasBin: true
 
-  solady@0.1.26:
-    resolution: {integrity: sha512-dhGr/ptJFdea/1KE6xgqgwEdbMhUiSfRc6A+jLeltPe16zyt9qtED3PElIBVRnzEmUO5aZTjKVAr6SlqXBBcIw==}
-
   solc@0.8.28:
     resolution: {integrity: sha512-AFCiJ+b4RosyyNhnfdVH4ZR1+TxiL91iluPjw0EJslIu4LXGM9NYqi2z5y8TqochC4tcH9QsHfwWhOIC9jPDKA==}
     engines: {node: '>=10.0.0'}
@@ -462,8 +456,6 @@ snapshots:
   os-tmpdir@1.0.2: {}
 
   semver@5.7.2: {}
-
-  solady@0.1.26: {}
 
   solc@0.8.28:
     dependencies:
