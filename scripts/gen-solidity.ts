@@ -4,6 +4,7 @@
 //   contracts/src/generated/FurnaceParams.sol    constants + MINED registry addresses
 //   contracts/src/generated/ScheduleTable.sol    exact half-life factor table
 //   contracts/test/fixtures/oracle-vectors.json  reference values
+//   contracts/test/fixtures/forge-vectors.json   ForgePool scenarios (scripts/forge-scenarios.ts)
 // Integer references (accounting.ts, BigInt) are matched EXACTLY by the Solidity
 // ports; the float display helper heatMultiplier within 1e-12.
 // pnpm gen --check exits non-zero if either output is stale (CI gate).
@@ -16,12 +17,14 @@ import {
   allocateMint, accruedPoolBudget, vested, DAY as DAY_N,
 } from '../canonical/accounting';
 import { canonicalize, keccakHex } from './canonical';
+import { forgeVectors } from './forge-scenarios';
 import { keccak_256 } from '@noble/hashes/sha3.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
 
 const PARAMS = 'contracts/src/generated/FurnaceParams.sol';
 const SCHEDULE = 'contracts/src/generated/ScheduleTable.sol';
 const VECTORS = 'contracts/test/fixtures/oracle-vectors.json';
+const FORGE_VECTORS = 'contracts/test/fixtures/forge-vectors.json';
 const DAY = 86_400n;
 
 /** Exact decimal → fixed-point integer string (shortest round-trip, never toFixed noise). */
@@ -97,6 +100,45 @@ milestones.forEach((m, i) => {
   c('uint256', `MILESTONE_${i}_BUMP_RAY`, ray(String(m.heatBump)));
 });
 c('uint256', 'DEED_HEAT_CARRY_PCT', f.deeds.heatCarryPct);
+
+section('Forge custody: fees, cooling plans, emergency exit (spec v5.5 §4, §11)');
+// ForgePool implements exactly these policies; fail generation if the config selects another.
+const wd = cfg.cooldowns.withdraw;
+const ex = cfg.execution.withdrawals;
+const policy: [string, unknown, unknown][] = [
+  ['cooldowns.withdraw.earnsWhileCooling', wd.earnsWhileCooling, false],
+  ['cooldowns.withdraw.onCancelOrLapse', wd.onCancelOrLapse, 'resumeFrozen'],
+  ['forge.cancelReturnsAsFreshLot', f.cancelReturnsAsFreshLot, false],
+  ['forge.heat.withdrawCooling', f.heat.withdrawCooling, 'proportional'],
+  ['forge.withdrawResetsStreak', f.withdrawResetsStreak, true],
+  ['execution.withdrawals.aggregation', ex.aggregation, 'frozenReferenceCumulativeRequests'],
+  ['execution.withdrawals.cancelConsumesPlanQuota', ex.cancelConsumesPlanQuota, true],
+  ['execution.withdrawals.freeze', ex.freeze, 'requestedSlice'],
+  ['execution.withdrawals.lapse', ex.lapse, 'resumeFrozen'],
+  ['execution.withdrawals.exitAsset', ex.exitAsset, 'inKind'],
+  ['execution.withdrawals.exitRequiresOracle', ex.exitRequiresOracle, false],
+  ['forge.emergencyExit.enabled', f.emergencyExit.enabled, true],
+];
+for (const [path, got, want] of policy) if (got !== want) throw new Error(`ForgePool implements ${path} = ${String(want)}, config has ${String(got)}`);
+wd.tiers.forEach((t, i) => {
+  const prev = wd.tiers[i - 1];
+  if (prev && !(t.maxWithdrawPct > prev.maxWithdrawPct && t.seconds > prev.seconds)) throw new Error('withdraw tiers must ascend');
+});
+if (wd.tiers[wd.tiers.length - 1].maxWithdrawPct !== 100) throw new Error('last withdraw tier must cover 100%');
+if (wd.tiers.length !== 5) throw new Error('ForgePool._tier unrolls exactly 5 withdraw tiers');
+if (ex.planHorizonSeconds < wd.tiers[wd.tiers.length - 1].seconds) throw new Error('plan horizon shorter than the longest tier');
+c('uint256', 'FORGE_DEPOSIT_FEE_PCT', f.fees.depositPct);
+c('uint256', 'FORGE_WITHDRAW_FEE_PCT', f.fees.withdrawPct);
+c('uint256', 'EMERGENCY_EXIT_FEE_PCT', f.emergencyExit.feePct);
+c('uint256', 'MIN_STAKE_LP', parseUnits(f.minStakeLp, 18), `${f.minStakeLp} LP`);
+c('uint256', 'WITHDRAW_TIER_COUNT', wd.tiers.length);
+wd.tiers.forEach((t, i) => {
+  c('uint256', `WITHDRAW_TIER_${i}_MAX_PCT`, t.maxWithdrawPct);
+  c('uint256', `WITHDRAW_TIER_${i}_SECONDS`, t.seconds);
+});
+c('uint256', 'WITHDRAW_EXECUTION_WINDOW', wd.executionWindowSeconds);
+c('uint256', 'COOLING_PLAN_HORIZON', ex.planHorizonSeconds);
+c('uint256', 'ASHFALL_MIN_PARTICIPATION', `${cfg.execution.ashfall.minimumParticipationDays} days`, 'actual participation, stored saturating here');
 
 section(`Deterministic deployment registry (CREATE3). PROVISIONAL while the deployer is ${cfg.deployment.evm.deployer}`);
 lines.push('    //    Only MINED entries become constants; unmined modules are constructor/initializer inputs.');
@@ -211,7 +253,7 @@ const vectors = {
 const vectorsJson = JSON.stringify(vectors, null, 2) + '\n';
 
 // ── write or check ───────────────────────────────────────────────────────
-const outputs: [string, string][] = [[PARAMS, params], [SCHEDULE, scheduleSol], [VECTORS, vectorsJson]];
+const outputs: [string, string][] = [[PARAMS, params], [SCHEDULE, scheduleSol], [VECTORS, vectorsJson], [FORGE_VECTORS, JSON.stringify(forgeVectors(), null, 1) + '\n']];
 if (process.argv.includes('--check')) {
   let stale = 0;
   for (const [p, body] of outputs) {

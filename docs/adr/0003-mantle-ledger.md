@@ -1,6 +1,6 @@
 # ADR 0003: Mantle issuance ledger
 
-**Status:** Accepted, with the provisional defaults flagged below
+**Status:** Accepted. The project owner confirmed the vesting-start and seed defaults on 2026-10-25; the other defaults below remain provisional.
 **Date:** 2026-10-19 · **Config:** v5.5.0 · **Code:** `contracts/src/Mantle.sol`
 
 ## Context
@@ -42,15 +42,15 @@ The invariant `accounted + reserved ≤ 21M` is fuzzed. `totalSupply ≤ account
 
 **5. No owner, no upgrade path, no pause.** The token, distributor, Kindling, Treasury, start time and registrars are all immutable.
 
-## Provisional defaults (open for a canonical decision)
+## Defaults
 
-| Question | Default here | Alternative |
-|---|---|---|
-| When does Treasury vesting start? | At the Mantle `START` (epoch 0) | At successful Kindling settlement |
-| What happens to the seed reservation if Kindling fails? | Stays reserved forever; there is no release path | Kindling releases it on terminal failure |
-| Who handles Ashfall rollover? | The Mantle queue, via `rollAshfall` from the Forge | The Forge keeps its own pot |
-| Is unpaid base kept reserved? | Released when the distributor calls `releaseBase` | Kept reserved forever |
-| Raw / unsolicited burns | Never recognized | A permissionless sync to `totalSupply` (rejected: it can't attribute a category, and becomes unsafe once transport exists) |
+| Question | Default here | Alternative | Status |
+|---|---|---|---|
+| When does Treasury vesting start? | At the Mantle `START` (epoch 0) | At successful Kindling settlement | **Confirmed** by the project owner, 2026-10-25 |
+| What happens to the seed reservation if Kindling fails? | Stays reserved forever; there is no release path | Kindling releases it on terminal failure | **Confirmed** by the project owner, 2026-10-25 |
+| Who handles Ashfall rollover? | The Mantle queue, via `rollAshfall` from the Forge | The Forge keeps its own pot | Provisional |
+| Is unpaid base kept reserved? | Released when the distributor calls `releaseBase` | Kept reserved forever | Provisional |
+| Raw / unsolicited burns | Never recognized | A permissionless sync to `totalSupply` (rejected: it can't attribute a category, and becomes unsafe once transport exists) | Provisional |
 
 ## Consequences and limits
 

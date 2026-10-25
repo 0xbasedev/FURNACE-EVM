@@ -13,10 +13,11 @@
     "verify:create3": "tsx scripts/verify-create3.ts",
     "gen": "tsx scripts/gen-solidity.ts",
     "gen:check": "tsx scripts/gen-solidity.ts --check",
-    "build:sol": "forge build",
-    "test:sol": "forge test",
-    "check": "pnpm typecheck && pnpm canonical:sums && pnpm config:verify-hash && pnpm verify:create3 && pnpm gen:check && pnpm test:sol",
-    "check:all": "pnpm check && pnpm canonical:test"
+    "build:sol": "node tools/forge.mjs build",
+    "test:sol": "node tools/forge.mjs test",
+    "check": "pnpm typecheck && pnpm canonical:sums && pnpm config:verify-hash && pnpm verify:create3 && pnpm gen:check && pnpm forge:gate && pnpm test:sol",
+    "check:all": "pnpm check && pnpm canonical:test",
+    "forge:gate": "node scripts/check-forge-gate.mjs"
   },
   "devDependencies": {
     "@foundry-rs/forge": "1.7.1",
