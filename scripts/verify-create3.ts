@@ -1,9 +1,9 @@
-// Recomputes every deployment.evm.contracts address from its salt via CreateX
-// CREATE3 (msg.sender-guarded salt, 0x00 cross-chain flag) and checks the
-// vanity prefix. Exits non-zero on any mismatch. Read-only: never writes config.
+// Independent CreateX CREATE3 re-derivation for every MINED registry entry
+// (msg.sender-guarded salt, 0x00 cross-chain flag). Unmined (null) entries are
+// listed, not failed: v5.5 keeps them null on purpose until real salts are mined.
 import { keccak_256 } from '@noble/hashes/sha3.js';
 import { bytesToHex, concatBytes, hexToBytes } from '@noble/hashes/utils.js';
-import { loadConfig } from './canonical';
+import furnaceConfig from '../canonical/furnace.config';
 
 // keccak256 of CreateX's CREATE3 proxy init code.
 const PROXY_INIT_CODE_HASH = hexToBytes('21c35dbe1b344a2488cf3321d6ce542f8e9f305544ff09e4993a62319a497c1f');
@@ -15,26 +15,26 @@ export function create3Address(salt: string, deployer: string, factory: string):
   if (s.length !== 32 || d.length !== 20) throw new Error('bad salt/deployer length');
   if (bytesToHex(s.slice(0, 20)) !== bytesToHex(d)) throw new Error('salt not bound to deployer');
   if (s[20] !== 0x00) throw new Error('salt cross-chain flag must be 0x00');
-  // CreateX _guard: keccak256(abi.encode(msg.sender, salt))
   const guarded = keccak_256(concatBytes(new Uint8Array(12), d, s));
   const proxy = keccak_256(concatBytes(new Uint8Array([0xff]), hex(factory), guarded, PROXY_INIT_CODE_HASH)).slice(12);
   return '0x' + bytesToHex(keccak_256(concatBytes(new Uint8Array([0xd6, 0x94]), proxy, new Uint8Array([0x01]))).slice(12));
 }
 
-const evm = loadConfig().deployment.evm;
+const evm = furnaceConfig.deployment.evm;
 let bad = 0;
+const unmined: string[] = [];
 for (const [name, c] of Object.entries<any>(evm.contracts)) {
-  let derived = '';
+  if (c.salt == null && c.address == null) { unmined.push(name); continue; }
   try {
-    derived = create3Address(c.salt, evm.deployer, evm.factory);
+    const derived = create3Address(c.salt, evm.deployer, evm.factory);
+    const ok = derived === String(c.address).toLowerCase() && derived.slice(2, 6).toUpperCase() === c.prefix;
+    if (!ok) bad++;
+    console.log(`${ok ? '✓' : '✗'} ${name.padEnd(16)} ${derived}  ${c.prefix}`);
   } catch (e) {
-    console.log(`✗ ${name.padEnd(11)} ${(e as Error).message}`);
     bad++;
-    continue;
+    console.log(`✗ ${name.padEnd(16)} ${(e as Error).message}`);
   }
-  const ok = derived === String(c.address).toLowerCase() && derived.slice(2, 6).toUpperCase() === c.prefix;
-  if (!ok) bad++;
-  console.log(`${ok ? '✓' : '✗'} ${name.padEnd(11)} ${derived}  ${c.prefix}`);
 }
-console.log(`\ndeployer ${evm.deployer}${/^0x(11){20}$/i.test(evm.deployer) ? '  (PLACEHOLDER — addresses provisional)' : ''}`);
+if (unmined.length) console.log(`· unmined (null, by design until pnpm mine:salts): ${unmined.join(', ')}`);
+console.log(`deployer ${evm.deployer}${/^0x(11){20}$/i.test(evm.deployer) ? '  (PLACEHOLDER — addresses provisional)' : ''}`);
 process.exit(bad ? 1 : 0);

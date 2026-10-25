@@ -1,0 +1,468 @@
+
+> furnace-canonical-design@5.5.0 test
+> npm run build && node --test tests/*.mjs
+
+
+> furnace-canonical-design@5.5.0 build
+> node scripts/build.mjs
+
+TAP version 13
+# Subtest: canonical economic template passes; deployment remains blocked
+ok 1 - canonical economic template passes; deployment remains blocked
+  ---
+  duration_ms: 17.075396
+  type: 'test'
+  ...
+# Subtest: baseline emission and supply profile retained
+ok 2 - baseline emission and supply profile retained
+  ---
+  duration_ms: 0.140679
+  type: 'test'
+  ...
+# Subtest: Ethereum is the only initial chain and receives full local budget
+ok 3 - Ethereum is the only initial chain and receives full local budget
+  ---
+  duration_ms: 0.204714
+  type: 'test'
+  ...
+# Subtest: specific rejection: claim fee
+ok 4 - specific rejection: claim fee
+  ---
+  duration_ms: 8.058477
+  type: 'test'
+  ...
+# Subtest: specific rejection: emergency fee
+ok 5 - specific rejection: emergency fee
+  ---
+  duration_ms: 5.678479
+  type: 'test'
+  ...
+# Subtest: specific rejection: deposit fee
+ok 6 - specific rejection: deposit fee
+  ---
+  duration_ms: 4.409037
+  type: 'test'
+  ...
+# Subtest: specific rejection: withdraw reset
+ok 7 - specific rejection: withdraw reset
+  ---
+  duration_ms: 2.032023
+  type: 'test'
+  ...
+# Subtest: specific rejection: compound loses age
+ok 8 - specific rejection: compound loses age
+  ---
+  duration_ms: 1.976521
+  type: 'test'
+  ...
+# Subtest: specific rejection: fresh cancellation
+ok 9 - specific rejection: fresh cancellation
+  ---
+  duration_ms: 2.11822
+  type: 'test'
+  ...
+# Subtest: specific rejection: contradictory lapse
+ok 10 - specific rejection: contradictory lapse
+  ---
+  duration_ms: 1.771486
+  type: 'test'
+  ...
+# Subtest: specific rejection: altered floor
+ok 11 - specific rejection: altered floor
+  ---
+  duration_ms: 1.742883
+  type: 'test'
+  ...
+# Subtest: specific rejection: altered split
+ok 12 - specific rejection: altered split
+  ---
+  duration_ms: 2.029699
+  type: 'test'
+  ...
+# Subtest: specific rejection: altered bucket
+ok 13 - specific rejection: altered bucket
+  ---
+  duration_ms: 1.688022
+  type: 'test'
+  ...
+# Subtest: specific rejection: casting too high
+ok 14 - specific rejection: casting too high
+  ---
+  duration_ms: 1.468226
+  type: 'test'
+  ...
+# Subtest: specific rejection: casting singles
+ok 15 - specific rejection: casting singles
+  ---
+  duration_ms: 1.708283
+  type: 'test'
+  ...
+# Subtest: specific rejection: burn user LP
+ok 16 - specific rejection: burn user LP
+  ---
+  duration_ms: 1.711638
+  type: 'test'
+  ...
+# Subtest: specific rejection: all Kindling LP burned
+ok 17 - specific rejection: all Kindling LP burned
+  ---
+  duration_ms: 1.812207
+  type: 'test'
+  ...
+# Subtest: specific rejection: non-atomic Kindling
+ok 18 - specific rejection: non-atomic Kindling
+  ---
+  duration_ms: 1.440756
+  type: 'test'
+  ...
+# Subtest: specific rejection: unescrowed fees
+ok 19 - specific rejection: unescrowed fees
+  ---
+  duration_ms: 1.696906
+  type: 'test'
+  ...
+# Subtest: specific rejection: excessive chunk
+ok 20 - specific rejection: excessive chunk
+  ---
+  duration_ms: 1.850934
+  type: 'test'
+  ...
+# Subtest: specific rejection: disabled allowlist
+ok 21 - specific rejection: disabled allowlist
+  ---
+  duration_ms: 1.698318
+  type: 'test'
+  ...
+# Subtest: specific rejection: unsafe fail open
+ok 22 - specific rejection: unsafe fail open
+  ---
+  duration_ms: 1.419495
+  type: 'test'
+  ...
+# Subtest: specific rejection: one-second TWAP
+ok 23 - specific rejection: one-second TWAP
+  ---
+  duration_ms: 1.521756
+  type: 'test'
+  ...
+# Subtest: specific rejection: open keepers
+ok 24 - specific rejection: open keepers
+  ---
+  duration_ms: 1.601705
+  type: 'test'
+  ...
+# Subtest: specific rejection: automatic selling
+ok 25 - specific rejection: automatic selling
+  ---
+  duration_ms: 1.607123
+  type: 'test'
+  ...
+# Subtest: specific rejection: empty router
+ok 26 - specific rejection: empty router
+  ---
+  duration_ms: 1.709134
+  type: 'test'
+  ...
+# Subtest: specific rejection: zero router
+ok 27 - specific rejection: zero router
+  ---
+  duration_ms: 1.775472
+  type: 'test'
+  ...
+# Subtest: specific rejection: empty endpoint
+ok 28 - specific rejection: empty endpoint
+  ---
+  duration_ms: 2.042297
+  type: 'test'
+  ...
+# Subtest: specific rejection: zero endpoint
+ok 29 - specific rejection: zero endpoint
+  ---
+  duration_ms: 1.617479
+  type: 'test'
+  ...
+# Subtest: specific rejection: corrupt router checksum
+ok 30 - specific rejection: corrupt router checksum
+  ---
+  duration_ms: 1.791636
+  type: 'test'
+  ...
+# Subtest: specific rejection: wrong predicted address
+ok 31 - specific rejection: wrong predicted address
+  ---
+  duration_ms: 1.647993
+  type: 'test'
+  ...
+# Subtest: specific rejection: extra ASH allocation
+ok 32 - specific rejection: extra ASH allocation
+  ---
+  duration_ms: 1.47085
+  type: 'test'
+  ...
+# Subtest: specific rejection: NaN casting
+ok 33 - specific rejection: NaN casting
+  ---
+  duration_ms: 2.291236
+  type: 'test'
+  ...
+# Subtest: specific rejection: infinite reserve chunk
+ok 34 - specific rejection: infinite reserve chunk
+  ---
+  duration_ms: 1.540583
+  type: 'test'
+  ...
+# Subtest: specific rejection: missing module
+ok 35 - specific rejection: missing module
+  ---
+  duration_ms: 1.676876
+  type: 'test'
+  ...
+# Subtest: specific rejection: missing collateral binding
+ok 36 - specific rejection: missing collateral binding
+  ---
+  duration_ms: 1.844945
+  type: 'test'
+  ...
+# Subtest: specific rejection: ordinary WETH labelled LP
+ok 37 - specific rejection: ordinary WETH labelled LP
+  ---
+  duration_ms: 1.494906
+  type: 'test'
+  ...
+# Subtest: specific rejection: pause exits
+ok 38 - specific rejection: pause exits
+  ---
+  duration_ms: 1.912536
+  type: 'test'
+  ...
+# Subtest: specific rejection: activate satellite
+ok 39 - specific rejection: activate satellite
+  ---
+  duration_ms: 1.350993
+  type: 'test'
+  ...
+# Subtest: specific rejection: disable all chains
+ok 40 - specific rejection: disable all chains
+  ---
+  duration_ms: 1.322981
+  type: 'test'
+  ...
+# Subtest: Solana guardians use base58, not an EVM checksum
+ok 41 - Solana guardians use base58, not an EVM checksum
+  ---
+  duration_ms: 1.738337
+  type: 'test'
+  ...
+# Subtest: missing active guardian is a deployment blocker with stable path
+ok 42 - missing active guardian is a deployment blocker with stable path
+  ---
+  duration_ms: 0.907345
+  type: 'test'
+  ...
+# Subtest: nine preserved fixture CREATE3 addresses independently recompute
+ok 43 - nine preserved fixture CREATE3 addresses independently recompute
+  ---
+  duration_ms: 0.677615
+  type: 'test'
+  ...
+# Subtest: guarded salt rejects a different sender
+ok 44 - guarded salt rejects a different sender
+  ---
+  duration_ms: 0.287586
+  type: 'test'
+  ...
+# Subtest: Keccak matches standard empty and abc vectors
+ok 45 - Keccak matches standard empty and abc vectors
+  ---
+  duration_ms: 0.266695
+  type: 'test'
+  ...
+# Subtest: canonical data hash is key-order invariant and rejects NaN
+ok 46 - canonical data hash is key-order invariant and rejects NaN
+  ---
+  duration_ms: 0.253937
+  type: 'test'
+  ...
+# Subtest: display cooling, Deed carry, Heat and reward outputs retained
+ok 47 - display cooling, Deed carry, Heat and reward outputs retained
+  ---
+  duration_ms: 0.41141
+  type: 'test'
+  ...
+# Subtest: display helper guards reject invalid Conviction and mint domains
+ok 48 - display helper guards reject invalid Conviction and mint domains
+  ---
+  duration_ms: 0.295719
+  type: 'test'
+  ...
+# Subtest: pool/category-aware Casting is ordinary-base and LP only
+ok 49 - pool/category-aware Casting is ordinary-base and LP only
+  ---
+  duration_ms: 0.351311
+  type: 'test'
+  ...
+# Subtest: dry and partially funded Cast leave uncovered rewards liquid
+ok 50 - dry and partially funded Cast leave uncovered rewards liquid
+  ---
+  duration_ms: 0.088721
+  type: 'test'
+  ...
+# Subtest: integer amount parser never uses floating-point money
+ok 51 - integer amount parser never uses floating-point money
+  ---
+  duration_ms: 0.194028
+  type: 'test'
+  ...
+# Subtest: integer square root is exact at and around large squares
+ok 52 - integer square root is exact at and around large squares
+  ---
+  duration_ms: 0.197182
+  type: 'test'
+  ...
+# Subtest: capped-age operations have one integer policy
+ok 53 - capped-age operations have one integer policy
+  ---
+  duration_ms: 0.113128
+  type: 'test'
+  ...
+# Subtest: exact ASH vesting consumes the allocation once across all checkpoints
+ok 54 - exact ASH vesting consumes the allocation once across all checkpoints
+  ---
+  duration_ms: 0.537447
+  type: 'test'
+  ...
+# Subtest: Heat integral is constant after cap
+ok 55 - Heat integral is constant after cap
+  ---
+  duration_ms: 0.30322
+  type: 'test'
+  ...
+# Subtest: Heat primitive differences telescope at all milestone boundaries
+ok 56 - Heat primitive differences telescope at all milestone boundaries
+  ---
+  duration_ms: 0.187839
+  type: 'test'
+  ...
+# Subtest: integral agrees with an independent fine midpoint calculation
+ok 57 - integral agrees with an independent fine midpoint calculation
+  ---
+  duration_ms: 12.727669
+  type: 'test'
+  ...
+# Subtest: integration is explicitly not a terminal snapshot
+ok 58 - integration is explicitly not a terminal snapshot
+  ---
+  duration_ms: 0.20917
+  type: 'test'
+  ...
+# Subtest: empty epoch retains budget, never fabricates a recipient
+ok 59 - empty epoch retains budget, never fabricates a recipient
+  ---
+  duration_ms: 0.212425
+  type: 'test'
+  ...
+# Subtest: empty Conviction returns to Heat: 27/73
+ok 60 - empty Conviction returns to Heat: 27/73
+  ---
+  duration_ms: 0.169731
+  type: 'test'
+  ...
+# Subtest: additive-correct cap on the 10,000-token counterexample
+ok 61 - additive-correct cap on the 10,000-token counterexample
+  ---
+  duration_ms: 0.14114
+  type: 'test'
+  ...
+# Subtest: counterfeit measures and duplicate position IDs are rejected
+ok 62 - counterfeit measures and duplicate position IDs are rejected
+  ---
+  duration_ms: 0.192475
+  type: 'test'
+  ...
+# Subtest: 1,000 seeded allocations conserve base budget and respect caps
+ok 63 - 1,000 seeded allocations conserve base budget and respect caps
+  ---
+  duration_ms: 140.554122
+  type: 'test'
+  ...
+# Subtest: bounded-page measure accumulation matches a full reference total
+ok 64 - bounded-page measure accumulation matches a full reference total
+  ---
+  duration_ms: 15.785954
+  type: 'test'
+  ...
+# Subtest: joint mint subtracts already reserved headroom once
+ok 65 - joint mint subtracts already reserved headroom once
+  ---
+  duration_ms: 0.225764
+  type: 'test'
+  ...
+# Subtest: matching is pro-rata, capped by quote actually reserved
+ok 66 - matching is pro-rata, capped by quote actually reserved
+  ---
+  duration_ms: 0.225825
+  type: 'test'
+  ...
+# Subtest: matching credits cannot be consumed twice
+ok 67 - matching credits cannot be consumed twice
+  ---
+  duration_ms: 0.185505
+  type: 'test'
+  ...
+# Subtest: escrow failure refunds net plus held fee, not spendable Treasury funds
+ok 68 - escrow failure refunds net plus held fee, not spendable Treasury funds
+  ---
+  duration_ms: 0.192305
+  type: 'test'
+  ...
+# Subtest: cancel then failure returns only outstanding net and fee
+ok 69 - cancel then failure returns only outstanding net and fee
+  ---
+  duration_ms: 0.093189
+  type: 'test'
+  ...
+# Subtest: success releases fees only once and leaves principal to LP settlement
+ok 70 - success releases fees only once and leaves principal to LP settlement
+  ---
+  duration_ms: 0.125787
+  type: 'test'
+  ...
+# Subtest: Heat-squared integral is constant beyond cap and is not squared average
+ok 71 - Heat-squared integral is constant beyond cap and is not squared average
+  ---
+  duration_ms: 0.486001
+  type: 'test'
+  ...
+# Subtest: Heat-squared primitive telescopes across milestones
+ok 72 - Heat-squared primitive telescopes across milestones
+  ---
+  duration_ms: 0.434845
+  type: 'test'
+  ...
+# Subtest: Heat-squared integral matches independent numerical quadrature
+ok 73 - Heat-squared integral matches independent numerical quadrature
+  ---
+  duration_ms: 14.021278
+  type: 'test'
+  ...
+# Subtest: late entry cannot obtain a previously empty full-day budget
+ok 74 - late entry cannot obtain a previously empty full-day budget
+  ---
+  duration_ms: 0.149702
+  type: 'test'
+  ...
+# Subtest: occupied-time budget rejects negative, zero-duration and excessive intervals
+ok 75 - occupied-time budget rejects negative, zero-duration and excessive intervals
+  ---
+  duration_ms: 0.15532
+  type: 'test'
+  ...
+1..75
+# tests 75
+# suites 0
+# pass 75
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 371.544819

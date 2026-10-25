@@ -1,0 +1,14 @@
+
+> furnace-canonical-design@5.5.0 check:config
+> npm run build && node scripts/check-config.mjs economics
+
+
+> furnace-canonical-design@5.5.0 build
+> node scripts/build.mjs
+
+{
+  "stage": "economics",
+  "scope": "local configuration only; not code, chain state, or audit approval",
+  "releaseApproved": false,
+  "diagnostics": []
+}

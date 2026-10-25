@@ -1,0 +1,16 @@
+{
+  "name": "furnace-canonical-design",
+  "version": "5.5.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "node scripts/build.mjs --noEmit",
+    "test": "npm run build && node --test tests/*.mjs",
+    "check:config": "npm run build && node scripts/check-config.mjs economics",
+    "check:deploy": "npm run build && node scripts/check-config.mjs deployment",
+    "config:hash": "npm run build && node scripts/config-hash.mjs",
+    "verify": "npm run test && npm run check:config"
+  },
+  "devDependencies": { "typescript": "5.8.3" }
+}

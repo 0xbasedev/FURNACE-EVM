@@ -1,10 +1,8 @@
-// Canonical serialization per spec §23: recursive key sort, array order
-// preserved, compact JSON.stringify, Keccak-256 over UTF-8.
-import { readFileSync } from 'node:fs';
+// Independent canonical serialization + Keccak-256 (noble), used to cross-check
+// the canonical package's own js-sha3 tooling. Spec rules: recursive key sort,
+// array order preserved, compact JSON.stringify, Keccak-256 over UTF-8.
 import { keccak_256 } from '@noble/hashes/sha3.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
-
-export const CONFIG_PATH = process.env.FURNACE_CONFIG ?? 'config/furnace.config.canonical.json';
 
 const sortKeys = (v: unknown): unknown =>
   Array.isArray(v)
@@ -16,5 +14,3 @@ const sortKeys = (v: unknown): unknown =>
 export const canonicalize = (cfg: unknown): string => JSON.stringify(sortKeys(cfg));
 
 export const keccakHex = (s: string): string => '0x' + bytesToHex(keccak_256(new TextEncoder().encode(s)));
-
-export const loadConfig = (path = CONFIG_PATH): any => JSON.parse(readFileSync(path, 'utf8'));

@@ -1,23 +1,29 @@
-// pnpm config:hash — prints keccak256 of the canonical config JSON (spec §23).
-// Source: the default export of furnace.config.ts.
-// --expect  exit non-zero unless the hash equals the spec's published v5.3.1 hash
-//           AND config/furnace.config.canonical.json mirrors the .ts exactly.
-import furnaceConfig from '../furnace.config';
-import { CONFIG_PATH, canonicalize, keccakHex, loadConfig } from './canonical';
+// pnpm config:hash — independent recomputation of the canonical config hash.
+// --expect  exit non-zero unless it equals both the package manifest
+//           (canonical/results/manifest.json) and the RECORDED entry for the version.
+import { readFileSync } from 'node:fs';
+import furnaceConfig from '../canonical/furnace.config';
+import { canonicalize, keccakHex } from './canonical';
 
-const SPEC_HASH_V5_3_1 = '0x9ecedb63d5d10951caaf506032a1cf6d14b9e2196f236e2d2a45c200870463f7';
+/** Every adopted revision. History: docs/REVISIONS.md. */
+const RECORDED: Record<string, string> = {
+  '5.3.1': '0x9ecedb63d5d10951caaf506032a1cf6d14b9e2196f236e2d2a45c200870463f7',
+  '5.3.2': '0xbaeb97a2a062763bc986f78e270812214d439bba2044fcdbdc99ad5c00b17270', // superseded, never deployed
+  '5.5.0': '0x24f38f4aa11919503354bb5f8263978c7b3edc29723760928cb1eecdbafbe5ae',
+};
 
 const canon = canonicalize(furnaceConfig);
 const hash = keccakHex(canon);
-console.log(`source:  furnace.config.ts`);
-console.log(`chars:   ${canon.length}`);
+console.log(`source:  canonical/furnace.config.ts v${furnaceConfig.version}`);
 console.log(`bytes:   ${Buffer.byteLength(canon, 'utf8')}`);
 console.log(`keccak:  ${hash}`);
 
 if (process.argv.includes('--expect')) {
-  const hashOk = hash === SPEC_HASH_V5_3_1;
-  const mirrorOk = canonicalize(loadConfig(CONFIG_PATH)) === canon;
-  console.log(hashOk ? '✓ matches spec v5.3.1 hash' : `✗ expected ${SPEC_HASH_V5_3_1}`);
-  console.log(mirrorOk ? `✓ ${CONFIG_PATH} mirrors furnace.config.ts` : `✗ ${CONFIG_PATH} is stale — regenerate it from furnace.config.ts`);
-  process.exit(hashOk && mirrorOk ? 0 : 1);
+  const manifest = JSON.parse(readFileSync(new URL('../canonical/results/manifest.json', import.meta.url), 'utf8'));
+  const checks: [string, boolean][] = [
+    [`matches RECORDED v${furnaceConfig.version}`, RECORDED[furnaceConfig.version] === hash],
+    ['matches canonical/results/manifest.json fullConfigHash', manifest.fullConfigHash === hash && manifest.version === furnaceConfig.version],
+  ];
+  for (const [what, ok] of checks) console.log(`${ok ? '✓' : '✗'} ${what}`);
+  process.exit(checks.every(([, ok]) => ok) ? 0 : 1);
 }

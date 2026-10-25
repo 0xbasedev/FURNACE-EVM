@@ -1,0 +1,54 @@
+{
+  "method": "Independent pure-Python Keccak-256; offline review reference only",
+  "configHash": "0x24f38f4aa11919503354bb5f8263978c7b3edc29723760928cb1eecdbafbe5ae",
+  "matches": true,
+  "utf8Bytes": 31451,
+  "registry": [
+    {
+      "name": "AshToken",
+      "address": "0xa5e55c164036f63e9b6e6337c465eedead49fb5b",
+      "matches": true
+    },
+    {
+      "name": "Deeds",
+      "address": "0xdeed54948eab9875d89a77cc383714d6a5d7dc6d",
+      "matches": true
+    },
+    {
+      "name": "EmberToken",
+      "address": "0xf1e5b7820a8c6f6349a576db516142c8d341dcc4",
+      "matches": true
+    },
+    {
+      "name": "FeeRouter",
+      "address": "0xfee5356949802d661959360a5e4004e1d8c685a2",
+      "matches": true
+    },
+    {
+      "name": "Forge",
+      "address": "0xf09551c13e2ca9cbeed634452a1f37d89a25532d",
+      "matches": true
+    },
+    {
+      "name": "Hearth",
+      "address": "0xea272470c2529afe408d13bf6057b72a1a8763ce",
+      "matches": true
+    },
+    {
+      "name": "Ignition",
+      "address": "0x19172ad5c06ccc86a6e2712d06500f1028cf185b",
+      "matches": true
+    },
+    {
+      "name": "Kindling",
+      "address": "0x5a1d6ee608bf6e94b53789824705427ea40f2746",
+      "matches": true
+    },
+    {
+      "name": "Relics",
+      "address": "0x2e1c923b32c214c4b7b2b8bd30daeb9f0a183dbd",
+      "matches": true
+    }
+  ],
+  "caveat": "No RPC, key control, runtime code or deployment verification was performed."
+}

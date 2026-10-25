@@ -1,0 +1,1367 @@
+{
+  "version": "5.4.0",
+  "brand": {
+    "protocolName": "FURNACE",
+    "shortName": "Furnace",
+    "tagline": "Stake longer. Burn brighter.",
+    "description": "An omnichain loyalty-staking protocol where every fee burns or deepens liquidity, every reward is weighted by how long you have stayed, and compounding is the only instant, free move.",
+    "domain": "furnace.fi",
+    "supportEmail": "hello@furnace.fi",
+    "assets": {
+      "logo": "/brand/furnace-wordmark.svg",
+      "logoMark": "/brand/furnace-mark.svg",
+      "favicon": "/brand/favicon.svg",
+      "ogImage": "/brand/og.png",
+      "tokenIcon": "/brand/ember.svg",
+      "lpIcon": "/brand/ember-eth-lp.svg",
+      "relicArtDir": "/brand/relics/"
+    },
+    "theme": {
+      "mode": "dark",
+      "colors": {
+        "bg": "#0d0a08",
+        "surface": "#171310",
+        "surfaceRaised": "#221b16",
+        "border": "#33281f",
+        "text": "#f5ede6",
+        "textMuted": "#a89a8c",
+        "accent": "#ff6a00",
+        "accentGlow": "#ffb347",
+        "warning": "#f59e0b",
+        "danger": "#e5484d",
+        "ready": "#22c55e",
+        "heat": "#ff7a00",
+        "cooling": "#6b7a8f"
+      },
+      "fonts": {
+        "display": "Space Grotesk",
+        "body": "Inter",
+        "mono": "JetBrains Mono"
+      },
+      "radius": "14px"
+    },
+    "social": {
+      "x": "https://x.com/furnacefi",
+      "discord": "https://discord.gg/furnacefi",
+      "telegram": "https://t.me/furnacefi",
+      "github": "https://github.com/furnacefi",
+      "docs": "https://docs.furnace.fi"
+    },
+    "legal": {
+      "termsUrl": "https://furnace.fi/terms",
+      "riskDisclosureUrl": "https://furnace.fi/risk"
+    }
+  },
+  "names": {
+    "genesis": "Ignition",
+    "staking": "The Forge",
+    "swap": "Flow",
+    "treasury": "The Vault",
+    "burn": "The Vent",
+    "badges": "Relics",
+    "reemission": "Ashfall",
+    "emissions": "The Emberwell",
+    "multiplier": "Heat",
+    "streak": "Streak",
+    "lot": "Lot",
+    "capstone": "Capstone",
+    "matchReserve": "Match Reserve",
+    "casting": "Casting",
+    "pyre": "Pyre",
+    "tracks": "Conviction tracks",
+    "deed": "Deed",
+    "cooldowns": {
+      "withdraw": "Cooling",
+      "claim": "Venting",
+      "compound": "Stoke",
+      "emergency": "Emergency exit"
+    },
+    "relics": {
+      "spark": "Spark",
+      "flame": "Flame",
+      "blaze": "Blaze",
+      "inferno": "Inferno",
+      "eternal": "Eternal Flame",
+      "bedrock": "Bedrock"
+    },
+    "founderBadge": "First Flame"
+  },
+  "pages": [
+    {
+      "key": "dashboard",
+      "path": "/",
+      "title": "Dashboard",
+      "navLabel": "Home",
+      "order": 0,
+      "enabled": true,
+      "gate": "always"
+    },
+    {
+      "key": "ignition",
+      "path": "/ignition",
+      "title": "Ignition",
+      "navLabel": "Ignition",
+      "order": 1,
+      "enabled": true,
+      "gate": "duringGenesis"
+    },
+    {
+      "key": "kindling",
+      "path": "/kindling",
+      "title": "Kindling",
+      "navLabel": "Kindling",
+      "order": 2,
+      "enabled": true,
+      "gate": "duringGenesis"
+    },
+    {
+      "key": "forge",
+      "path": "/forge",
+      "title": "The Forge",
+      "navLabel": "Forge",
+      "order": 3,
+      "enabled": true,
+      "gate": "afterGenesis"
+    },
+    {
+      "key": "relics",
+      "path": "/relics",
+      "title": "Relics",
+      "navLabel": "Relics",
+      "order": 4,
+      "enabled": true,
+      "gate": "afterGenesis"
+    },
+    {
+      "key": "hearth",
+      "path": "/hearth",
+      "title": "The Hearth",
+      "navLabel": "Hearth",
+      "order": 5,
+      "enabled": true,
+      "gate": "afterGenesis"
+    },
+    {
+      "key": "flow",
+      "path": "/flow",
+      "title": "Flow",
+      "navLabel": "Flow",
+      "order": 6,
+      "enabled": true,
+      "gate": "afterGenesis"
+    },
+    {
+      "key": "deeds",
+      "path": "/deeds",
+      "title": "Deed Market",
+      "navLabel": "Deeds",
+      "order": 7,
+      "enabled": true,
+      "gate": "afterGenesis"
+    },
+    {
+      "key": "docs",
+      "path": "/docs",
+      "title": "Docs",
+      "navLabel": "Docs",
+      "order": 8,
+      "enabled": true,
+      "gate": "always"
+    }
+  ],
+  "copy": {
+    "buttons": {
+      "connect": "Connect wallet",
+      "genesisDeposit": "Join the Ignition",
+      "genesisWithdraw": "Pull out (fee not refunded)",
+      "deposit": "Stake",
+      "withdraw": "Start cooling",
+      "withdrawNow": "Withdraw Now",
+      "claim": "Start venting",
+      "claimNow": "Claim Now",
+      "compound": "Compound",
+      "stokeToCapstone": "Stoke into Capstone",
+      "stokeToLp": "Stoke into LP",
+      "cancel": "Cancel",
+      "emergency": "Emergency exit",
+      "tap": "Use a Tap",
+      "feedPyre": "Feed the Pyre",
+      "chooseTrack": "Choose a track",
+      "zapStake": "Stake it",
+      "swap": "Swap",
+      "buyLp": "Buy LP",
+      "sellLp": "Sell LP",
+      "listDeed": "List this Deed",
+      "buyDeed": "Buy this Deed",
+      "delistDeed": "Delist",
+      "placeBid": "Place bid"
+    },
+    "warnings": {
+      "withdrawResets": "Withdrawing resets your {streak} to day 0 and cools your {multiplier} proportionally. Cooling takes {withdrawHours} h and the liquidity earns nothing while it cools.",
+      "claimVsCompound": "{compoundVerb} is instant and keeps your {multiplier}. Claiming starts a {claimHours} h timer.",
+      "emergency": "This skips the timer and costs {emergencyFee}%: {emergencyBurn}% burned, {emergencyLiquidity}% to permanent liquidity, {emergencyStakers}% to everyone who stayed.",
+      "depositDilutes": "New liquidity enters at 1.0\u00d7. Your blended {multiplier} will drop to {newMultiplier}\u00d7.",
+      "genesisFee": "{genesisFee}% of this deposit goes to the {treasury} now and is not refundable.",
+      "tapNotice": "A Tap keeps your {streak}. The {withdrawFee}% fee and the cooling timer still apply.",
+      "withdrawCools": "Withdrawing {pct}% keeps {keptPct}% of your {multiplier} age and resets your {streak}.",
+      "capstone": "{capstone} earns no emissions. It adds up to +{maxBonus}\u00d7 {multiplier} when it is worth {ratioForMax}% of your LP, and it never sells.",
+      "stokeFallback": "The {matchReserve} is dry, so this Stoke will zap: half of it sells for the quote asset on the pool. Stoke into {capstone} instead to sell nothing.",
+      "pyreBurn": "Burning {amount} {symbol} is permanent and irreversible. The {pyre} badge is soulbound \u2014 it can never be sold \u2014 and its +{boost}\u00d7 {multiplier} lasts forever.",
+      "castingNote": "{pct}% of every emission is {casting}: paired with the {matchReserve} and staked as LP back into the lot that earned it, at that lot\u2019s age. It never dilutes earned age \u2014 only withdrawn like the rest of your stake.",
+      "trackForfeit": "Leaving before day {days} forfeits the unvested +{bonus}\u00d7 {tracks} bonus. Your principal is never locked and never slashed \u2014 it still exits through the normal {withdraw} timer.",
+      "deedSale": "Selling this {deed} moves the LP, {capstone}, escrow and rewards to the buyer \u2014 the pool never loses liquidity. The buyer inherits {heatCarry}% of your {multiplier} age; your {streak} resets and your badges stay with you. A completed {seal} term leaves a permanent Seal Scar on the {deed}; your Keystone Relic stays in your wallet forever. {marketFee}% goes to the {feeRouter}.",
+      "deedBuy": "This {deed} carries {heatAge} days of {multiplier} age ({heatCarry}% of what the seller earned). The {streak} starts at 0 for you; badges are earned, never bought.",
+      "sealForfeit": "Withdrawing before the {tracks} term ends forfeits the escrowed bonus: {burn}% burned, {reserve}% to the {matchReserve}, {pot}% to positions still inside their term. Principal is untouched.",
+      "deedAuction": "This {deed} sells by {auctionHours}-hour auction at a reserve of {reserve} {currency}. Highest bid at close wins; {marketFee}% of the final price goes to the {feeRouter}. No instant sale \u2014 the only instant exit is the emergency route."
+    },
+    "toasts": {
+      "cooling": "Cooling started. {withdrawHours} h to go.",
+      "readyToWithdraw": "Cooled. Withdraw Now is live for {windowHours} h.",
+      "venting": "Venting started. {claimHours} h to go.",
+      "readyToVent": "Vented. Claim Now is live.",
+      "stoked": "Stoked. {amount} {symbol} added at {multiplier}\u00d7.",
+      "lapsed": "Cooling window lapsed. Your position resumed with its frozen Heat intact \u2014 the cooling interval did not age it.",
+      "pyreMinted": "{pyre} {tier} forged. +{boost}\u00d7 {multiplier}, forever.",
+      "emissionCast": "{pct}% of your emission was cast as LP and staked.",
+      "trackVested": "{tracks} complete: +{bonus}\u00d7 bonus vested.",
+      "quoteYieldPaid": "Real yield: {amount} {symbol} from swap fees.",
+      "deedListed": "{deed} listed for {price} {currency}.",
+      "deedSold": "{deed} sold. {fee} went to the {feeRouter}; the pool kept its liquidity.",
+      "deedBought": "{deed} bought with {heatAge} days of {multiplier} age.",
+      "keystoneMinted": "Keystone forged \u2014 your {tracks} term is complete.",
+      "sealForfeited": "Escrow forfeited: {burn} burned, {reserve} to the reserve, {pot} to the Sealed.",
+      "bidPlaced": "Bid placed: {amount} {currency}. Auction ends in {time}.",
+      "deedAuctionWon": "Auction won \u2014 the {deed} is yours with {heatAge} days of {multiplier} age.",
+      "deedAuctionExpired": "Auction ended below reserve. Your {deed} was delisted."
+    },
+    "timeline": {
+      "title": "Your {streak}",
+      "heatVsStreak": "Your {date} top-up set your {multiplier} back {days} days.",
+      "nextBump": "Next relic: {relic} in {days} days (+{bump}\u00d7).",
+      "pending": "Cooling {amount} LP \u2014 withdraw in {time}."
+    },
+    "empty": {
+      "noPosition": "Nothing in the {staking} yet. Stake LP or buy some on {swap}.",
+      "noRelics": "Your first relic forms at {firstRelicDays} days."
+    }
+  },
+  "chains": [
+    {
+      "key": "ethereum",
+      "name": "Ethereum",
+      "vm": "evm",
+      "enabled": true,
+      "role": "home",
+      "chainId": 1,
+      "nativeSymbol": "ETH",
+      "rpcUrls": [
+        "https://eth.llamarpc.com"
+      ],
+      "explorerUrl": "https://etherscan.io",
+      "lz": {
+        "eid": 30101,
+        "endpoint": "0x1a44076050125825900e736c501f859c50fE728c",
+        "dvns": [],
+        "requiredDvnCount": 2
+      },
+      "quoteAsset": {
+        "symbol": "WETH",
+        "address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+        "decimals": 18,
+        "conversion": "none"
+      },
+      "listedTokens": [
+        {
+          "symbol": "USDC",
+          "address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+          "decimals": 6,
+          "conversion": "swapAtClose",
+          "maxSlippageBps": 50
+        },
+        {
+          "symbol": "WBTC",
+          "address": "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599",
+          "decimals": 8
+        }
+      ],
+      "externalDex": {
+        "kind": "uniswap-v2",
+        "router": "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D"
+      },
+      "fixedEmissionSharePct": 45,
+      "runsGenesis": true,
+      "genesisAcceptedAssets": [
+        {
+          "symbol": "WETH",
+          "address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+          "decimals": 18,
+          "conversion": "none"
+        },
+        {
+          "symbol": "USDC",
+          "address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+          "decimals": 6,
+          "conversion": "swapAtClose",
+          "maxSlippageBps": 50
+        },
+        {
+          "symbol": "WBTC",
+          "address": "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599",
+          "decimals": 8
+        }
+      ]
+    },
+    {
+      "key": "bsc",
+      "name": "BNB Chain",
+      "vm": "evm",
+      "enabled": true,
+      "role": "satellite",
+      "chainId": 56,
+      "nativeSymbol": "BNB",
+      "rpcUrls": [
+        "https://bsc-dataseed.binance.org"
+      ],
+      "explorerUrl": "https://bscscan.com",
+      "lz": {
+        "eid": 30102,
+        "endpoint": "0x1a44076050125825900e736c501f859c50fE728c",
+        "dvns": [],
+        "requiredDvnCount": 2
+      },
+      "quoteAsset": {
+        "symbol": "WBNB",
+        "address": "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c",
+        "decimals": 18,
+        "conversion": "none"
+      },
+      "listedTokens": [
+        {
+          "symbol": "USDT",
+          "address": "0x55d398326f99059fF775485246999027B3197955",
+          "decimals": 18,
+          "conversion": "swapAtClose",
+          "maxSlippageBps": 50
+        }
+      ],
+      "externalDex": {
+        "kind": "pancake-v2",
+        "router": "0x10ED43C718714eb63d5aA57B78B54704E256024E"
+      },
+      "fixedEmissionSharePct": 20,
+      "runsGenesis": false,
+      "genesisAcceptedAssets": [
+        {
+          "symbol": "WBNB",
+          "address": "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c",
+          "decimals": 18,
+          "conversion": "none"
+        },
+        {
+          "symbol": "USDT",
+          "address": "0x55d398326f99059fF775485246999027B3197955",
+          "decimals": 18,
+          "conversion": "swapAtClose",
+          "maxSlippageBps": 50
+        }
+      ]
+    },
+    {
+      "key": "base",
+      "name": "Base",
+      "vm": "evm",
+      "enabled": true,
+      "role": "satellite",
+      "chainId": 8453,
+      "nativeSymbol": "ETH",
+      "rpcUrls": [
+        "https://mainnet.base.org"
+      ],
+      "explorerUrl": "https://basescan.org",
+      "lz": {
+        "eid": 30184,
+        "endpoint": "0x1a44076050125825900e736c501f859c50fE728c",
+        "dvns": [],
+        "requiredDvnCount": 2
+      },
+      "quoteAsset": {
+        "symbol": "WETH",
+        "address": "0x4200000000000000000000000000000000000006",
+        "decimals": 18,
+        "conversion": "none"
+      },
+      "listedTokens": [
+        {
+          "symbol": "USDC",
+          "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+          "decimals": 6,
+          "conversion": "swapAtClose",
+          "maxSlippageBps": 50
+        }
+      ],
+      "externalDex": {
+        "kind": "aerodrome",
+        "router": "0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43"
+      },
+      "fixedEmissionSharePct": 15,
+      "runsGenesis": false,
+      "genesisAcceptedAssets": [
+        {
+          "symbol": "WETH",
+          "address": "0x4200000000000000000000000000000000000006",
+          "decimals": 18,
+          "conversion": "none"
+        },
+        {
+          "symbol": "USDC",
+          "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+          "decimals": 6,
+          "conversion": "swapAtClose",
+          "maxSlippageBps": 50
+        }
+      ]
+    },
+    {
+      "key": "arbitrum",
+      "name": "Arbitrum One",
+      "vm": "evm",
+      "enabled": true,
+      "role": "satellite",
+      "chainId": 42161,
+      "nativeSymbol": "ETH",
+      "rpcUrls": [
+        "https://arb1.arbitrum.io/rpc"
+      ],
+      "explorerUrl": "https://arbiscan.io",
+      "lz": {
+        "eid": 30110,
+        "endpoint": "0x1a44076050125825900e736c501f859c50fE728c",
+        "dvns": [],
+        "requiredDvnCount": 2
+      },
+      "quoteAsset": {
+        "symbol": "WETH",
+        "address": "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
+        "decimals": 18,
+        "conversion": "none"
+      },
+      "listedTokens": [
+        {
+          "symbol": "USDC",
+          "address": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
+          "decimals": 6,
+          "conversion": "swapAtClose",
+          "maxSlippageBps": 50
+        }
+      ],
+      "externalDex": {
+        "kind": "uniswap-v3",
+        "router": "0xE592427A0AEce92De3Edee1F18E0157C05861564"
+      },
+      "fixedEmissionSharePct": 10,
+      "runsGenesis": false,
+      "genesisAcceptedAssets": [
+        {
+          "symbol": "WETH",
+          "address": "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
+          "decimals": 18,
+          "conversion": "none"
+        },
+        {
+          "symbol": "USDC",
+          "address": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
+          "decimals": 6,
+          "conversion": "swapAtClose",
+          "maxSlippageBps": 50
+        }
+      ]
+    },
+    {
+      "key": "solana",
+      "name": "Solana",
+      "vm": "svm",
+      "enabled": true,
+      "role": "satellite",
+      "cluster": "mainnet-beta",
+      "nativeSymbol": "SOL",
+      "rpcUrls": [
+        "https://api.mainnet-beta.solana.com"
+      ],
+      "explorerUrl": "https://solscan.io",
+      "lz": {
+        "eid": 30168,
+        "endpoint": "76y77prsiCMvXMjuoZ5VRrhG5qYBrUMYTE5WgHqgjEn6",
+        "dvns": [],
+        "requiredDvnCount": 2
+      },
+      "quoteAsset": {
+        "symbol": "wSOL",
+        "address": "So11111111111111111111111111111111111111112",
+        "decimals": 9,
+        "conversion": "none"
+      },
+      "listedTokens": [
+        {
+          "symbol": "USDC",
+          "address": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          "decimals": 6,
+          "conversion": "swapAtClose",
+          "maxSlippageBps": 50
+        }
+      ],
+      "externalDex": {
+        "kind": "jupiter",
+        "router": "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4"
+      },
+      "fixedEmissionSharePct": 10,
+      "runsGenesis": false,
+      "genesisAcceptedAssets": [
+        {
+          "symbol": "wSOL",
+          "address": "So11111111111111111111111111111111111111112",
+          "decimals": 9,
+          "conversion": "none"
+        },
+        {
+          "symbol": "USDC",
+          "address": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          "decimals": 6,
+          "conversion": "swapAtClose",
+          "maxSlippageBps": 50
+        }
+      ]
+    }
+  ],
+  "deployment": {
+    "evm": {
+      "strategy": "create3",
+      "factory": "0xba5Ed099633D3B313e4D5F7bdc1305d3c28ba5Ed",
+      "deployer": "0x1111111111111111111111111111111111111111",
+      "saltGuard": "msgSender",
+      "argumentFreeConstructors": true,
+      "initializeInDeployTx": true,
+      "contracts": {
+        "EmberToken": {
+          "salt": "0x111111111111111111111111111111111111111100000000000000000001415e",
+          "address": "0xf1e5b7820a8c6f6349a576db516142c8d341dcc4",
+          "prefix": "F1E5",
+          "description": "EMBER \u2014 LayerZero OFT protocol token"
+        },
+        "AshToken": {
+          "salt": "0x11111111111111111111111111111111111111110000000000000000000014c3",
+          "address": "0xa5e55c164036f63e9b6e6337c465eedead49fb5b",
+          "prefix": "A5E5",
+          "description": "ASH \u2014 LayerZero OFT share/governance token"
+        },
+        "FeeRouter": {
+          "salt": "0x111111111111111111111111111111111111111100000000000000000000faf3",
+          "address": "0xfee5356949802d661959360a5e4004e1d8c685a2",
+          "prefix": "FEE5",
+          "description": "FeeRouter \u2014 auto-routes fees to burn + liquidity"
+        },
+        "Forge": {
+          "salt": "0x11111111111111111111111111111111111111110000000000000000000135c5",
+          "address": "0xf09551c13e2ca9cbeed634452a1f37d89a25532d",
+          "prefix": "F095",
+          "description": "Forge \u2014 post-launch staking (all pools)"
+        },
+        "Ignition": {
+          "salt": "0x11111111111111111111111111111111111111110000000000000000000035e7",
+          "address": "0x19172ad5c06ccc86a6e2712d06500f1028cf185b",
+          "prefix": "1917",
+          "description": "Ignition \u2014 Genesis bootstrap staking"
+        },
+        "Kindling": {
+          "salt": "0x1111111111111111111111111111111111111111000000000000000000005c57",
+          "address": "0x5a1d6ee608bf6e94b53789824705427ea40f2746",
+          "prefix": "5A1D",
+          "description": "Kindling \u2014 liquidity bootstrap auction"
+        },
+        "Hearth": {
+          "salt": "0x111111111111111111111111111111111111111100000000000000000004d0a0",
+          "address": "0xea272470c2529afe408d13bf6057b72a1a8763ce",
+          "prefix": "EA27",
+          "description": "Hearth \u2014 ASH staking, fee share + governance"
+        },
+        "Relics": {
+          "salt": "0x111111111111111111111111111111111111111100000000000000000001d233",
+          "address": "0x2e1c923b32c214c4b7b2b8bd30daeb9f0a183dbd",
+          "prefix": "2E1C",
+          "description": "Relics \u2014 soulbound duration-milestone NFTs"
+        },
+        "Deeds": {
+          "salt": "0x1111111111111111111111111111111111111111000000000000000000015534",
+          "address": "0xdeed54948eab9875d89a77cc383714d6a5d7dc6d",
+          "prefix": "DEED",
+          "description": "Deeds \u2014 position NFTs + the Deed Market"
+        }
+      },
+      "treasurySafe": {
+        "factory": "0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67",
+        "saltNonce": null
+      }
+    },
+    "svm": {
+      "cluster": "mainnet-beta",
+      "upgradeAuthority": "",
+      "contracts": {
+        "stakingProgram": {
+          "keypair": "keys/staking-program.json",
+          "address": "HVQT6MycoarDw9ktbZBv282HH8SttSR4ycvTeSTw9kKe",
+          "description": "Furnace staking program (Forge + Ignition)"
+        },
+        "feeRouterProgram": {
+          "keypair": "keys/fee-router-program.json",
+          "address": "ECgH9KPnFW9GoM9fe6uVYrmaJpQMsacA8EiiSKwo3Egu",
+          "description": "FeeRouter program (burn + POL builder)"
+        },
+        "emberMint": {
+          "keypair": "keys/ember-mint.json",
+          "address": "AtbnZK5DQibjpxkhynqq7617iuseoWaABytXN7Q3RnbD",
+          "description": "EMBER SPL mint (9 decimals)"
+        },
+        "ashMint": {
+          "keypair": "keys/ash-mint.json",
+          "address": "7a2HrKABUqNEsPntziBaDMVMboQ6hThWJVFu9Zp3cAnW",
+          "description": "ASH SPL mint (9 decimals)"
+        },
+        "relicsCollection": {
+          "keypair": "keys/relics-collection.json",
+          "address": "GgpFhkNfS4Y16gX746NNzWJup6yDcpCRHjw5NNVKFdCL",
+          "description": "Relics Metaplex collection mint (soulbound)"
+        }
+      }
+    }
+  },
+  "token": {
+    "name": "Ember",
+    "symbol": "EMBER",
+    "decimals": {
+      "evm": 18,
+      "svm": 9
+    },
+    "standard": "lz-oft-v2",
+    "oft": {
+      "sharedDecimals": 6,
+      "homeChain": "ethereum",
+      "enforcedGas": {
+        "send": 80000,
+        "compose": 200000
+      },
+      "rateLimit": {
+        "amountPerWindow": "250000",
+        "windowSeconds": 3600
+      }
+    },
+    "allocations": {
+      "kindlingPool": "420000",
+      "treasury": {
+        "amount": "500000",
+        "cliffDays": 0,
+        "vestingDays": 365
+      },
+      "team": {
+        "amount": "0",
+        "cliffDays": 180,
+        "vestingDays": 730,
+        "recipients": []
+      }
+    },
+    "maxSupply": "21000000"
+  },
+  "shareToken": {
+    "name": "Ash",
+    "symbol": "ASH",
+    "decimals": {
+      "evm": 18,
+      "svm": 9
+    },
+    "standard": "lz-oft-v2",
+    "maxSupply": "70000",
+    "allocations": {
+      "launch": {
+        "ignition": "41000",
+        "kindling": "1000"
+      },
+      "forge": "28000"
+    },
+    "forgeTrickleDays": 730
+  },
+  "ignition": {
+    "name": "IGNITION",
+    "address": "0x19172ad5c06ccc86a6e2712d06500f1028cf185b",
+    "durationHours": 120,
+    "minDurationHours": 48,
+    "maxDurationHours": 336,
+    "startTimestamp": null,
+    "depositFeePct": 3,
+    "feeDestination": "treasury",
+    "withdrawDuringWindow": {
+      "enabled": true,
+      "refundFee": false
+    },
+    "exitWindowHours": 24,
+    "exitFeePct": 0,
+    "pools": [
+      {
+        "id": "ign-usdc",
+        "stakeToken": "USDC",
+        "weight": 100,
+        "name": "USDC Pool"
+      },
+      {
+        "id": "ign-weth",
+        "stakeToken": "WETH",
+        "weight": 100,
+        "name": "WETH Pool"
+      },
+      {
+        "id": "ign-wbtc",
+        "stakeToken": "WBTC",
+        "weight": 100,
+        "name": "WBTC Pool"
+      },
+      {
+        "id": "ign-eth-usdc-lp",
+        "stakeToken": "WETH/USDC",
+        "weight": 150,
+        "name": "WETH/USDC LP Pool"
+      }
+    ],
+    "rewards": {
+      "token": "ASH",
+      "total": "41000",
+      "mode": "per-second-pro-rata",
+      "vesting": "none"
+    },
+    "founderBadge": {
+      "enabled": true,
+      "key": "first-flame",
+      "phantomAgeBonusDays": 15
+    },
+    "heatHeadStart": "ignitionStart",
+    "principalAtClose": {
+      "usdc": "autoStakeColdStorage",
+      "usdcOptOutAtDeposit": true,
+      "otherAssets": "claimableFeeFree",
+      "headStartWindowDays": 7,
+      "headStartCappedToUsdKept": true
+    },
+    "earlyBird": {
+      "enabled": true,
+      "maxBonusPct": 10,
+      "shape": "linear"
+    }
+  },
+  "kindling": {
+    "enabled": true,
+    "name": "KINDLING",
+    "address": "0x5a1d6ee608bf6e94b53789824705427ea40f2746",
+    "mode": "auction",
+    "durationHours": 24,
+    "quoteToken": "USDC",
+    "seedEmberBpsOfMax": 200,
+    "minRaiseUsd": 100000,
+    "maxRaiseUsd": 5000000,
+    "maxPerWalletUsd": 25000,
+    "depositFeePct": 3,
+    "feeDestination": "treasury",
+    "feeEscrowUntilClose": true,
+    "priceMode": "clearing",
+    "polPair": "EMBER/USDC",
+    "lpSplit": {
+      "depositorDeedsPct": 90,
+      "burnPct": 10
+    },
+    "ashBonusPool": "1000",
+    "fallback": "treasury-seed",
+    "atomicPoolInit": true,
+    "closeBountyBps": 5
+  },
+  "forge": {
+    "fees": {
+      "depositPct": 1,
+      "withdrawPct": 1,
+      "claimPct": 0,
+      "compoundPct": 0,
+      "waiveDepositFeeFromFlow": true
+    },
+    "heat": {
+      "startMultiplier": 1,
+      "rampBonus": 1.5,
+      "rampDays": 365,
+      "shape": "sqrt",
+      "depositDilution": "perLot",
+      "compoundInheritsAge": true,
+      "compoundProvenance": "sourceLot",
+      "maxLotsPerPosition": 32,
+      "lotExhaustion": "newDeed",
+      "withdrawCooling": "proportional",
+      "tapDrawdownMode": "youngestFirst"
+    },
+    "compound": {
+      "defaultTarget": "capstoneThenLp",
+      "userCanChoose": true,
+      "lpMatch": {
+        "enabled": true,
+        "source": "matchReserve",
+        "fallback": "zap"
+      }
+    },
+    "capstone": {
+      "enabled": true,
+      "maxBonus": 0.5,
+      "ratioForMax": 0.5,
+      "earnsEmissions": false,
+      "depositFeePct": 1,
+      "withdrawFeePct": 1,
+      "cooldown": "sameAsWithdraw",
+      "affectsStreak": false,
+      "affectsHeatAge": false
+    },
+    "autoStoke": {
+      "enabled": true,
+      "defaultOn": false,
+      "tip": {
+        "minPct": 0.1,
+        "defaultPct": 0.5,
+        "maxPct": 1
+      },
+      "minInterval": {
+        "minHours": 24,
+        "defaultHours": 168
+      },
+      "minSize": "100"
+    },
+    "casting": {
+      "enabled": true,
+      "lpSharePct": 25,
+      "quoteSource": "matchReserve",
+      "fallback": "liquidEmber",
+      "autoStake": true,
+      "castLot": "sourceLot",
+      "entersAs": "sourceLotAge",
+      "incompatibleCollateral": "liquid",
+      "matchedLpOwnership": "user"
+    },
+    "pyre": {
+      "enabled": true,
+      "tiers": [
+        {
+          "key": "cinder",
+          "name": "Cinder",
+          "burnEmber": "250",
+          "heatBoost": 0.05,
+          "art": "pyre-cinder.svg"
+        },
+        {
+          "key": "wildfire",
+          "name": "Wildfire",
+          "burnEmber": "1250",
+          "heatBoost": 0.05,
+          "art": "pyre-wildfire.svg"
+        },
+        {
+          "key": "conflagration",
+          "name": "Conflagration",
+          "burnEmber": "6250",
+          "heatBoost": 0.05,
+          "art": "pyre-conflagration.svg"
+        }
+      ],
+      "maxBoost": 0.15,
+      "soulbound": true
+    },
+    "convictionTracks": {
+      "enabled": true,
+      "tracks": [
+        {
+          "days": 30,
+          "bonus": 0.15,
+          "name": "Ember"
+        },
+        {
+          "days": 90,
+          "bonus": 0.25,
+          "name": "Forge"
+        },
+        {
+          "days": 180,
+          "bonus": 0.35,
+          "name": "Kiln"
+        },
+        {
+          "days": 365,
+          "bonus": 0.5,
+          "name": "Eternal"
+        }
+      ],
+      "vestAtTermEnd": true,
+      "bucketCap": {
+        "enabled": true,
+        "capToSealBonusOfHeatShare": true,
+        "unallocatedFlowsTo": "heatPool"
+      },
+      "escrow": {
+        "enabled": true,
+        "payout": "capstone"
+      },
+      "forfeitRouting": {
+        "burnPct": 50,
+        "matchReservePct": 25,
+        "sealedPotPct": 25
+      },
+      "keystone": {
+        "walletRelic": {
+          "enabled": true,
+          "key": "keystone",
+          "soulbound": true
+        },
+        "deedScar": {
+          "enabled": true
+        }
+      }
+    },
+    "deeds": {
+      "enabled": true,
+      "heatCarryPct": 80,
+      "marketFeePct": 1,
+      "feeRouting": {
+        "burnPct": 50,
+        "liquidityPct": 50
+      },
+      "marketOnlyTransfers": true,
+      "blockListingWithPending": true,
+      "saleMode": "auction",
+      "auctionHours": 24,
+      "antiSnipe": {
+        "windowMinutes": 5,
+        "extensionMinutes": 5,
+        "maxTotalExtensionMinutes": 30
+      }
+    },
+    "referrals": {
+      "enabled": false,
+      "sharePct": 3,
+      "refereeMinRelic": "spark",
+      "referrerMinRelic": "flame"
+    },
+    "caps": {
+      "maxTotalMultiplier": 4.15
+    },
+    "relics": [
+      {
+        "key": "spark",
+        "days": 7,
+        "heatBump": 0.1,
+        "perks": {
+          "claimCooldownSeconds": 72000
+        },
+        "art": "spark.svg"
+      },
+      {
+        "key": "flame",
+        "days": 30,
+        "heatBump": 0.1,
+        "perks": {
+          "claimCooldownSeconds": 57600,
+          "ashfallEligible": true
+        },
+        "art": "flame.svg"
+      },
+      {
+        "key": "blaze",
+        "days": 90,
+        "heatBump": 0.1,
+        "perks": {
+          "tap": {
+            "maxPct": 10,
+            "everyDays": 90
+          }
+        },
+        "art": "blaze.svg"
+      },
+      {
+        "key": "inferno",
+        "days": 180,
+        "heatBump": 0.1,
+        "perks": {
+          "claimCooldownSeconds": 43200,
+          "kindlingPriority": true
+        },
+        "art": "inferno.svg"
+      },
+      {
+        "key": "eternal",
+        "days": 365,
+        "heatBump": 0.1,
+        "perks": {
+          "tap": {
+            "maxPct": 25,
+            "everyDays": 90
+          },
+          "governanceWeight": 2,
+          "feeRebatePct": 25
+        },
+        "art": "eternal.svg"
+      },
+      {
+        "key": "bedrock",
+        "days": 730,
+        "heatBump": 0,
+        "perks": {
+          "tap": {
+            "maxPct": 25,
+            "everyDays": 60
+          },
+          "governanceWeight": 3,
+          "feeRebatePct": 50
+        },
+        "art": "bedrock.svg"
+      }
+    ],
+    "badges": {
+      "standard": {
+        "evm": "erc721-locked",
+        "svm": "metaplex-core-frozen"
+      },
+      "metadata": "onchain-svg",
+      "revokeOnReset": false
+    },
+    "withdrawResetsStreak": true,
+    "cancelReturnsAsFreshLot": false,
+    "emergencyExit": {
+      "enabled": true,
+      "feePct": 8,
+      "routing": {
+        "burnPct": 50,
+        "liquidityPct": 25,
+        "stakersPct": 25
+      },
+      "forfeitsAshfall": true
+    },
+    "minStakeLp": "0.0001",
+    "pools": [
+      {
+        "id": "ember-usdc-lp",
+        "name": "Blast Furnace",
+        "stakeToken": "EMBER/USDC",
+        "stakeKind": "lp",
+        "allocPoints": 1000,
+        "ashAllocPoints": 500,
+        "withdrawCooldownHours": 72
+      },
+      {
+        "id": "ember-weth-lp",
+        "name": "Smelter",
+        "stakeToken": "EMBER/WETH",
+        "stakeKind": "lp",
+        "allocPoints": 400,
+        "ashAllocPoints": 200,
+        "withdrawCooldownHours": 72
+      },
+      {
+        "id": "ember-single",
+        "name": "Ember Vault",
+        "stakeToken": "EMBER",
+        "stakeKind": "single",
+        "allocPoints": 400,
+        "ashAllocPoints": 300,
+        "withdrawCooldownHours": 72
+      },
+      {
+        "id": "usdc-single",
+        "name": "Cold Storage",
+        "stakeToken": "USDC",
+        "stakeKind": "single",
+        "allocPoints": 200,
+        "ashAllocPoints": 0,
+        "withdrawCooldownHours": 72
+      }
+    ]
+  },
+  "cooldowns": {
+    "withdraw": {
+      "seconds": 259200,
+      "tiers": [
+        {
+          "maxWithdrawPct": 10,
+          "seconds": 21600
+        },
+        {
+          "maxWithdrawPct": 25,
+          "seconds": 43200
+        },
+        {
+          "maxWithdrawPct": 50,
+          "seconds": 86400
+        },
+        {
+          "maxWithdrawPct": 75,
+          "seconds": 172800
+        },
+        {
+          "maxWithdrawPct": 100,
+          "seconds": 259200
+        }
+      ],
+      "executionWindowSeconds": 86400,
+      "earnsWhileCooling": false,
+      "onCancelOrLapse": "resumeFrozen"
+    },
+    "claim": {
+      "seconds": 86400,
+      "snapshotAtRequest": true
+    },
+    "compound": {
+      "seconds": 0
+    }
+  },
+  "emissions": {
+    "controllerChain": "ethereum",
+    "epochSeconds": 86400,
+    "split": {
+      "flatPct": 30,
+      "heatPct": 70
+    },
+    "base": {
+      "startPerDay": "21600",
+      "shape": "halfLife",
+      "halfLifeDays": 365,
+      "floorPerDay": "1000"
+    },
+    "supplyCeiling": {
+      "hardCap": "21000000",
+      "mode": "liveSupply"
+    },
+    "convictionBucketPct": 10,
+    "ashfall": {
+      "enabled": true,
+      "recycleRates": {
+        "protocolBurns": 50,
+        "pyreBurns": 25,
+        "unsolicited": 0
+      },
+      "lagEpochs": 1,
+      "minRelic": "flame",
+      "distributionWeight": "heatSquared",
+      "rolloverUndistributed": true,
+      "sources": [
+        "forgeFees",
+        "swapFees",
+        "emergencyExit",
+        "manualBurns"
+      ]
+    },
+    "gauge": {
+      "enabled": false,
+      "weight": "heatWeightedStake",
+      "reportIntervalSeconds": 86400,
+      "maxCreditPerEpochPct": 60
+    }
+  },
+  "fees": {
+    "vent": {
+      "burnPct": 40,
+      "liquidityPct": 40,
+      "hearthPct": 10,
+      "treasuryPct": 10
+    },
+    "genesisDeposit": {
+      "treasuryPct": 100
+    },
+    "burnLane": {
+      "method": "unwindAndBuyback",
+      "twapSeconds": 1800,
+      "maxPriceImpactBps": 300,
+      "allowlistedRoutersOnly": true,
+      "deferIfUnsafe": true,
+      "maxDeferralHours": 72,
+      "avgPriceBandBps": 200,
+      "slippageCapBps": 100,
+      "maxChunkPctOfReserve": 0.5
+    },
+    "feeVault": {
+      "enabled": true,
+      "minBatchUsd": 5000,
+      "maxWaitHours": 24
+    },
+    "liquidityLane": {
+      "method": "matchReserve",
+      "matchReserve": {
+        "idleEpochsBeforeAutoPair": 7,
+        "burnMatchedLp": true,
+        "idlePairEmberSource": "treasuryMatchSeed"
+      },
+      "permanentMustBeFullRange": true
+    },
+    "tokenFees": {
+      "burnPct": 100
+    },
+    "swap": {
+      "buy": {
+        "totalBps": 25,
+        "lpBps": 20,
+        "burnBps": 2.5,
+        "liquidityBps": 2.5,
+        "treasuryBps": 0
+      },
+      "sell": {
+        "totalBps": 35,
+        "lpBps": 20,
+        "burnBps": 5,
+        "liquidityBps": 5,
+        "quoteYieldBps": 5,
+        "treasuryBps": 0
+      },
+      "waiveProtocolShareOnCompound": true
+    },
+    "quoteYield": {
+      "enabled": true,
+      "eligibility": "ashfallEligible",
+      "asset": "quoteAsset"
+    },
+    "burnAddress": {
+      "evm": "0x000000000000000000000000000000000000dEaD",
+      "svm": "1nc1nerator11111111111111111111111111111111"
+    }
+  },
+  "swap": {
+    "amm": "protocol-cpmm",
+    "listLpAsAsset": true,
+    "tokenListOrder": [
+      "EMBER",
+      "LP",
+      "ASH",
+      "WETH",
+      "USDC",
+      "WBTC"
+    ],
+    "zap": {
+      "defaultSlippageBps": 50,
+      "maxSlippageBps": 300,
+      "stakeAfterZap": "offer"
+    },
+    "showPriceImpact": true,
+    "showLpPrice": true,
+    "showTwentyFourHourChange": true
+  },
+  "treasury": {
+    "addresses": {
+      "ethereum": "0x7Ea596B12cD34Ef56aB78Cd90Ef12Ab34Cd56F1E",
+      "bsc": "0x7Ea596B12cD34Ef56aB78Cd90Ef12Ab34Cd56F1E",
+      "base": "0x7Ea596B12cD34Ef56aB78Cd90Ef12Ab34Cd56F1E",
+      "arbitrum": "0x7Ea596B12cD34Ef56aB78Cd90Ef12Ab34Cd56F1E",
+      "solana": "F1REtreasury596aBcDeFgHiJkLmNoPqRsTuVwXyZ123"
+    },
+    "controller": {
+      "type": "safe-multisig",
+      "threshold": 2,
+      "signers": []
+    },
+    "timelockSeconds": 172800,
+    "policy": {
+      "polSeedingPct": 30,
+      "matchReserveSeedPct": 30,
+      "incentivesPct": 20,
+      "buybackPct": 20,
+      "reportOnChain": true
+    }
+  },
+  "security": {
+    "feeCeilings": {
+      "depositPct": 5,
+      "withdrawPct": 5,
+      "genesisPct": 5,
+      "emergencyPct": 10,
+      "swapBps": 100,
+      "deedSalePct": 5
+    },
+    "paramTimelockSeconds": 172800,
+    "pausable": {
+      "deposits": true,
+      "swaps": true,
+      "withdrawalsNever": true
+    },
+    "upgradeable": {
+      "core": false,
+      "periphery": true
+    },
+    "guardian": {
+      "ethereum": "0x0000000000000000000000000000000000000000",
+      "solana": ""
+    },
+    "audits": [],
+    "bugBountyUrl": "https://immunefi.com/bounty/furnace"
+  },
+  "ui": {
+    "timeline": {
+      "show": true,
+      "showRelicMarkers": true,
+      "showNextBumpCountdown": true,
+      "showHeatVsStreakNote": true,
+      "pendingWithdrawAsRedSegment": true,
+      "horizonDays": 365
+    },
+    "countdown": {
+      "style": "ring",
+      "showInNav": true,
+      "browserNotification": true
+    },
+    "readyButtonColor": "#22c55e",
+    "positionCard": {
+      "showImpermanentLoss": true
+    },
+    "locale": "en-US",
+    "numberFormat": {
+      "compact": true,
+      "aprDecimals": 1
+    },
+    "charts": {
+      "emissionCurve": true,
+      "heatCurve": true,
+      "supplyChart": true
+    }
+  },
+  "fissures": {
+    "enabled": true,
+    "defaultAllocation": "250000",
+    "priorityWindowHours": 24,
+    "priorityMinRelic": "inferno",
+    "feePct": 3,
+    "lpSplit": {
+      "stakersPct": 90,
+      "burnPct": 10
+    }
+  },
+  "governance": {
+    "model": "timelock-then-two-chambers",
+    "chambers": {
+      "hearth": {
+        "electorate": "ASH holders",
+        "scope": "Hearth, ASH, fee routing"
+      },
+      "forge": {
+        "electorate": "liquidity \u00d7 Heat",
+        "scope": "Forge, staking, cooldowns"
+      }
+    },
+    "dualChamberRequired": [
+      "treasuryPolicy",
+      "newChains",
+      "flowFeeBands",
+      "emissionCurves",
+      "newContracts"
+    ],
+    "relicVoteMultiplier": {
+      "eternal": 2,
+      "bedrock": 3
+    },
+    "neverAllowed": [
+      "mintOutsideMantle",
+      "pauseWithdrawals",
+      "touchUserBalances",
+      "redirectVent"
+    ]
+  }
+}
