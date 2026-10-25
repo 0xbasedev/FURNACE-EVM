@@ -406,6 +406,40 @@ contract ForgePoolTest is ForgeFixture {
         vm.stopPrank();
     }
 
+    /// The capacity rule counts every lot left with a remainder, whatever its age: a
+    /// haircut between freeze and resume can uncap a capped lot, so its slice may need
+    /// its own slot. Capped lots usually get the slot back on resume.
+    function test_capacityCountsCappedLotsToo() public {
+        vm.startPrank(alice);
+        uint256 id = pool.open(100e18);
+        for (uint256 i = 1; i < 17; ++i) pool.deposit(id, 100e18);
+        skip(400 days); // all 17 lots capped
+        pool.poke(id);
+        vm.expectRevert(abi.encodeWithSelector(ForgePool.LotCapacity.selector, id));
+        pool.requestCooling(id, 17e18);
+        uint32 t = pool.requestCooling(id, 99e18 * 17); // 100%: no splits, always allowed
+        pool.cancelCooling(id, t);
+        vm.stopPrank();
+        assertEq(pool.lotCount(id), 17);
+        assertEq(pool.positionOf(id).reservedSlots, 0);
+    }
+
+    /// Emergency exit's worst case: 8 lapsed tickets resolved inside the exit itself.
+    function test_gas_emergencyExitResolvingEightLapses() public {
+        vm.startPrank(alice);
+        uint256 id = pool.open(100e18);
+        pool.deposit(id, 100e18);
+        pool.deposit(id, 100e18);
+        skip(1 days);
+        for (uint256 i; i < 8; ++i) pool.requestCooling(id, 1e18); // 3 splits each: 3 + 24 slots
+        skip(P.COOLING_PLAN_HORIZON + P.WITHDRAW_EXECUTION_WINDOW + 1); // every ticket lapsed, unprocessed
+        uint256 g = gasleft();
+        uint256 net = pool.emergencyExit(id);
+        emit log_named_uint("emergencyExit, resolving 8 lapses first", g - gasleft());
+        vm.stopPrank();
+        assertEq(net, 297e18 - (297e18 * 8) / 100);
+    }
+
     function test_gas_fullPosition() public {
         vm.startPrank(alice);
         uint256 id = pool.open(1e18);

@@ -66,7 +66,10 @@ This ADR covers custody: deposits, lots, cooling plans, execution, cancel and la
 - Each lot that a request splits (leaving both an active remainder and a slice) reserves one slot. Deposits cannot use reserved slots.
 - A slot is released when its slice executes, or when it resumes into an exactly equal parent.
 - A request that empties a lot needs no reservation, so a 100% request is always accepted.
-- **Cost:** a position whose request would split more lots than it has free slots must cool 100% at once. For example, 17 or more young lots can't take a partial request. Emergency exit is always available, so principal is never locked.
+- **Cost:** a position whose request would split more lots than it has free slots must cool 100% at once. **Lot age does not matter.** A position with 17 or more lots, young or capped, cannot take a partial request (tested with 17 capped lots).
+  - Capped lots still reserve a slot, because a haircut by another ticket between freeze and resume can uncap a capped lot and make its slice differ from its parent.
+  - Capped lots usually get the slot back on resume, since equal capped states merge exactly.
+  - Emergency exit is always available, so principal is never locked.
 - The rejected alternative merged at the slice's lower age; that touches unrelated stake, by up to about 4 days of age.
 
 **9. Emergency exit.**
@@ -102,6 +105,7 @@ This ADR covers custody: deposits, lots, cooling plans, execution, cancel and la
 | `poke`, resolving 5 lapses | 868,056 |
 | `poke`, 32 lots | 400,637 |
 | `emergencyExit`, all lots frozen | 60,514 |
+| `emergencyExit`, resolving 8 unprocessed lapses first (worst case) | 1,125,364 |
 
 - The heaviest costs come from writing fresh slice storage (about 22k per new slot) and from per-lot age writes.
 - Packing slices, or storing a slice as a fraction of its lot until a haircut forces materialization, are possible optimizations. Both need the same differential evidence before they replace this version.
@@ -112,6 +116,7 @@ This ADR covers custody: deposits, lots, cooling plans, execution, cancel and la
   - 16 scenarios (10 scripted edge cases, 6 seeded random walks; 793 actions, 218 of them expected to revert) run through `scripts/forge-model.ts`.
   - After every action the Solidity state hash must equal the model's: every lot, slice, ticket, plan, measure, fee, occupancy entry, queue size and token balance. Reverts must match too.
   - The scripted cases cover tiers, overlapping tickets, a haircut between freeze and cancel, a late touch after a lapse, a lapse while the pool holds only frozen principal, capped merges, the 16/17-lot capacity edge, the 32-lot cap and emergency exit with pending tickets.
+  - Unit tests add the capacity rule on 17 capped lots and the worst-case emergency exit, which must resolve 8 lapses inside the exit.
 - **Invariants** (64 runs × 200 calls):
   - custody is backed by the token balance;
   - tokens are conserved;
