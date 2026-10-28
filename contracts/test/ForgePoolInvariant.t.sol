@@ -61,7 +61,10 @@ contract ForgeHandler is Test {
         if (ids.length == 0) return;
         uint256 id = ids[seed % ids.length];
         uint256 active;
-        for (uint256 j; j < 32; ++j) active += pool.lotOf(id, j).amount;
+        for (uint256 j; j < 32; ++j) {
+            (uint256 a,,,) = pool.lotAt(id, j);
+            active += a;
+        }
         uint256 amount = (active * bound(bps, 1, 10_000)) / 10_000;
         vm.prank(pool.positionOf(id).owner);
         try pool.requestCooling(id, amount) {} catch {}
@@ -118,9 +121,9 @@ contract ForgeHandler is Test {
 
     function _after() internal {
         for (uint256 i; i < ids.length; ++i) {
-            ForgePool.Position memory p = pool.positionOf(ids[i]);
-            if (p.stakeSeconds < lastS[ids[i]] || p.heatSeconds < lastW[ids[i]]) monotoneBroken = true;
-            (lastS[ids[i]], lastW[ids[i]]) = (p.stakeSeconds, p.heatSeconds);
+            (uint256 s, uint256 w) = pool.epochMeasure(ids[i], 0, pool.positionOf(ids[i]).lastCheckpoint);
+            if (s < lastS[ids[i]] || w < lastW[ids[i]]) monotoneBroken = true;
+            (lastS[ids[i]], lastW[ids[i]]) = (s, w);
         }
         uint256 occ = pool.occupiedSecondsAt(block.timestamp);
         if (occ < lastOccupied) monotoneBroken = true;
@@ -167,7 +170,10 @@ contract ForgePoolInvariantTest is Test {
         uint256 queued;
         for (uint256 i; i < handler.idCount(); ++i) {
             uint256 id = handler.ids(i);
-            for (uint256 j; j < 32; ++j) sum += pool.lotOf(id, j).amount;
+            for (uint256 j; j < 32; ++j) {
+                (uint256 a,,,) = pool.lotAt(id, j);
+                sum += a;
+            }
             uint32[] memory pend = pool.pendingTickets(id);
             for (uint256 k; k < pend.length; ++k) {
                 ForgePool.Ticket memory t = pool.ticketOf(id, pend[k]);
@@ -189,9 +195,12 @@ contract ForgePoolInvariantTest is Test {
             for (uint256 j; j < 32; ++j) {
                 ForgePool.Lot memory l = pool.lotOf(id, j);
                 bool used = p.usedMask & (1 << j) != 0;
-                assertEq(used, l.amount != 0 || l.heldBy != 0, "usedMask");
+                if (p.closedAt == 0) assertEq(used, l.amount != 0 || l.heldBy != 0, "usedMask");
+                else assertFalse(used, "closed positions use no slots");
+                assertLe(l.since, block.timestamp);
                 assertLe(l.age, P.HEAT_AGE_CAP);
                 assertLe(l.participated, P.ASHFALL_MIN_PARTICIPATION);
+                assertTrue(l.since == 0 || p.historyMask & (1 << j) != 0, "historyMask covers every head");
             }
             uint32[] memory pend = pool.pendingTickets(id);
             for (uint256 k; k < pend.length; ++k) {
@@ -212,11 +221,14 @@ contract ForgePoolInvariantTest is Test {
         for (uint256 i; i < handler.idCount(); ++i) {
             uint256 id = handler.ids(i);
             ForgePool.Position memory p = pool.positionOf(id);
-            if (p.closed) continue;
+            if (p.closedAt != 0) continue;
             uint256 snap = vm.snapshotState();
             pool.poke(id);
             uint256 total;
-            for (uint256 j; j < 32; ++j) total += pool.lotOf(id, j).amount;
+            for (uint256 j; j < 32; ++j) {
+                (uint256 a,,,) = pool.lotAt(id, j);
+                total += a;
+            }
             uint32[] memory pend = pool.pendingTickets(id);
             for (uint256 k; k < pend.length; ++k) total += pool.ticketOf(id, pend[k]).amount;
             if (total != 0) {

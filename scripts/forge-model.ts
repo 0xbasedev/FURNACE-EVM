@@ -31,6 +31,9 @@ export interface Position {
   S: bigint; W: bigint; paused: bigint; closed: boolean; ashfallForfeited: boolean;
   plan: { start: bigint; reference: bigint; requested: bigint } | null;
   tickets: Map<number, Ticket>; pending: number[]; nextTicket: number;
+  /** Settlement inputs: measures split at epoch boundaries, slots that ever held a lot. */
+  epochS: Map<bigint, bigint>; epochW: Map<bigint, bigint>; historySlots: Set<number>;
+  openedAt: bigint;
 }
 export interface Occ { time: bigint; cum: bigint; on: boolean }
 
@@ -42,7 +45,8 @@ export class ForgeModel {
   active = 0n; frozen = 0n;
   occ: Occ[] = [];
   fees = { deposit: 0n, withdraw: 0n, emergency: 0n };
-  constructor(readonly lp: boolean) {}
+  /** `epochStart`/`epochSeconds` enable per-epoch measures (settlement); custody ignores them. */
+  constructor(readonly lp: boolean, readonly epochStart?: bigint, readonly epochSeconds?: bigint) {}
 
   clone(): ForgeModel { return Object.setPrototypeOf(structuredClone({ ...this }), ForgeModel.prototype); }
 
@@ -99,15 +103,30 @@ export class ForgeModel {
   }
 
   // ── position sync ──────────────────────────────────────────────────────
+  epochOf(t: bigint): bigint {
+    return (t - this.epochStart!) / this.epochSeconds!;
+  }
+  /** Accrue to `t`, split at epoch boundaries so each piece is credited to its epoch. */
   private accrue(p: Position, t: bigint) {
     const dt = t - p.last;
     if (dt === 0n) return;
-    for (const lot of p.lots) {
-      if (lot.amount === 0n) continue;
-      p.S += lot.amount * dt;
-      p.W += lot.amount * integrateHeat(lot.age, dt, 0n);
-      lot.age = min(lot.age + dt, AGE_CAP);
-      lot.part = min(lot.part + dt, PART_CAP);
+    const epochs = this.epochSeconds !== undefined;
+    for (let a = p.last; a < t;) {
+      const b = !epochs ? t : a < this.epochStart! ? min(t, this.epochStart!) : min(t, this.epochStart! + (this.epochOf(a) + 1n) * this.epochSeconds!);
+      const d = b - a;
+      for (const lot of p.lots) {
+        if (lot.amount === 0n) continue;
+        const s = lot.amount * d, w = lot.amount * integrateHeat(lot.age, d, 0n);
+        p.S += s; p.W += w;
+        if (epochs && a >= this.epochStart!) {
+          const e = this.epochOf(a);
+          p.epochS.set(e, (p.epochS.get(e) ?? 0n) + s);
+          p.epochW.set(e, (p.epochW.get(e) ?? 0n) + w);
+        }
+        lot.age = min(lot.age + d, AGE_CAP);
+        lot.part = min(lot.part + d, PART_CAP);
+      }
+      a = b;
     }
     if (p.pending.length > 0) p.paused += dt;
     p.last = t;
@@ -141,7 +160,7 @@ export class ForgeModel {
         Object.assign(lot, { amount: s.amount, age: s.age, part: s.part, heldBy: 0 });
       } else {
         if (lot.amount > 0n && lot.age === s.age && lot.part === s.part) lot.amount += s.amount;
-        else { p.lots[this.firstFree(p)] = { amount: s.amount, age: s.age, part: s.part, heldBy: 0 }; p.lotCount++; }
+        else { const j = this.firstFree(p); p.lots[j] = { amount: s.amount, age: s.age, part: s.part, heldBy: 0 }; p.historySlots.add(j); p.lotCount++; }
         p.reserved--;
       }
     }
@@ -169,7 +188,9 @@ export class ForgeModel {
     const net = amount - fee;
     need(this.lp ? net >= MIN_STAKE_LP : net > 0n, 'BelowMinimum');
     need(p.lotCount + p.reserved < MAX_LOTS, 'LotCapacity');
-    p.lots[this.firstFree(p)] = { amount: net, age: 0n, part: 0n, heldBy: 0 };
+    const j = this.firstFree(p);
+    p.lots[j] = { amount: net, age: 0n, part: 0n, heldBy: 0 };
+    p.historySlots.add(j);
     p.lotCount++;
     this.fees.deposit += fee;
     this.increaseActive(net, now);
@@ -183,6 +204,7 @@ export class ForgeModel {
       id: this.positions.length + 1, lots: Array.from({ length: MAX_LOTS }, emptyLot), lotCount: 0, reserved: 0,
       last: now, streakStart: now, S: 0n, W: 0n, paused: 0n, closed: false, ashfallForfeited: false,
       plan: null, tickets: new Map(), pending: [], nextTicket: 1,
+      epochS: new Map(), epochW: new Map(), historySlots: new Set(), openedAt: now,
     };
     this.positions.push(p);
     this.addLot(p, amount, now);

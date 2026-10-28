@@ -23,8 +23,10 @@ import {LapseHeap} from "./LapseHeap.sol";
 ///         age by the surviving fraction. Cancel or lapse resumes the frozen state;
 ///         a lapse needs no transaction and is back-dated to its deadline.
 ///
-///         Measures: per position, S = ∫stake dt and W = ∫stake·Heat dt over active
-///         lots, exact (HeatMath.integrateHeat telescopes), for epoch settlement.
+///         Records: each slot keeps a head (its state as of `since`) and the history
+///         of every superseded head, so `epochMeasure` integrates S = ∫stake dt and
+///         W = ∫stake·Heat dt over ANY past interval exactly, however late settlement
+///         runs (ADR 0005). Between records a lot only ages, so syncs write nothing.
 ///         Pool occupancy (time with active principal) is an append-only log.
 contract ForgePool is ReentrancyGuardTransient {
     using SafeERC20 for IERC20;
@@ -52,13 +54,26 @@ contract ForgePool is ReentrancyGuardTransient {
         Emergency
     }
 
-    /// @dev `heldBy` is the ticket that froze the lot's entire active amount; the slot
+    /// @dev A slot's head: its state as of `since`. While `amount > 0` age and
+    ///      participation grow 1:1 with time (saturating); otherwise they hold.
+    ///      `heldBy` is the ticket that froze the lot's entire active amount; the slot
     ///      stays reserved for that ticket's slice to return to.
+    ///      `records` counts the superseded heads kept in `_history` (no array length slot).
     struct Lot {
-        uint128 amount;
+        uint40 since;
+        uint96 amount;
         uint32 age;
         uint32 participated;
-        uint32 heldBy;
+        uint24 heldBy;
+        uint32 records;
+    }
+
+    /// @dev A superseded head, valid from `since` until the next record's `since`.
+    struct Record {
+        uint40 since;
+        uint96 amount;
+        uint32 age;
+        uint32 participated;
     }
 
     struct Slice {
@@ -88,13 +103,13 @@ contract ForgePool is ReentrancyGuardTransient {
         uint8 reservedSlots;
         uint8 pendingCount;
         uint32 usedMask; // slot j in use ⇔ amount > 0 or heldBy != 0
+        uint32 historyMask; // slot j has ever held a head (its records matter)
         uint32 nextTicketId;
         uint64 coolingPausedSeconds;
-        bool closed;
         bool ashfallForfeited;
+        uint40 openedAt;
+        uint40 closedAt; // emergency exit; measures stop here, records stay
         Plan plan;
-        uint256 stakeSeconds;
-        uint256 heatSeconds;
     }
 
     struct Occupancy {
@@ -118,6 +133,7 @@ contract ForgePool is ReentrancyGuardTransient {
     LapseHeap.Heap internal _lapses;
     mapping(uint256 id => Position) internal _positions;
     mapping(uint256 id => Lot[MAX_LOTS]) internal _lots;
+    mapping(uint256 id => mapping(uint256 slot => mapping(uint256 i => Record))) internal _history;
     mapping(uint256 id => uint32[MAX_PENDING_TICKETS]) internal _pending;
     mapping(uint256 id => mapping(uint32 ticketId => Ticket)) internal _tickets;
     mapping(uint256 id => mapping(uint32 ticketId => mapping(uint256 slot => Slice))) internal _slices;
@@ -147,6 +163,9 @@ contract ForgePool is ReentrancyGuardTransient {
     error NotCollector();
     error FutureTime(uint256 t);
     error ConfigMismatch();
+    error TicketIdOverflow(uint256 id);
+    error NotSynced(uint256 id, uint256 lastCheckpoint);
+    error BadInterval(uint256 t0, uint256 t1);
 
     constructor(IERC20 stakeToken, bool isLp, address feeCollector) {
         if (address(stakeToken) == address(0) || feeCollector == address(0)) revert ZeroAddress();
@@ -167,6 +186,7 @@ contract ForgePool is ReentrancyGuardTransient {
         p.owner = msg.sender;
         p.lastCheckpoint = now_;
         p.streakStart = now_;
+        p.openedAt = now_;
         emit Opened(id, msg.sender);
         _addLot(id, p, _pull(amount), now_);
     }
@@ -174,7 +194,7 @@ contract ForgePool is ReentrancyGuardTransient {
     /// @notice Add a new lot (age 0) to an open position.
     function deposit(uint256 id, uint256 amount) external nonReentrant {
         Position storage p = _touchOwned(id);
-        if (p.closed) revert Closed(id);
+        if (p.closedAt != 0) revert Closed(id);
         _addLot(id, p, _pull(amount), uint40(block.timestamp));
     }
 
@@ -183,13 +203,14 @@ contract ForgePool is ReentrancyGuardTransient {
     ///         reference, so splitting a large exit cannot buy short timers.
     function requestCooling(uint256 id, uint256 amount) external nonReentrant returns (uint32 ticketId) {
         Position storage p = _touchOwned(id);
-        if (p.closed) revert Closed(id);
+        if (p.closedAt != 0) revert Closed(id);
         if (amount == 0) revert ZeroAmount();
         uint256 active = _activeOf(id, p);
         if (amount > active) revert ExceedsActive(amount, active);
         uint256 maturity = block.timestamp + _chargePlan(id, p, amount, active);
 
         ticketId = ++p.nextTicketId;
+        if (ticketId > type(uint24).max) revert TicketIdOverflow(id);
         uint32 sliceMask = _freeze(id, p, ticketId, _proRata(_lots[id], p.usedMask, amount, active));
         _tickets[id][ticketId] = Ticket(uint128(amount), uint40(maturity), Status.Pending, false, sliceMask);
         _pending[id][p.pendingCount++] = ticketId;
@@ -212,31 +233,9 @@ contract ForgePool is ReentrancyGuardTransient {
         uint256 w = t.amount;
         uint256 balance = _activeOf(id, p) + _frozenOf(id, p);
 
-        Lot[MAX_LOTS] storage lots = _lots[id];
-        uint32 mask = t.sliceMask;
-        for (uint256 j; j < MAX_LOTS; ++j) {
-            if (mask & (1 << j) == 0) continue;
-            if (lots[j].heldBy == ticketId) {
-                lots[j].heldBy = 0;
-                p.usedMask &= ~uint32(1 << j);
-            } else {
-                p.reservedSlots -= 1;
-            }
-        }
+        _releaseSlots(id, p, ticketId, t.sliceMask);
         _dropPending(id, p, ticketId, Status.Executed);
-
-        for (uint256 j; j < MAX_LOTS; ++j) {
-            if (lots[j].amount != 0) lots[j].age = uint32(HeatMath.cooledAge(lots[j].age, w, balance));
-        }
-        for (uint256 k; k < p.pendingCount; ++k) {
-            uint32 other = _pending[id][k];
-            uint32 otherMask = _tickets[id][other].sliceMask;
-            for (uint256 j; j < MAX_LOTS; ++j) {
-                if (otherMask & (1 << j) == 0) continue;
-                Slice storage s = _slices[id][other][j];
-                s.age = uint32(HeatMath.cooledAge(s.age, w, balance));
-            }
-        }
+        _haircut(id, p, w, balance);
         p.streakStart = uint40(block.timestamp);
 
         uint256 fee = (w * P.FORGE_WITHDRAW_FEE_PCT) / 100;
@@ -253,7 +252,8 @@ contract ForgePool is ReentrancyGuardTransient {
     function cancelCooling(uint256 id, uint32 ticketId) external nonReentrant {
         Position storage p = _touchOwned(id);
         if (_tickets[id][ticketId].status != Status.Pending) revert NotPending(id, ticketId);
-        _resume(id, p, ticketId, Status.Cancelled, uint40(block.timestamp));
+        uint40 now_ = uint40(block.timestamp);
+        _resume(id, p, ticketId, Status.Cancelled, now_, now_);
     }
 
     /// @notice Leave immediately with all principal, active and frozen, in kind.
@@ -261,7 +261,7 @@ contract ForgePool is ReentrancyGuardTransient {
     ///         forfeited. Closes the position; its measures remain.
     function emergencyExit(uint256 id) external nonReentrant returns (uint256 net) {
         Position storage p = _touchOwned(id);
-        if (p.closed) revert Closed(id);
+        if (p.closedAt != 0) revert Closed(id);
         uint256 active = _activeOf(id, p);
         uint256 frozen = _frozenOf(id, p);
         uint256 total = active + frozen;
@@ -274,13 +274,10 @@ contract ForgePool is ReentrancyGuardTransient {
             delete _pending[id][k];
         }
         p.pendingCount = 0;
-        Lot[MAX_LOTS] storage lots = _lots[id];
-        for (uint256 j; j < MAX_LOTS; ++j) {
-            if (p.usedMask & (1 << j) != 0) delete lots[j];
-        }
+        // Heads and history stay: measures stop at `closedAt`, so no per-slot writes.
         p.usedMask = 0;
         p.reservedSlots = 0;
-        p.closed = true;
+        p.closedAt = uint40(block.timestamp);
         p.ashfallForfeited = true;
 
         uint256 fee = (total * P.EMERGENCY_EXIT_FEE_PCT) / 100;
@@ -293,11 +290,10 @@ contract ForgePool is ReentrancyGuardTransient {
         STAKE_TOKEN.safeTransfer(p.owner, net);
     }
 
-    /// @notice Bring a position up to date (lapses, measures). Permissionless; also
-    ///         the exact read path: eth_call it for current S and W.
-    function poke(uint256 id) external nonReentrant returns (uint256 stakeSeconds, uint256 heatSeconds) {
-        Position storage p = _touch(id);
-        return (p.stakeSeconds, p.heatSeconds);
+    /// @notice Bring a position up to date: resolve due lapses (back-dated) and move its
+    ///         checkpoint to now. Permissionless; settlement calls it before measuring.
+    function poke(uint256 id) external nonReentrant {
+        _touch(id);
     }
 
     /// @notice The fee router pulls booked fees. Exits never call it.
@@ -315,8 +311,54 @@ contract ForgePool is ReentrancyGuardTransient {
         return _positions[id];
     }
 
+    /// @notice Raw head of a slot (state as of `since`).
     function lotOf(uint256 id, uint256 slot) external view returns (Lot memory) {
         return _lots[id][slot];
+    }
+
+    /// @notice A slot's state at the position's last checkpoint (zero once closed).
+    function lotAt(uint256 id, uint256 slot)
+        external
+        view
+        returns (uint256 amount, uint256 age, uint256 participated, uint256 heldBy)
+    {
+        Position storage p = _positions[id];
+        if (p.closedAt != 0) return (0, 0, 0, 0);
+        Lot memory lot = _lots[id][slot];
+        (age, participated) = _lotAt(lot, p.lastCheckpoint);
+        return (lot.amount, age, participated, lot.heldBy);
+    }
+
+    function historyLength(uint256 id, uint256 slot) external view returns (uint256) {
+        return _lots[id][slot].records;
+    }
+
+    function historyAt(uint256 id, uint256 slot, uint256 i) external view returns (Record memory) {
+        return _history[id][slot][i];
+    }
+
+    /// @notice Number of slots whose records a measure must read (settlement page cost).
+    function historySlots(uint256 id) external view returns (uint256) {
+        return _popcount(_positions[id].historyMask);
+    }
+
+    /// @notice Exact time-integrated measures of a position over [t0, t1]:
+    ///         S = ∫stake dt and W = ∫stake·Heat dt (RAY), summed over its records.
+    ///         Requires the position synced past t1, so every lapse due by t1 has its
+    ///         back-dated record. Measures stop at an emergency exit.
+    function epochMeasure(uint256 id, uint256 t0, uint256 t1) external view returns (uint256 s, uint256 w) {
+        if (t0 > t1) revert BadInterval(t0, t1);
+        Position storage p = _positions[id];
+        if (t1 > p.lastCheckpoint) revert NotSynced(id, p.lastCheckpoint);
+        if (p.closedAt != 0 && p.closedAt < t1) t1 = p.closedAt;
+        if (t1 <= t0) return (0, 0);
+        uint32 mask = p.historyMask;
+        for (uint256 j; j < MAX_LOTS; ++j) {
+            if (mask & (1 << j) == 0) continue;
+            (uint256 ds, uint256 dw) = _slotMeasure(_history[id][j], _lots[id][j], t0, t1);
+            s += ds;
+            w += dw;
+        }
     }
 
     function ticketOf(uint256 id, uint32 ticketId) external view returns (Ticket memory) {
@@ -386,7 +428,7 @@ contract ForgePool is ReentrancyGuardTransient {
         if (IS_LP ? net < P.MIN_STAKE_LP : net == 0) revert BelowMinimum(net);
         if (_popcount(p.usedMask) + p.reservedSlots >= MAX_LOTS) revert LotCapacity(id);
         uint256 slot = _firstFree(p.usedMask);
-        _lots[id][slot] = Lot(net.toUint128(), 0, 0, 0);
+        _setHead(id, p, slot, _head(now_, net, 0, 0, 0));
         p.usedMask |= uint32(1 << slot);
         feesOwed[uint256(FeeKind.Deposit)] += fee;
         _increaseActive(net, now_);
@@ -406,16 +448,16 @@ contract ForgePool is ReentrancyGuardTransient {
         if (p.owner != msg.sender) revert NotOwner(id);
     }
 
-    /// @dev Resolve every lapse due by `now_` in deadline order, accruing exactly up to
-    ///      each deadline first, then accrue to `now_`.
+    /// @dev Resolve every lapse due by `now_` in deadline order, each back-dated to its
+    ///      deadline, then move the checkpoint to `now_`. Lots age implicitly.
     function _sync(uint256 id, Position storage p, uint40 now_) internal {
         while (true) {
             (uint32 due, uint256 dueAt) = _earliestDue(id, p, now_);
             if (due == 0) break;
-            _accrue(id, p, uint40(dueAt));
-            _resume(id, p, due, Status.Lapsed, now_);
+            _advance(p, uint40(dueAt));
+            _resume(id, p, due, Status.Lapsed, uint40(dueAt), now_);
         }
-        _accrue(id, p, now_);
+        _advance(p, now_);
     }
 
     function _earliestDue(uint256 id, Position storage p, uint40 now_)
@@ -432,24 +474,9 @@ contract ForgePool is ReentrancyGuardTransient {
         }
     }
 
-    function _accrue(uint256 id, Position storage p, uint40 t) internal {
+    function _advance(Position storage p, uint40 t) internal {
         uint256 dt = t - p.lastCheckpoint;
         if (dt == 0) return;
-        Lot[MAX_LOTS] storage lots = _lots[id];
-        uint32 mask = p.usedMask;
-        uint256 s;
-        uint256 w;
-        for (uint256 j; j < MAX_LOTS; ++j) {
-            if (mask & (1 << j) == 0) continue;
-            Lot memory lot = lots[j];
-            if (lot.amount == 0) continue;
-            s += uint256(lot.amount) * dt;
-            w += uint256(lot.amount) * HeatMath.integrateHeat(lot.age, dt, 0);
-            lots[j].age = uint32(Math.min(lot.age + dt, P.HEAT_AGE_CAP));
-            lots[j].participated = uint32(Math.min(lot.participated + dt, P.ASHFALL_MIN_PARTICIPATION));
-        }
-        p.stakeSeconds += s;
-        p.heatSeconds += w;
         if (p.pendingCount != 0) p.coolingPausedSeconds += uint64(dt);
         p.lastCheckpoint = t;
     }
@@ -457,22 +484,26 @@ contract ForgePool is ReentrancyGuardTransient {
     /// @dev Return a ticket's slices. A slice that emptied its lot goes back to that
     ///      slot; any other uses its reserved slot unless the parent's financial state
     ///      is identical (then sharing storage is exact).
-    function _resume(uint256 id, Position storage p, uint32 ticketId, Status status, uint40 now_) internal {
+    function _resume(uint256 id, Position storage p, uint32 ticketId, Status status, uint40 at, uint40 now_)
+        internal
+    {
         Ticket storage t = _tickets[id][ticketId];
         Lot[MAX_LOTS] storage lots = _lots[id];
         uint32 mask = t.sliceMask;
         for (uint256 j; j < MAX_LOTS; ++j) {
             if (mask & (1 << j) == 0) continue;
             Slice memory s = _slices[id][ticketId][j];
-            Lot storage lot = lots[j];
+            Lot memory lot = lots[j];
             if (lot.heldBy == ticketId) {
-                lots[j] = Lot(s.amount, s.age, s.participated, 0);
+                _setHead(id, p, j, _head(at, s.amount, s.age, s.participated, 0));
             } else {
-                if (lot.amount != 0 && lot.age == s.age && lot.participated == s.participated) {
-                    lot.amount += s.amount;
+                (uint256 age, uint256 part) = _lotAt(lot, at);
+                // Merge only into an identical state, and never past the amount width.
+                if (lot.amount != 0 && age == s.age && part == s.participated && lot.amount + s.amount <= type(uint96).max) {
+                    _setHead(id, p, j, _head(at, lot.amount + s.amount, age, part, 0));
                 } else {
                     uint256 slot = _firstFree(p.usedMask);
-                    lots[slot] = Lot(s.amount, s.age, s.participated, 0);
+                    _setHead(id, p, slot, _head(at, s.amount, s.age, s.participated, 0));
                     p.usedMask |= uint32(1 << slot);
                 }
                 p.reservedSlots -= 1;
@@ -484,7 +515,7 @@ contract ForgePool is ReentrancyGuardTransient {
             frozenPrincipal -= t.amount;
             _increaseActive(t.amount, now_);
         }
-        emit CoolingResumed(id, ticketId, status, status == Status.Lapsed ? _deadline(t) : now_);
+        emit CoolingResumed(id, ticketId, status, at);
     }
 
     function _dropPending(uint256 id, Position storage p, uint32 ticketId, Status status) internal {
@@ -544,6 +575,74 @@ contract ForgePool is ReentrancyGuardTransient {
         _occupancy.push(Occupancy(t, last.cumulative + (t - last.time), false));
     }
 
+    // ── records ───────────────────────────────────────────────────────────
+
+    /// @dev Age and participation of a head extrapolated to `t` (≥ since).
+    function _lotAt(Lot memory lot, uint256 t) internal pure returns (uint256 age, uint256 part) {
+        if (lot.amount == 0) return (lot.age, lot.participated);
+        uint256 dt = t - lot.since;
+        return (Math.min(lot.age + dt, P.HEAT_AGE_CAP), Math.min(lot.participated + dt, P.ASHFALL_MIN_PARTICIPATION));
+    }
+
+    /// @dev Replace a slot's head. The old head moves to history unless it began at
+    ///      the same instant (a zero-length segment carries no measure).
+    function _setHead(uint256 id, Position storage p, uint256 slot, Lot memory next) internal {
+        Lot memory head = _lots[id][slot];
+        uint32 bit = uint32(1 << slot);
+        next.records = head.records;
+        if (p.historyMask & bit != 0 && head.since != next.since) {
+            _history[id][slot][head.records] = Record(head.since, head.amount, head.age, head.participated);
+            next.records = head.records + 1;
+        }
+        _lots[id][slot] = next;
+        p.historyMask |= bit;
+    }
+
+    function _head(uint256 since, uint256 amount, uint256 age, uint256 part, uint256 heldBy)
+        internal
+        pure
+        returns (Lot memory)
+    {
+        return Lot(uint40(since), amount.toUint96(), uint32(age), uint32(part), uint24(heldBy), 0);
+    }
+
+    /// @dev Measures of one slot over [t0, t1]: segment i is history[i] (or the head
+    ///      for i == n) and lasts until the next segment begins.
+    function _slotMeasure(mapping(uint256 => Record) storage history, Lot storage head, uint256 t0, uint256 t1)
+        internal
+        view
+        returns (uint256 s, uint256 w)
+    {
+        uint256 n = head.records;
+        uint256 headSince = head.since;
+        // First segment that may overlap t0: the last one starting at or before t0.
+        uint256 i;
+        if (headSince <= t0) {
+            i = n;
+        } else {
+            (uint256 lo, uint256 hi) = (0, n);
+            while (lo < hi) {
+                uint256 mid = (lo + hi) / 2;
+                if (history[mid].since <= t0) lo = mid + 1;
+                else hi = mid;
+            }
+            i = lo == 0 ? 0 : lo - 1;
+        }
+        for (; i <= n; ++i) {
+            Record memory r = i < n
+                ? history[i]
+                : Record(head.since, head.amount, head.age, head.participated);
+            if (r.since >= t1) break;
+            uint256 end = i + 1 < n ? history[i + 1].since : (i + 1 == n ? headSince : type(uint256).max);
+            if (end <= t0 || r.amount == 0) continue;
+            uint256 a = r.since > t0 ? r.since : t0;
+            uint256 b = end < t1 ? end : t1;
+            uint256 age = Math.min(r.age + (a - r.since), P.HEAT_AGE_CAP);
+            s += uint256(r.amount) * (b - a);
+            w += uint256(r.amount) * HeatMath.integrateHeat(age, b - a, 0);
+        }
+    }
+
     // ── helpers ───────────────────────────────────────────────────────────
 
     /// @dev Start or continue the cooling plan, charge `amount` against its frozen
@@ -571,21 +670,67 @@ contract ForgePool is ReentrancyGuardTransient {
         internal
         returns (uint32 sliceMask)
     {
-        Lot[MAX_LOTS] storage lots = _lots[id];
         uint256 splits;
         for (uint256 j; j < MAX_LOTS; ++j) {
             if (take[j] == 0) continue;
-            Lot storage lot = lots[j];
-            _slices[id][ticketId][j] = Slice(uint128(take[j]), lot.age, lot.participated);
-            lot.amount -= uint128(take[j]);
-            if (lot.amount == 0) lot.heldBy = ticketId;
-            else ++splits;
+            if (_freezeSlot(id, p, ticketId, j, take[j])) ++splits;
             sliceMask |= uint32(1 << j);
         }
         if (_popcount(p.usedMask) + p.reservedSlots + splits > MAX_LOTS) revert LotCapacity(id);
         p.reservedSlots += uint8(splits);
     }
 
+
+    /// @dev An executed ticket frees the slots its slices held or reserved.
+    function _releaseSlots(uint256 id, Position storage p, uint32 ticketId, uint32 mask) internal {
+        Lot[MAX_LOTS] storage lots = _lots[id];
+        for (uint256 j; j < MAX_LOTS; ++j) {
+            if (mask & (1 << j) == 0) continue;
+            if (lots[j].heldBy == ticketId) {
+                lots[j].heldBy = 0; // amount is already 0: no measure changes, no record
+                p.usedMask &= ~uint32(1 << j);
+            } else {
+                p.reservedSlots -= 1;
+            }
+        }
+    }
+
+    /// @dev Scale every surviving lot's capped age, and every other pending slice's,
+    ///      by the surviving fraction (balance − w) / balance.
+    function _haircut(uint256 id, Position storage p, uint256 w, uint256 balance) internal {
+        Lot[MAX_LOTS] storage lots = _lots[id];
+        for (uint256 j; j < MAX_LOTS; ++j) {
+            Lot memory lot = lots[j];
+            if (lot.amount == 0) continue;
+            (uint256 age, uint256 part) = _lotAt(lot, block.timestamp);
+            _setHead(id, p, j, _head(block.timestamp, lot.amount, HeatMath.cooledAge(age, w, balance), part, 0));
+        }
+        for (uint256 k; k < p.pendingCount; ++k) {
+            uint32 other = _pending[id][k];
+            uint32 otherMask = _tickets[id][other].sliceMask;
+            for (uint256 j; j < MAX_LOTS; ++j) {
+                if (otherMask & (1 << j) == 0) continue;
+                Slice storage s = _slices[id][other][j];
+                s.age = uint32(HeatMath.cooledAge(s.age, w, balance));
+            }
+        }
+    }
+
+    /// @dev Freeze `take` of slot j at its current age; true if the lot keeps a remainder.
+    function _freezeSlot(uint256 id, Position storage p, uint32 ticketId, uint256 j, uint256 take)
+        internal
+        returns (bool split)
+    {
+        Lot memory lot = _lots[id][j];
+        (uint256 age, uint256 part) = _lotAt(lot, block.timestamp);
+        _slices[id][ticketId][j] = Slice(uint128(take), uint32(age), uint32(part));
+        lot.since = uint40(block.timestamp);
+        lot.amount -= uint96(take);
+        (lot.age, lot.participated) = (uint32(age), uint32(part));
+        lot.heldBy = lot.amount == 0 ? uint24(ticketId) : 0;
+        _setHead(id, p, j, lot);
+        return lot.amount != 0;
+    }
 
     /// @dev floor(a_j·amount/active) per active lot in slot order; the floor dust goes
     ///      to the first lots with room. Sums exactly to `amount` (≤ active).

@@ -22,17 +22,19 @@ This ADR covers custody: deposits, lots, cooling plans, execution, cancel and la
 - `pnpm gen` refuses to generate if the config selects a cooling policy this contract does not implement. It checks, among others, `earnsWhileCooling`, `onCancelOrLapse`, `cancelConsumesPlanQuota`, `freeze`, `exitAsset` and `withdrawCooling`.
 
 **2. Positions and lots.**
-- A position has at most 32 lots. A lot is `{amount, financialAge, participated, heldBy}`.
+- A position has at most 32 lots. A lot's head is `{since, amount, financialAge, participated, heldBy, records}`: its state as of `since`. While `amount > 0`, age and participation grow one-for-one with time.
+- **[P]** Lot amounts are `uint96` (about 7.9·10²⁸ base units). Deposits beyond that revert, and a merge that would exceed it takes its reserved slot instead.
 - **Financial age** is stored saturating at the 365-day cap. Every Heat function caps first, so nothing is lost.
 - **Actual participation** is a separate chronological counter. Frozen slices pause it, and haircuts never touch it.
 - Positions are non-transferable until Deeds arrive.
 
-**3. Measures.**
-- Every touch first resolves due lapses (item 6), then accrues each active lot. `S += a·dt` and `W += a·HeatMath.integrateHeat(age, dt, 0)`.
-- Accrual is exact, and it telescopes under any checkpoint subdivision (tested).
-- `S` and `W` are kept per position, not per lot, because settlement groups lots by position and per-lot accumulators would cost about 64 more SSTOREs per action.
-- Measures are never deleted, even after exit.
-- **PR 3 owns the epoch-split read path.** That includes how a settlement page obtains a position's measures for epoch *e* when its last checkpoint is older. PR 3 may extend the checkpoint write.
+**3. Measures come from checkpoint records** (revised in the settlement PR; see ADR 0005).
+- A lot that changes (deposit, freeze, resume or merge, haircut) moves its old head into an append-only history and writes a new head. A change at the same instant overwrites in place, because a zero-length segment carries no measure.
+- A sync only resolves due lapses, back-dated to their deadlines, and moves the checkpoint. Pure aging writes nothing.
+- `epochMeasure(id, t0, t1)` binary-searches each used slot's records and sums `a·len` and `a·HeatMath.integrateHeat(age, len, 0)` per segment. It is exact over any interval, however late settlement runs, and it requires the position to be synced past `t1`.
+- Emergency exit sets `closedAt` and clears the slot masks. Measures stop there, and no per-slot records are written.
+- Records are never deleted, even after exit.
+- The custody differential still replays all 16 scenarios to the same state hashes as the earlier cumulative-S/W version. S/W are now read through `epochMeasure(id, 0, lastCheckpoint)`, and lots are extrapolated to the checkpoint.
 
 **4. Fees are booked, never pushed.**
 - Deposit (1%), execution (1%) and emergency (8%) add to `feesOwed[kind]`.
@@ -96,18 +98,23 @@ This ADR covers custody: deposits, lots, cooling plans, execution, cancel and la
 
 | Path | Gas |
 |---|---:|
-| `requestCooling`, 16 lot splits | 730,423 |
-| `requestCooling` 100%, 32 lots | 1,048,053 |
-| `executeWithdrawal`, 16 lots | 238,507 |
-| `executeWithdrawal`, 4 lots + 6 pending haircut | 193,584 |
-| `executeWithdrawal`, 32 lots | 97,305 |
-| `cancelCooling`, 4 slices to reserved slots | 119,693 |
-| `poke`, resolving 5 lapses | 868,056 |
-| `poke`, 32 lots | 400,637 |
-| `emergencyExit`, all lots frozen | 60,514 |
-| `emergencyExit`, resolving 8 unprocessed lapses first (worst case) | 1,125,364 |
+Measured with checkpoint records; the earlier cumulative-S/W figures are in brackets.
 
-- The heaviest costs come from writing fresh slice storage (about 22k per new slot) and from per-lot age writes.
+| Path | Gas |
+|---|---:|
+| `requestCooling`, 16 lot splits | 1,002,582 (730,423) |
+| `requestCooling` 100%, 32 lots | 1,833,689 (1,048,053) |
+| `executeWithdrawal`, 16 lots | 521,659 (238,507) |
+| `executeWithdrawal`, 4 lots + 6 pending haircut | 268,315 (193,584) |
+| `executeWithdrawal`, 32 lots | 92,476 (97,305) |
+| `cancelCooling`, 4 slices to reserved slots | 128,069 (119,693) |
+| `poke`, resolving 5 lapses | 626,806 (868,056) |
+| `poke`, 32 lots | 2,613 (400,637) |
+| `emergencyExit`, all lots frozen | 47,595 (60,514) |
+| `emergencyExit`, resolving 8 unprocessed lapses first (worst case) | 926,391 (1,125,364) |
+
+- Records make syncs and exits cheaper. Changes cost more, because each changed lot writes a fresh history slot (about 22k) as well as its fresh slice storage.
+- The record count lives in the head, so no array-length slot is written.
 - Packing slices, or storing a slice as a fraction of its lot until a haircut forces materialization, are possible optimizations. Both need the same differential evidence before they replace this version.
 
 ## Verification

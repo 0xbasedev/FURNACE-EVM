@@ -8,6 +8,15 @@ import {FurnaceParams as P} from "../src/generated/FurnaceParams.sol";
 import {ForgeVectors} from "./utils/ForgeVectors.sol";
 import {MockERC20, FeeOnTransferERC20} from "./utils/MockERC20.sol";
 
+/// @dev Test-only subclass: jumps a position's ticket counter to its uint24 limit.
+contract ForgePoolHarness is ForgePool {
+    constructor(IERC20 stakeToken, bool isLp, address feeCollector) ForgePool(stakeToken, isLp, feeCollector) {}
+
+    function setNextTicketIdForTest(uint256 id, uint32 value) external {
+        _positions[id].nextTicketId = value;
+    }
+}
+
 abstract contract ForgeFixture is ForgeVectors {
     MockERC20 token;
     ForgePool pool;
@@ -98,9 +107,9 @@ contract ForgePoolDifferentialTest is ForgeFixture {
             if (reverts) vm.expectRevert();
             _act(kind, pos, arg);
 
-            ForgePool.Position memory p1 = pool.positionOf(1);
-            assertEq(p1.stakeSeconds, probe[5 * i], string.concat(where, ": S(1)"));
-            assertEq(p1.heatSeconds, probe[5 * i + 1], string.concat(where, ": W(1)"));
+            (uint256 s1, uint256 w1) = pool.epochMeasure(1, 0, pool.positionOf(1).lastCheckpoint);
+            assertEq(s1, probe[5 * i], string.concat(where, ": S(1)"));
+            assertEq(w1, probe[5 * i + 1], string.concat(where, ": W(1)"));
             assertEq(pool.activePrincipal(), probe[5 * i + 2], string.concat(where, ": active"));
             assertEq(pool.frozenPrincipal(), probe[5 * i + 3], string.concat(where, ": frozen"));
             assertEq(pool.occupiedSecondsAt(time), probe[5 * i + 4], string.concat(where, ": occupied"));
@@ -132,8 +141,8 @@ contract ForgePoolDifferentialTest is ForgeFixture {
         for (uint256 id = 1; id <= positions; ++id) {
             n = _pushHead(w, n, id);
             for (uint256 j; j < 32; ++j) {
-                ForgePool.Lot memory l = pool.lotOf(id, j);
-                n = _put4(w, n, l.amount, l.age, l.participated, l.heldBy);
+                (uint256 amount, uint256 age, uint256 part, uint256 heldBy) = pool.lotAt(id, j);
+                n = _put4(w, n, amount, age, part, heldBy);
             }
             uint32[] memory pend = pool.pendingTickets(id);
             for (uint256 k; k < pend.length; ++k) n = _pushTicket(w, n, id, pend[k]);
@@ -161,9 +170,10 @@ contract ForgePoolDifferentialTest is ForgeFixture {
 
     function _pushHead(uint256[] memory w, uint256 n, uint256 id) internal view returns (uint256) {
         ForgePool.Position memory p = pool.positionOf(id);
-        n = _put4(w, n, p.stakeSeconds, p.heatSeconds, pool.lotCount(id), p.reservedSlots);
+        (uint256 sm, uint256 wm) = pool.epochMeasure(id, 0, p.lastCheckpoint);
+        n = _put4(w, n, sm, wm, pool.lotCount(id), p.reservedSlots);
         n = _put4(w, n, p.pendingCount, p.coolingPausedSeconds, p.streakStart, p.lastCheckpoint);
-        n = _put4(w, n, p.closed ? 1 : 0, p.ashfallForfeited ? 1 : 0, p.plan.start, p.plan.referenceBalance);
+        n = _put4(w, n, p.closedAt != 0 ? 1 : 0, p.ashfallForfeited ? 1 : 0, p.plan.start, p.plan.referenceBalance);
         w[n++] = p.plan.requested;
         w[n++] = p.nextTicketId;
         return n;
@@ -239,16 +249,19 @@ contract ForgePoolTest is ForgeFixture {
         vm.prank(alice);
         uint256 id = pool.open(100e18);
         uint256 net = 99e18;
+        uint256 t0 = block.timestamp;
         skip(200 days);
-        (uint256 s, uint256 w) = pool.poke(id);
+        pool.poke(id);
+        (uint256 s, uint256 w) = pool.epochMeasure(id, t0, block.timestamp);
         assertEq(s, net * 200 days);
         assertEq(w, net * HeatMath.integrateHeat(0, 200 days, 0));
-        // Checkpoint subdivision telescopes: two more pokes equal one long interval.
-        skip(100 days);
+        // Any subdivision telescopes: two halves equal the whole interval.
+        skip(200 days);
         pool.poke(id);
-        skip(100 days);
-        (, uint256 w2) = pool.poke(id);
-        assertEq(w2, net * HeatMath.integrateHeat(0, 400 days, 0));
+        (, uint256 wa) = pool.epochMeasure(id, t0, t0 + 123 days);
+        (, uint256 wb) = pool.epochMeasure(id, t0 + 123 days, block.timestamp);
+        assertEq(wa + wb, net * HeatMath.integrateHeat(0, 400 days, 0));
+        assertEq(pool.historyLength(id, 0), 0, "pure aging writes no records");
     }
 
     function test_frozenSliceDoesNotAgeOrEarn() public {
@@ -257,11 +270,12 @@ contract ForgePoolTest is ForgeFixture {
         skip(10 days);
         vm.prank(alice);
         pool.requestCooling(id, 99e18); // the whole lot
-        (uint256 s0, uint256 w0) = pool.poke(id);
+        uint256 frozenAt = block.timestamp;
         skip(1 days);
-        (uint256 s1, uint256 w1) = pool.poke(id);
-        assertEq(s1, s0, "no stake-seconds while frozen");
-        assertEq(w1, w0, "no heat-seconds while frozen");
+        pool.poke(id);
+        (uint256 s1, uint256 w1) = pool.epochMeasure(id, frozenAt, block.timestamp);
+        assertEq(s1, 0, "no stake-seconds while frozen");
+        assertEq(w1, 0, "no heat-seconds while frozen");
         vm.prank(alice);
         pool.cancelCooling(id, 1);
         assertEq(pool.lotOf(id, 0).age, 10 days, "resumes at the frozen age");
@@ -321,6 +335,58 @@ contract ForgePoolTest is ForgeFixture {
         assertEq(net, 99e18 - (99e18 * 8) / 100);
         assertEq(token.balanceOf(alice) - before, net);
         assertEq(hostile.lapseQueueLength(), 0);
+    }
+
+    function test_ticketIdsStopAtTheHeldByWidth() public {
+        ForgePoolHarness h = new ForgePoolHarness(IERC20(address(token)), true, collector);
+        vm.startPrank(alice);
+        token.approve(address(h), type(uint256).max);
+        uint256 id = h.open(100e18);
+        h.setNextTicketIdForTest(id, type(uint24).max - 1);
+        uint32 last = h.requestCooling(id, 1e18); // the final representable id
+        assertEq(last, type(uint24).max);
+        h.cancelCooling(id, last);
+        vm.expectRevert(abi.encodeWithSelector(ForgePool.TicketIdOverflow.selector, id));
+        h.requestCooling(id, 1e18);
+        uint256 net = h.emergencyExit(id); // principal still leaves
+        vm.stopPrank();
+        assertEq(net, 99e18 - (99e18 * 8) / 100);
+    }
+
+    function test_recordsKeepPastStateAfterChanges() public {
+        vm.prank(alice);
+        uint256 id = pool.open(100e18); // net 99
+        uint256 t0 = block.timestamp;
+        skip(10 days);
+        vm.prank(alice);
+        uint32 t = pool.requestCooling(id, 33e18); // the head changes; the past must not
+        assertEq(pool.historyLength(id, 0), 1);
+        skip(1 days);
+        vm.prank(alice);
+        pool.cancelCooling(id, t); // resumes into a reserved slot (ages differ by a day)
+        skip(5 days);
+        pool.poke(id);
+        (uint256 s, uint256 w) = pool.epochMeasure(id, t0, t0 + 10 days);
+        assertEq(s, 99e18 * 10 days, "first ten days unchanged by later records");
+        assertEq(w, 99e18 * HeatMath.integrateHeat(0, 10 days, 0));
+        (uint256 sFrozen,) = pool.epochMeasure(id, t0 + 10 days, t0 + 11 days);
+        assertEq(sFrozen, 66e18 * 1 days, "only the unfrozen remainder earns");
+    }
+
+    function test_emergencyExitStopsMeasuresWithoutRecords() public {
+        vm.prank(alice);
+        uint256 id = pool.open(100e18);
+        skip(3 days);
+        vm.prank(alice);
+        pool.emergencyExit(id);
+        uint256 closedAt = block.timestamp;
+        skip(4 days);
+        pool.poke(id);
+        (uint256 s,) = pool.epochMeasure(id, closedAt - 3 days, block.timestamp);
+        assertEq(s, 99e18 * 3 days);
+        assertEq(pool.historyLength(id, 0), 0, "exit writes no per-slot records");
+        (uint256 amount,,,) = pool.lotAt(id, 0);
+        assertEq(amount, 0);
     }
 
     function test_onlyCollectorCollects() public {
@@ -397,7 +463,10 @@ contract ForgePoolTest is ForgeFixture {
         pool.poke(b);
         emit log_named_uint("poke, resolving 5 lapses", g - gasleft());
         uint256 active;
-        for (uint256 j; j < 32; ++j) active += pool.lotOf(b, j).amount;
+        for (uint256 j; j < 32; ++j) {
+            (uint256 amount,,,) = pool.lotAt(b, j);
+            active += amount;
+        }
         skip(P.COOLING_PLAN_HORIZON); // the old plan's quota is spent; let it reset
         pool.requestCooling(b, active); // 100% of what resumed: no splits needed
         g = gasleft();
