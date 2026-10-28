@@ -1,0 +1,213 @@
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.28;
+
+import {Test} from "forge-std/Test.sol";
+import {ForgePool} from "../src/forge/ForgePool.sol";
+import {ForgeEmissions} from "../src/forge/ForgeEmissions.sol";
+import {SettlementFixture} from "./ForgeEmissions.t.sol";
+
+contract SettlementHandler is Test {
+    ForgePool[4] internal pools;
+    ForgeEmissions internal emissions;
+    address internal mantleAddr;
+    address[3] internal users;
+    uint256[2][] internal owned; // (pool, id)
+
+    constructor(ForgePool[4] memory pools_, ForgeEmissions emissions_, address mantle_, address[3] memory users_) {
+        (pools, emissions, mantleAddr, users) = (pools_, emissions_, mantle_, users_);
+        for (uint256 u; u < 3; ++u) {
+            for (uint256 i; i < 4; ++i) {
+                vm.prank(users[u]);
+                owned.push([i, pools[i].open(1e18 * (u + 1))]);
+            }
+        }
+    }
+
+    function ownedCount() external view returns (uint256) {
+        return owned.length;
+    }
+
+    function ownedAt(uint256 k) external view returns (uint256 pool, uint256 id) {
+        return (owned[k][0], owned[k][1]);
+    }
+
+    function _pick(uint256 seed) internal view returns (ForgePool pool, uint256 poolIdx, uint256 id, address owner) {
+        uint256[2] memory o = owned[seed % owned.length];
+        (poolIdx, id) = (o[0], o[1]);
+        pool = pools[poolIdx];
+        owner = pool.positionOf(id).owner;
+    }
+
+    function open(uint256 who, uint256 poolSeed, uint256 amount) external {
+        if (owned.length >= 24) return;
+        uint256 i = poolSeed % 4;
+        vm.prank(users[who % 3]);
+        try pools[i].open(bound(amount, 1e15, 1e24)) returns (uint256 id) {
+            owned.push([i, id]);
+        } catch {}
+    }
+
+    function deposit(uint256 seed, uint256 amount) external {
+        (ForgePool pool,, uint256 id, address owner) = _pick(seed);
+        vm.prank(owner);
+        try pool.deposit(id, bound(amount, 1e15, 1e24)) {} catch {}
+    }
+
+    function request(uint256 seed, uint256 bps) external {
+        (ForgePool pool,, uint256 id, address owner) = _pick(seed);
+        uint256 active;
+        for (uint256 j; j < 32; ++j) {
+            (uint256 a,,,) = pool.lotAt(id, j);
+            active += a;
+        }
+        vm.prank(owner);
+        try pool.requestCooling(id, (active * bound(bps, 1, 10_000)) / 10_000) {} catch {}
+    }
+
+    function execute(uint256 seed, uint256 pick) external {
+        (ForgePool pool,, uint256 id, address owner) = _pick(seed);
+        uint32[] memory pend = pool.pendingTickets(id);
+        if (pend.length == 0) return;
+        uint32 t = pend[pick % pend.length];
+        uint256 maturity = pool.ticketOf(id, t).maturity;
+        if (maturity > block.timestamp) vm.warp(maturity);
+        vm.prank(owner);
+        try pool.executeWithdrawal(id, t) {} catch {}
+    }
+
+    function cancel(uint256 seed, uint256 pick) external {
+        (ForgePool pool,, uint256 id, address owner) = _pick(seed);
+        uint32[] memory pend = pool.pendingTickets(id);
+        if (pend.length == 0) return;
+        vm.prank(owner);
+        try pool.cancelCooling(id, pend[pick % pend.length]) {} catch {}
+    }
+
+    function emergency(uint256 seed, uint256 coin) external {
+        if (coin % 12 != 0) return;
+        (ForgePool pool,, uint256 id, address owner) = _pick(seed);
+        vm.prank(owner);
+        try pool.emergencyExit(id) {} catch {}
+    }
+
+    function warp(uint256 dt) external {
+        vm.warp(block.timestamp + bound(dt, 0, 2 days));
+    }
+
+    /// The keeper: finalize what has ended, open it, and page whatever is pending.
+    function keep(uint256 pages) external {
+        (bool ok,) = mantleAddr.call(abi.encodeWithSignature("finalizeEpoch()"));
+        ok;
+        try emissions.openEpoch() {} catch {}
+        pages = bound(pages, 1, 6);
+        for (uint256 e; e < emissions.nextEpoch() && pages != 0; ++e) {
+            for (uint256 i; i < 4 && pages != 0; ++i) {
+                ForgeEmissions.Phase ph = emissions.poolEpoch(e, i).phase;
+                if (ph == ForgeEmissions.Phase.Measuring || ph == ForgeEmissions.Phase.Crediting) {
+                    emissions.advance(e, i);
+                    --pages;
+                }
+            }
+        }
+    }
+
+    /// Prefer a position that has something to claim (or a claim to execute).
+    function _pickWhere(uint256 seed, bool pending) internal view returns (uint256 poolIdx, uint256 id, address owner) {
+        uint256 n = owned.length;
+        for (uint256 k; k < n; ++k) {
+            uint256[2] memory o = owned[(seed % n + k) % n];
+            bool hit = pending ? emissions.claimOf(o[0], o[1]).amount != 0 : emissions.unclaimed(o[0], o[1]) != 0;
+            if (hit) return (o[0], o[1], pools[o[0]].positionOf(o[1]).owner);
+        }
+        (, poolIdx, id, owner) = _pick(seed);
+    }
+
+    function requestClaim(uint256 seed) external {
+        (uint256 poolIdx, uint256 id, address owner) = _pickWhere(seed, false);
+        vm.prank(owner);
+        try emissions.requestClaim(poolIdx, id) {} catch {}
+    }
+
+    function executeClaim(uint256 seed) external {
+        (uint256 poolIdx, uint256 id, address owner) = _pickWhere(seed, true);
+        uint256 maturesAt = emissions.claimOf(poolIdx, id).maturesAt;
+        if (maturesAt > block.timestamp) vm.warp(maturesAt);
+        vm.prank(owner);
+        try emissions.executeClaim(poolIdx, id) {} catch {}
+    }
+}
+
+/// @notice Random custody + settlement + claims across four pools and the Mantle. Every
+///         handler call must succeed (fail_on_revert): the keeper path, finalize → open →
+///         advance, never reverts, whatever the custody actions did in between.
+/// forge-config: default.invariant.runs = 48
+/// forge-config: default.invariant.depth = 120
+/// forge-config: default.invariant.fail_on_revert = true
+contract SettlementInvariantTest is SettlementFixture {
+    SettlementHandler handler;
+
+    function setUp() public {
+        vm.warp(1_800_000_000);
+        _deploySettlement(block.timestamp);
+        address[3] memory users = [_user(1), _user(2), _user(3)];
+        for (uint256 u; u < 3; ++u) _fund(users[u]);
+        handler = new SettlementHandler(pools, emissions, address(mantle), users);
+        targetContract(address(handler));
+    }
+
+    /// Every finalized epoch: minted + released ≤ base, and = base once all pools are done.
+    function invariant_baseBudgetConserved() public view {
+        uint256 opened = emissions.nextEpoch();
+        for (uint256 e; e < mantle.nextEpoch(); ++e) {
+            (uint128 base,, uint128 minted,, uint128 released,) = mantle.budgets(e);
+            assertLe(uint256(minted) + released, base);
+            if (e >= opened) continue;
+            bool done = true;
+            uint256 targets;
+            for (uint256 i; i < 4; ++i) {
+                ForgeEmissions.PoolEpoch memory pe = emissions.poolEpoch(e, i);
+                done = done && pe.phase == ForgeEmissions.Phase.Done;
+                targets += pe.target;
+                assertLe(pe.admitted, pe.target, "admitted within the pool's share");
+                assertLe(pe.paid, pe.admitted, "credited within the admitted budget");
+                assertLe(pe.cursor, pe.positions, "cursor bounded");
+                assertLe(emissions.earnerCount(e, i), pe.cursor, "each position counted at most once");
+            }
+            assertLe(targets, base);
+            if (done) assertEq(uint256(minted) + released, base, "every base wei minted or released");
+        }
+    }
+
+    /// EMBER held by ForgeEmissions backs exactly the unclaimed and pending rewards,
+    /// and EMBER supply equals what the Mantle minted.
+    function invariant_rewardsBacked() public view {
+        uint256 owed;
+        for (uint256 k; k < handler.ownedCount(); ++k) {
+            (uint256 i, uint256 id) = handler.ownedAt(k);
+            owed += emissions.unclaimed(i, id) + emissions.claimOf(i, id).amount;
+        }
+        assertEq(ember.balanceOf(address(emissions)) , owed);
+        uint256 minted;
+        for (uint256 e; e < mantle.nextEpoch(); ++e) {
+            (,, uint128 m,,,) = mantle.budgets(e);
+            minted += m;
+        }
+        assertEq(ember.totalSupply(), minted);
+    }
+
+    /// Settlement state never blocks principal: every open position can exit.
+    function invariant_exitsIndependentOfSettlement() public {
+        for (uint256 k; k < handler.ownedCount(); k += 3) {
+            (uint256 i, uint256 id) = handler.ownedAt(k);
+            ForgePool.Position memory p = pools[i].positionOf(id);
+            if (p.closedAt != 0) continue;
+            uint256 snap = vm.snapshotState();
+            vm.prank(p.owner);
+            try pools[i].emergencyExit(id) {}
+            catch (bytes memory err) {
+                if (bytes4(err) != ForgePool.NothingToExit.selector) revert("emergency exit reverted");
+            }
+            vm.revertToState(snap);
+        }
+    }
+}

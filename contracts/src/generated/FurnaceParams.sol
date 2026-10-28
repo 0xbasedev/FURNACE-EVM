@@ -70,6 +70,20 @@ library FurnaceParams {
     uint256 internal constant COOLING_PLAN_HORIZON = 259200;
     uint256 internal constant ASHFALL_MIN_PARTICIPATION = 30 days; // actual participation, stored saturating here
 
+    // ── Base epoch settlement: pools, pages, claims (spec v5.5 §4, §10, §11) ──
+    uint256 internal constant SETTLEMENT_MAX_LOTS_PER_PAGE = 32;
+    uint256 internal constant CLAIM_SECONDS = 86400;
+    uint256 internal constant FORGE_POOL_COUNT = 4;
+    uint256 internal constant FORGE_ALLOC_POINTS_TOTAL = 2000;
+    uint256 internal constant FORGE_POOL_0_ALLOC_POINTS = 1000; // ember-usdc-lp
+    bool internal constant FORGE_POOL_0_IS_LP = true;
+    uint256 internal constant FORGE_POOL_1_ALLOC_POINTS = 400; // ember-weth-lp
+    bool internal constant FORGE_POOL_1_IS_LP = true;
+    uint256 internal constant FORGE_POOL_2_ALLOC_POINTS = 400; // ember-single
+    bool internal constant FORGE_POOL_2_IS_LP = false;
+    uint256 internal constant FORGE_POOL_3_ALLOC_POINTS = 200; // usdc-single
+    bool internal constant FORGE_POOL_3_IS_LP = false;
+
     // ── Deterministic deployment registry (CREATE3). PROVISIONAL while the deployer is 0x1111111111111111111111111111111111111111 ──
     //    Only MINED entries become constants; unmined modules are constructor/initializer inputs.
     address internal constant CREATEX = 0xba5Ed099633D3B313e4D5F7bdc1305d3c28ba5Ed;

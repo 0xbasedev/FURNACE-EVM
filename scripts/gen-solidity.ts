@@ -5,6 +5,7 @@
 //   contracts/src/generated/ScheduleTable.sol    exact half-life factor table
 //   contracts/test/fixtures/oracle-vectors.json  reference values
 //   contracts/test/fixtures/forge-vectors.json   ForgePool scenarios (scripts/forge-scenarios.ts)
+//   contracts/test/fixtures/settlement-vectors.json  settlement scenarios (scripts/settlement-scenarios.ts)
 // Integer references (accounting.ts, BigInt) are matched EXACTLY by the Solidity
 // ports; the float display helper heatMultiplier within 1e-12.
 // pnpm gen --check exits non-zero if either output is stale (CI gate).
@@ -18,6 +19,7 @@ import {
 } from '../canonical/accounting';
 import { canonicalize, keccakHex } from './canonical';
 import { forgeVectors } from './forge-scenarios';
+import { settlementVectors } from './settlement-scenarios';
 import { keccak_256 } from '@noble/hashes/sha3.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
 
@@ -25,6 +27,7 @@ const PARAMS = 'contracts/src/generated/FurnaceParams.sol';
 const SCHEDULE = 'contracts/src/generated/ScheduleTable.sol';
 const VECTORS = 'contracts/test/fixtures/oracle-vectors.json';
 const FORGE_VECTORS = 'contracts/test/fixtures/forge-vectors.json';
+const SETTLEMENT_VECTORS = 'contracts/test/fixtures/settlement-vectors.json';
 const DAY = 86_400n;
 
 /** Exact decimal → fixed-point integer string (shortest round-trip, never toFixed noise). */
@@ -140,6 +143,28 @@ c('uint256', 'WITHDRAW_EXECUTION_WINDOW', wd.executionWindowSeconds);
 c('uint256', 'COOLING_PLAN_HORIZON', ex.planHorizonSeconds);
 c('uint256', 'ASHFALL_MIN_PARTICIPATION', `${cfg.execution.ashfall.minimumParticipationDays} days`, 'actual participation, stored saturating here');
 
+section('Base epoch settlement: pools, pages, claims (spec v5.5 §4, §10, §11)');
+const st = cfg.execution.settlement;
+const settlementPolicy: [string, unknown, unknown][] = [
+  ['execution.settlement.weightBasis', st.weightBasis, 'timeIntegratedPerLot'],
+  ['execution.settlement.budgetAccrual', st.budgetAccrual, 'onlyWhilePoolHasActiveStake'],
+  ['execution.settlement.aggregateAuthority', st.aggregateAuthority, 'onchainCheckpoints'],
+  ['execution.settlement.exitsDependOnSettlement', st.exitsDependOnSettlement, false],
+  ['cooldowns.claim.snapshotAtRequest', cfg.cooldowns.claim.snapshotAtRequest, true],
+];
+for (const [path, got, want] of settlementPolicy) if (got !== want) throw new Error(`ForgeEmissions implements ${path} = ${String(want)}, config has ${String(got)}`);
+if (f.pools.length !== 4) throw new Error('ForgeEmissions binds exactly 4 pools');
+const allocTotal = f.pools.reduce((n, pool) => n + pool.allocPoints, 0);
+if (allocTotal === 0) throw new Error('pool alloc points must not all be zero');
+c('uint256', 'SETTLEMENT_MAX_LOTS_PER_PAGE', st.maxLotsPerPage);
+c('uint256', 'CLAIM_SECONDS', cfg.cooldowns.claim.seconds);
+c('uint256', 'FORGE_POOL_COUNT', f.pools.length);
+c('uint256', 'FORGE_ALLOC_POINTS_TOTAL', allocTotal);
+f.pools.forEach((pool, i) => {
+  c('uint256', `FORGE_POOL_${i}_ALLOC_POINTS`, pool.allocPoints, pool.id);
+  c('bool', `FORGE_POOL_${i}_IS_LP`, String(pool.stakeKind === 'lp'));
+});
+
 section(`Deterministic deployment registry (CREATE3). PROVISIONAL while the deployer is ${cfg.deployment.evm.deployer}`);
 lines.push('    //    Only MINED entries become constants; unmined modules are constructor/initializer inputs.');
 c('address', 'CREATEX', CREATEX_FACTORY);
@@ -253,7 +278,7 @@ const vectors = {
 const vectorsJson = JSON.stringify(vectors, null, 2) + '\n';
 
 // ── write or check ───────────────────────────────────────────────────────
-const outputs: [string, string][] = [[PARAMS, params], [SCHEDULE, scheduleSol], [VECTORS, vectorsJson], [FORGE_VECTORS, JSON.stringify(forgeVectors(), null, 1) + '\n']];
+const outputs: [string, string][] = [[PARAMS, params], [SCHEDULE, scheduleSol], [VECTORS, vectorsJson], [FORGE_VECTORS, JSON.stringify(forgeVectors(), null, 1) + '\n'], [SETTLEMENT_VECTORS, JSON.stringify(settlementVectors(), null, 1) + '\n']];
 if (process.argv.includes('--check')) {
   let stale = 0;
   for (const [p, body] of outputs) {
