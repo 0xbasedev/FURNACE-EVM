@@ -34,9 +34,11 @@ interface IMantleDistribution {
 ///         1. `openEpoch` splits the Mantle's global base by pool weight and admits each
 ///            pool's share only for the time it held active principal
 ///            (`accruedPoolBudget`); everything not admitted is released, never re-issued.
-///         2. `advance` pages through the pool's positions (≤32 lots per page): it syncs
-///            each one and reads its exact epoch measures from the pool's checkpoint
-///            records. A monotone cursor visits every position exactly once.
+///         2. `advance` pages through the pool's positions: it syncs each one and reads
+///            its exact epoch measures from the pool's checkpoint records. A page visits
+///            at most 32 lots and SEGMENTS_PER_PAGE record segments and resumes where the
+///            last one stopped, so no position can make a page unboundedly expensive. A
+///            monotone cursor visits every position exactly once.
 ///         3. When the totals are final, the Conviction bucket is reserved and, with no
 ///            Seals yet, returned whole to the Heat budget (the canonical 27/73 split).
 ///         4. `advance` then credits each earning position
@@ -48,6 +50,10 @@ contract ForgeEmissions is ReentrancyGuardTransient {
     using SafeERC20 for IERC20;
 
     uint256 public constant POOL_COUNT = 4;
+    /// @notice [P] Record segments one measure page may examine (≈8k gas each). With the
+    ///         spec's ≤32 lots per page, this bounds every page however many records a
+    ///         position has: a position larger than one page resumes on the next.
+    uint256 public constant SEGMENTS_PER_PAGE = 256;
 
     enum Phase {
         None,
@@ -80,6 +86,15 @@ contract ForgeEmissions is ReentrancyGuardTransient {
         uint40 maturesAt;
     }
 
+    /// @dev A position measured across pages: where to resume and what is summed so far.
+    struct Progress {
+        uint32 id; // 0 = between positions
+        uint8 slot;
+        uint32 seg; // 1-based resume segment within `slot` (0 = from the start)
+        uint256 stakeSeconds;
+        uint256 heatSeconds;
+    }
+
     IMantleDistribution public immutable MANTLE;
     IERC20 public immutable EMBER;
     uint256 public immutable START;
@@ -92,6 +107,7 @@ contract ForgeEmissions is ReentrancyGuardTransient {
     mapping(uint256 epoch => mapping(uint256 pool => PoolEpoch)) internal _epochs;
     mapping(uint256 epoch => mapping(uint256 pool => uint256[])) internal _earners;
     mapping(uint256 epoch => mapping(uint256 pool => mapping(uint256 id => Measure))) internal _measures;
+    mapping(uint256 epoch => mapping(uint256 pool => Progress)) internal _progress;
     mapping(uint256 pool => mapping(uint256 id => uint256)) public unclaimed;
     mapping(uint256 pool => mapping(uint256 id => Claim)) internal _claims;
 
@@ -165,27 +181,74 @@ contract ForgeEmissions is ReentrancyGuardTransient {
         else revert NothingToAdvance(epoch, pool);
     }
 
+    /// @dev Visits at most 32 lot slots and SEGMENTS_PER_PAGE record segments, resuming
+    ///      mid-position (even mid-slot) where the previous page stopped. Records are
+    ///      append-only and every lapse due by the epoch end is resolved when a position
+    ///      is first entered, so resuming later reads exactly the same segments.
     function _measurePage(uint256 epoch, uint256 i, PoolEpoch storage pe) internal {
         ForgePool pool = poolAt(i);
-        (uint256 start, uint256 end) = epochBounds(epoch);
-        uint256 lots;
-        uint256 cursor = pe.cursor;
-        uint256 n = pe.positions;
-        while (cursor < n && lots < P.SETTLEMENT_MAX_LOTS_PER_PAGE) {
-            uint256 id = ++cursor;
-            pool.poke(id); // resolve lapses due by now: their records are back-dated
-            (uint256 s, uint256 w) = pool.epochMeasure(id, start, end);
-            if (s != 0) {
-                _measures[epoch][i][id] = Measure(s, w);
-                _earners[epoch][i].push(id);
-                pe.stakeSeconds += s;
-                pe.heatSeconds += w;
-                emit Measured(epoch, i, id, s, w);
+        Progress memory pr = _progress[epoch][i]; // worked in memory, stored once per page
+        bool wasStored = pr.id != 0;
+        uint256 budget = SEGMENTS_PER_PAGE;
+        uint256 slots;
+        while (budget != 0) {
+            if (pr.id == 0) {
+                if (pe.cursor == pe.positions || slots == P.SETTLEMENT_MAX_LOTS_PER_PAGE) break;
+                uint256 next = pe.cursor + 1;
+                pool.poke(next); // resolve lapses due by now: their records are back-dated
+                pr.id = uint32(next);
             }
-            lots += Math.max(pool.historySlots(id), 1);
+            uint32 mask = pool.historyMaskOf(pr.id);
+            uint256 j = pr.slot;
+            while (j < 32 && mask & (1 << j) == 0) ++j;
+            if (j == 32) {
+                _finishPosition(epoch, i, pe, pr);
+                pr = Progress(0, 0, 0, 0, 0);
+                --budget;
+                continue;
+            }
+            if (slots == P.SETTLEMENT_MAX_LOTS_PER_PAGE) break;
+            ++slots;
+            budget -= _measureSlot(epoch, pool, pr, j, budget);
         }
-        pe.cursor = uint32(cursor);
-        if (cursor == n) _budget(epoch, i, pe);
+        if (pr.id != 0) _progress[epoch][i] = pr;
+        else if (wasStored) delete _progress[epoch][i];
+        if (pr.id == 0 && pe.cursor == pe.positions) _budget(epoch, i, pe);
+    }
+
+    function _measureSlot(uint256 epoch, ForgePool pool, Progress memory pr, uint256 j, uint256 budget)
+        internal
+        returns (uint256 used)
+    {
+        uint256 next;
+        bool done;
+        {
+            uint256 start = START + epoch * P.EPOCH_SECONDS;
+            uint256 s;
+            uint256 w;
+            (s, w, next, used, done) = pool.measureSlot(pr.id, j, start, start + P.EPOCH_SECONDS, pr.seg, budget);
+            pr.stakeSeconds += s;
+            pr.heatSeconds += w;
+        }
+        if (done) {
+            pr.slot = uint8(j + 1);
+            pr.seg = 0;
+        } else {
+            pr.slot = uint8(j);
+            pr.seg = uint32(next);
+        }
+    }
+
+    function _finishPosition(uint256 epoch, uint256 i, PoolEpoch storage pe, Progress memory pr) internal {
+        (uint256 id, uint256 s, uint256 w) = (pr.id, pr.stakeSeconds, pr.heatSeconds);
+        if (s != 0) {
+            _measures[epoch][i][id] = Measure(s, w);
+            _earners[epoch][i].push(id);
+            pe.stakeSeconds += s;
+            pe.heatSeconds += w;
+            emit Measured(epoch, i, id, s, w);
+        }
+        pe.cursor += 1;
     }
 
     /// @dev Totals are final: reserve the Conviction bucket, split the rest 30/70, and
@@ -301,6 +364,10 @@ contract ForgeEmissions is ReentrancyGuardTransient {
 
     function earnerAt(uint256 epoch, uint256 pool, uint256 k) external view returns (uint256) {
         return _earners[epoch][pool][k];
+    }
+
+    function progressOf(uint256 epoch, uint256 pool) external view returns (Progress memory) {
+        return _progress[epoch][pool];
     }
 
     function claimOf(uint256 pool, uint256 id) external view returns (Claim memory) {

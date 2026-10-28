@@ -10,6 +10,7 @@ import { ForgeModel, Revert } from './forge-model';
 
 export const EPOCH = BigInt(cfg.emissions.epochSeconds);
 export const PAGE = BigInt(cfg.execution.settlement.maxLotsPerPage);
+export const SEGMENTS_PER_PAGE = 256n; // [P] ForgeEmissions.SEGMENTS_PER_PAGE
 export const CLAIM_SECONDS = BigInt(cfg.cooldowns.claim.seconds);
 export const ALLOC = cfg.forge.pools.map((p) => BigInt(p.allocPoints));
 export const ALLOC_TOTAL = ALLOC.reduce((a, b) => a + b, 0n);
@@ -27,6 +28,8 @@ export interface PoolEpoch {
   earners: number[];
 }
 export interface MantleEpoch { base: bigint; minted: bigint; released: bigint }
+export interface Progress { id: number; slot: number; seg: bigint; s: bigint; w: bigint }
+const freshProgress = (): Progress => ({ id: 0, slot: 0, seg: 0n, s: 0n, w: 0n });
 
 export class SettlementModel {
   pools: ForgeModel[];
@@ -34,6 +37,7 @@ export class SettlementModel {
   nextOpen = 0;
   epochs = new Map<string, PoolEpoch>(); // `${e}:${i}`
   measures = new Map<string, { s: bigint; w: bigint }>(); // `${e}:${i}:${id}`
+  progress = new Map<string, Progress>(); // `${e}:${i}`
   unclaimed = new Map<string, bigint>(); // `${i}:${id}`
   claims = new Map<string, { amount: bigint; maturesAt: bigint }>();
   emberHeld = 0n; // ForgeEmissions' EMBER balance
@@ -103,23 +107,47 @@ export class SettlementModel {
     else this.creditPage(e, i, pe!);
   }
 
+  progressOf(e: number, i: number): Progress { return this.progress.get(`${e}:${i}`) ?? freshProgress(); }
+
+  /** Mirror of ForgeEmissions._measurePage: ≤32 slot visits and SEGMENTS_PER_PAGE record
+   *  segments per page, resuming mid-position. Each finished position's record-based
+   *  sum must equal the model's own epoch-split accrual. */
   private measurePage(e: number, i: number, pe: PoolEpoch, now: bigint) {
     const pool = this.pools[i];
-    let lots = 0n;
-    while (pe.cursor < pe.positions && lots < PAGE) {
-      const id = ++pe.cursor;
-      pool.poke(id, now);
-      const p = pool.positions[id - 1];
-      const s = p.epochS.get(BigInt(e)) ?? 0n, w = p.epochW.get(BigInt(e)) ?? 0n;
-      if (s !== 0n) {
-        this.measures.set(`${e}:${i}:${id}`, { s, w });
-        pe.earners.push(id);
-        pe.S += s; pe.W += w;
+    const [start, end] = this.bounds(e);
+    const pr = this.progressOf(e, i);
+    let budget = SEGMENTS_PER_PAGE, slots = 0n;
+    while (budget !== 0n) {
+      if (pr.id === 0) {
+        if (pe.cursor === pe.positions || slots === PAGE) break;
+        pool.poke(pe.cursor + 1, now);
+        pr.id = pe.cursor + 1;
       }
-      const slots = BigInt(p.historySlots.size);
-      lots += slots > 1n ? slots : 1n;
+      const p = pool.positions[pr.id - 1];
+      let j = pr.slot;
+      while (j < 32 && !p.heads.has(j)) j++;
+      if (j === 32) { this.finishPosition(e, i, pe, pr); Object.assign(pr, freshProgress()); budget--; continue; }
+      if (slots === PAGE) break;
+      slots++;
+      const r = pool.measureSlot(pr.id, j, start, end, pr.seg, budget);
+      pr.s += r.s; pr.w += r.w; budget -= r.used;
+      if (r.done) { pr.slot = j + 1; pr.seg = 0n; } else { pr.slot = j; pr.seg = r.next; }
     }
-    if (pe.cursor === pe.positions) this.budget(e, i, pe);
+    this.progress.set(`${e}:${i}`, pr);
+    if (pr.id === 0 && pe.cursor === pe.positions) this.budget(e, i, pe);
+  }
+
+  private finishPosition(e: number, i: number, pe: PoolEpoch, pr: Progress) {
+    const p = this.pools[i].positions[pr.id - 1];
+    if (pr.s !== (p.epochS.get(BigInt(e)) ?? 0n) || pr.w !== (p.epochW.get(BigInt(e)) ?? 0n)) {
+      throw new Error(`model: records disagree with accrual (epoch ${e}, pool ${i}, position ${pr.id})`);
+    }
+    if (pr.s !== 0n) {
+      this.measures.set(`${e}:${i}:${pr.id}`, { s: pr.s, w: pr.w });
+      pe.earners.push(pr.id);
+      pe.S += pr.s; pe.W += pr.w;
+    }
+    pe.cursor++;
   }
 
   private budget(e: number, i: number, pe: PoolEpoch) {

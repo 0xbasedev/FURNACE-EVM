@@ -33,8 +33,12 @@ export interface Position {
   tickets: Map<number, Ticket>; pending: number[]; nextTicket: number;
   /** Settlement inputs: measures split at epoch boundaries, slots that ever held a lot. */
   epochS: Map<bigint, bigint>; epochW: Map<bigint, bigint>; historySlots: Set<number>;
-  openedAt: bigint;
+  openedAt: bigint; closedAt: bigint;
+  /** Mirror of ForgePool's checkpoint records: each slot's head and superseded heads. */
+  heads: Map<number, Rec>; history: Map<number, Rec[]>;
 }
+export interface Rec { since: bigint; amount: bigint; age: bigint; part: bigint }
+const UINT96_MAX = (1n << 96n) - 1n;
 export interface Occ { time: bigint; cum: bigint; on: boolean }
 
 const emptyLot = (): Lot => ({ amount: 0n, age: 0n, part: 0n, heldBy: 0 });
@@ -158,9 +162,17 @@ export class ForgeModel {
       const lot = p.lots[slot];
       if (lot.heldBy === t.id) {
         Object.assign(lot, { amount: s.amount, age: s.age, part: s.part, heldBy: 0 });
+        this.recordHead(p, slot);
       } else {
-        if (lot.amount > 0n && lot.age === s.age && lot.part === s.part) lot.amount += s.amount;
-        else { const j = this.firstFree(p); p.lots[j] = { amount: s.amount, age: s.age, part: s.part, heldBy: 0 }; p.historySlots.add(j); p.lotCount++; }
+        if (lot.amount > 0n && lot.age === s.age && lot.part === s.part && lot.amount + s.amount <= UINT96_MAX) {
+          lot.amount += s.amount;
+          this.recordHead(p, slot);
+        } else {
+          const j = this.firstFree(p);
+          p.lots[j] = { amount: s.amount, age: s.age, part: s.part, heldBy: 0 };
+          p.historySlots.add(j); p.lotCount++;
+          this.recordHead(p, j);
+        }
         p.reserved--;
       }
     }
@@ -191,10 +203,55 @@ export class ForgeModel {
     const j = this.firstFree(p);
     p.lots[j] = { amount: net, age: 0n, part: 0n, heldBy: 0 };
     p.historySlots.add(j);
+    this.recordHead(p, j);
     p.lotCount++;
     this.fees.deposit += fee;
     this.increaseActive(net, now);
     return net;
+  }
+
+  // ── checkpoint records (mirror of ForgePool._setHead / _slotMeasure) ─────
+  /** Lot j changed at p.last: its old head moves to history unless it began then. */
+  private recordHead(p: Position, j: number) {
+    const lot = p.lots[j], t = p.last;
+    const head = p.heads.get(j);
+    if (head && head.since !== t) {
+      if (!p.history.has(j)) p.history.set(j, []);
+      p.history.get(j)!.push(head);
+    }
+    p.heads.set(j, { since: t, amount: lot.amount, age: lot.age, part: lot.part });
+  }
+
+  /** Resumable slot measure over [t0, t1], segment for segment as ForgePool.measureSlot. */
+  measureSlot(id: number, j: number, t0: bigint, t1: bigint, from: bigint, maxSegs: bigint) {
+    const p = this.positions[id - 1];
+    if (t1 > p.last) throw new Error('model: measure before sync');
+    if (p.closedAt !== 0n && p.closedAt < t1) t1 = p.closedAt;
+    const out = { s: 0n, w: 0n, next: 0n, used: 0n, done: true };
+    if (t1 <= t0) return out;
+    const hist = p.history.get(j) ?? [], head = p.heads.get(j)!, n = hist.length;
+    const seg = (k: number) => (k < n ? hist[k] : head);
+    let i: number;
+    if (from !== 0n) i = Number(from) - 1;
+    else if (head.since <= t0) i = n;
+    else {
+      let lo = 0, hi = n;
+      while (lo < hi) { const mid = (lo + hi) >> 1; if (hist[mid].since <= t0) lo = mid + 1; else hi = mid; }
+      i = lo === 0 ? 0 : lo - 1;
+    }
+    for (; i <= n; i++) {
+      if (out.used === maxSegs) return { ...out, next: BigInt(i + 1), done: false };
+      const r = seg(i);
+      if (r.since >= t1) break;
+      out.used++;
+      const end = i + 1 < n ? hist[i + 1].since : i + 1 === n ? head.since : 1n << 255n;
+      if (end <= t0 || r.amount === 0n) continue;
+      const a = r.since > t0 ? r.since : t0, b = end < t1 ? end : t1;
+      const age = min(r.age + (a - r.since), AGE_CAP);
+      out.s += r.amount * (b - a);
+      out.w += r.amount * integrateHeat(age, b - a, 0n);
+    }
+    return out;
   }
 
   // ── actions (each reverts atomically via run()) ────────────────────────
@@ -204,7 +261,8 @@ export class ForgeModel {
       id: this.positions.length + 1, lots: Array.from({ length: MAX_LOTS }, emptyLot), lotCount: 0, reserved: 0,
       last: now, streakStart: now, S: 0n, W: 0n, paused: 0n, closed: false, ashfallForfeited: false,
       plan: null, tickets: new Map(), pending: [], nextTicket: 1,
-      epochS: new Map(), epochW: new Map(), historySlots: new Set(), openedAt: now,
+      epochS: new Map(), epochW: new Map(), historySlots: new Set(), openedAt: now, closedAt: 0n,
+      heads: new Map(), history: new Map(),
     };
     this.positions.push(p);
     this.addLot(p, amount, now);
@@ -243,6 +301,7 @@ export class ForgeModel {
       t.slices.set(j, { amount: x, age: lot.age, part: lot.part });
       lot.amount -= x;
       if (lot.amount === 0n) lot.heldBy = t.id;
+      this.recordHead(p, j);
     });
     p.plan.requested = after;
     p.tickets.set(t.id, t);
@@ -264,7 +323,11 @@ export class ForgeModel {
       if (lot.heldBy === t!.id) { lot.heldBy = 0; p.lotCount--; } else p.reserved--;
     }
     this.dropPending(p, t!, 'executed');
-    for (const lot of p.lots) if (lot.amount > 0n) lot.age = cooledAge(lot.age, w, balance);
+    p.lots.forEach((lot, j) => {
+      if (lot.amount === 0n) return;
+      lot.age = cooledAge(lot.age, w, balance);
+      this.recordHead(p, j);
+    });
     for (const pid of p.pending) for (const s of p.tickets.get(pid)!.slices.values()) s.age = cooledAge(s.age, w, balance);
     p.streakStart = now;
     const fee = w * WITHDRAW_FEE_PCT / 100n;
@@ -286,7 +349,7 @@ export class ForgeModel {
     need(total > 0n, 'NothingToExit');
     for (const pid of [...p.pending]) this.dropPending(p, p.tickets.get(pid)!, 'emergency');
     p.lots = Array.from({ length: MAX_LOTS }, emptyLot);
-    p.lotCount = 0; p.reserved = 0; p.closed = true; p.ashfallForfeited = true;
+    p.lotCount = 0; p.reserved = 0; p.closed = true; p.ashfallForfeited = true; p.closedAt = now;
     const fee = total * EMERGENCY_FEE_PCT / 100n;
     this.fees.emergency += fee;
     this.frozen -= frozen;

@@ -25,6 +25,8 @@ function words(m: SettlementModel, positions: number, now: bigint): bigint[] {
     const pe = m.epoch(e, i);
     out.push(BigInt(pe.phase), BigInt(pe.positions), BigInt(pe.cursor), BigInt(pe.credited), pe.target, pe.admitted,
       pe.flat, pe.heat, pe.paid, pe.S, pe.W, BigInt(pe.earners.length));
+    const pr = m.progressOf(e, i);
+    out.push(BigInt(pr.id), BigInt(pr.slot), pr.seg, pr.s, pr.w);
     for (const id of pe.earners) { const x = m.measures.get(`${e}:${i}:${id}`)!; out.push(BigInt(id), x.s, x.w); }
   }
   for (let i = 0; i < 4; i++) for (let id = 1; id <= positions; id++) {
@@ -170,6 +172,18 @@ const scripted: Scenario[] = [
     A(K.RequestClaim, at(3n, 2n), 2, 1), // nothing left
   ] },
 ];
+{ // Record spam: 1-wei request + cancel each second piles ~300 records into one slot,
+  // more than one page's segment budget; the position resumes across pages.
+  const acts: Act[] = [A(K.Open, at(0n), 0, 1, 100n * E), A(K.Open, at(0n), 0, 2, 50n * E), A(K.Deposit, at(0n, 1n), 0, 1, 100n * E)];
+  for (let k = 0n; k < 300n; k++) {
+    acts.push(A(K.Request, at(0n, 2n, k), 0, 1, 1n));
+    acts.push(A(K.Cancel, at(0n, 2n, k), 0, 1, k + 1n));
+  }
+  acts.push(A(K.Finalize, at(1n)), A(K.OpenEpoch, at(1n)));
+  for (let k = 0; k < 5; k++) acts.push(A(K.Advance, at(1n), 0, 0, 0n));
+  acts.push(A(K.RequestClaim, at(1n, 1n), 0, 2), A(K.ExecuteClaim, at(2n, 1n), 0, 2));
+  scripted.push({ name: 'recordSpam', positions: 2, actions: acts });
+}
 { // Pages: 20 + 15 lots fill the first page; the third position needs a second one.
   const acts: Act[] = [A(K.Open, at(0n), 0, 1, E), A(K.Open, at(0n), 0, 2, E), A(K.Open, at(0n), 0, 3, E)];
   for (let i = 1; i < 20; i++) {

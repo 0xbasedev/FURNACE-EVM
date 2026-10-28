@@ -92,12 +92,13 @@ contract ForgeEmissionsDifferentialTest is SettlementFixture {
     function test_settle_latePages() public { _replay("latePages"); }
     function test_settle_claimSnapshot() public { _replay("claimSnapshot"); }
     function test_settle_pagedLots() public { _replay("pagedLots"); }
+    function test_settle_recordSpam() public { _replay("recordSpam"); }
     function test_settle_random0() public { _replay("random0"); }
     function test_settle_random1() public { _replay("random1"); }
     function test_settle_random2() public { _replay("random2"); }
 
     function test_everySettlementScenarioIsReplayed() public view {
-        assertEq(vm.parseJsonStringArray(json, ".names").length, 10, "add a test_settle_* for each new scenario");
+        assertEq(vm.parseJsonStringArray(json, ".names").length, 11, "add a test_settle_* for each new scenario");
     }
 
     function _uints(string memory key) internal view returns (uint256[] memory out) {
@@ -193,6 +194,16 @@ contract ForgeEmissionsDifferentialTest is SettlementFixture {
         return keccak256(abi.encodePacked(w));
     }
 
+    function _pushProgress(uint256[] memory w, uint256 n, uint256 e, uint256 i) internal view returns (uint256) {
+        ForgeEmissions.Progress memory pr = emissions.progressOf(e, i);
+        w[n] = pr.id;
+        w[n + 1] = pr.slot;
+        w[n + 2] = pr.seg;
+        w[n + 3] = pr.stakeSeconds;
+        w[n + 4] = pr.heatSeconds;
+        return n + 5;
+    }
+
     function _pushPoolEpoch(uint256[] memory w, uint256 n, uint256 e, uint256 i) internal view returns (uint256) {
         ForgeEmissions.PoolEpoch memory pe = emissions.poolEpoch(e, i);
         uint256[12] memory head = [
@@ -210,6 +221,7 @@ contract ForgeEmissionsDifferentialTest is SettlementFixture {
             emissions.earnerCount(e, i)
         ];
         for (uint256 k; k < 12; ++k) w[n++] = head[k];
+        n = _pushProgress(w, n, e, i);
         for (uint256 k; k < head[11]; ++k) {
             uint256 id = emissions.earnerAt(e, i, k);
             ForgeEmissions.Measure memory m = emissions.measureOf(e, i, id);

@@ -35,11 +35,23 @@ The custody PR stored one *cumulative* S/W per position. A position touched afte
 - `N` is fixed to the pool's position count at that moment.
 - A pool with nothing admitted is done at once.
 
-**4. Measure pages.**
-- `advance(e, i)` walks position ids with a monotone cursor.
-- For each position it calls `pool.poke(id)` (resolving lapses), then `epochMeasure` over the epoch. Earners (`S_i > 0`) are stored and added to the totals.
-- A page stops once it has covered 32 lots, counting each position's ever-used slots, with at least one per position.
-- Each position is visited exactly once.
+**4. Measure pages are bounded and resumable.**
+- `advance(e, i)` walks position ids with a monotone cursor. On entering a position it calls `pool.poke(id)` once, resolving lapses due by now.
+- It then measures the position slot by slot with `pool.measureSlot`.
+- A page examines at most 32 lot slots and **at most `SEGMENTS_PER_PAGE` = 256 record segments [P]**.
+- A position or a slot that does not fit resumes on the next page. Progress is `{id, slot, segment, partial S, partial W}`, kept in memory during a page and stored once at its end.
+- Resuming is exact:
+  - records are append-only;
+  - lapses due by the epoch end were resolved on entry;
+  - anything written later starts after the epoch.
+- Earners (`S_i > 0`) are stored and added to the totals. Each position is counted exactly once.
+
+**Why resumable: record spam.**
+- An owner can pile records into one slot within an epoch, for example by requesting 1 wei and cancelling each second; the slice merges back each time.
+- That costs the attacker about **121k gas per record**.
+- Before this change, a page measured a whole position at once. 1,200 records made one **20.9M-gas** page, and roughly 3,000 would exceed a block and freeze that pool-epoch for everyone.
+- Now the same epoch settles in 5 pages, the heaviest 4.7M gas (`SettlementGrief.t.sol`).
+- The keeper spends about 18k gas per spammed segment against the attacker's 121k, so the spam costs its sender several times what it costs settlement.
 
 **5. Budget.**
 - When the cursor reaches `N`: `bucket = ⌊E·10/100⌋`, `flat = ⌊(E−bucket)·30/100⌋`, `heat = E − bucket − flat + unusedBucket`.
@@ -74,9 +86,11 @@ The custody PR stored one *cumulative* S/W per position. A position touched afte
 | Keepers | Permissionless, with no bounty | No bounty source is defined yet. Users can page their own epochs |
 | `N` | Fixed at `openEpoch` | Positions opened after the epoch ended measure zero |
 | Claim timer | Fixed 24h | Relic perks (20h/16h/12h) arrive with Relics |
-| Ashfall budgets | Untouched | They are zero until burn registrars exist, and they stay reserved in the Mantle |
+| Segment budget per page | 256 | About 4.7M gas worst case per page, with headroom under a block |
 
 ## Not in scope (later PRs)
+
+**Before any deployment, `ForgeEmissions` itself must gain Ashfall distribution and Seals.** The Mantle's `DISTRIBUTOR` is immutable, and only it can call `mintAshfall` or `rollAshfall`. So neither can be bolted on later as a separate contract. Today any Ashfall budget simply stays reserved in the Mantle. It is zero until burn registrars exist.
 
 - **Seals:** escrow caps, membership, pause and extend, forfeiture.
 - **Compound and Stoke.**
@@ -87,21 +101,24 @@ The custody PR stored one *cumulative* S/W per position. A position touched afte
 
 | Path | Gas |
 |---|---:|
-| `openEpoch` (4 pools) | 237,416 |
-| Measure page: 1 position with 32 lots | 406,090 |
-| Measure page: 32 positions with 1 lot each | 2,819,790 |
-| Credit page: 1 earner | 124,492 |
-| Credit page: 32 earners, one mint | 946,588 |
-| `requestClaim` | 35,131 |
+| `openEpoch` (4 pools) | 237,619 |
+| Measure page: 1 position with 32 lots | 548,206 |
+| Measure page: 32 positions with 1 lot each | 3,018,478 |
+| Heaviest page of a record-spammed epoch (1,200 records in one slot) | 4,699,291 |
+| Credit page: 1 earner | 124,469 |
+| Credit page: 32 earners, one mint | 946,565 |
+| `requestClaim` | 35,087 |
 
-Total work grows with the number of positions, as the spec says. Settling an epoch takes about ⌈positions/32⌉ measure pages plus ⌈earners/32⌉ credit pages per pool.
+- Total work grows with population, as the spec says. Settling an epoch takes about ⌈slots/32⌉ measure pages plus ⌈earners/32⌉ credit pages per pool, plus one page per 256 extra record segments.
+- **The cursor walks every position id ever opened.** That includes closed and emptied positions and dust positions in the single-asset pools, so per-epoch work grows with the pool's *history*, not only its live stake. Each such position costs a `poke` and a mask read: cheap, but unbounded over time. Pruning closed positions, or indexing live ones, is a follow-up.
 
 ## Verification
 
 - **Differential:**
-  - 10 scenarios (7 scripted, 3 seeded random walks) replay custody actions in four pools, Mantle finalization, epoch opening, measure and credit pages, and claims.
+  - 11 scenarios (8 scripted, 3 seeded random walks) replay custody actions in four pools, Mantle finalization, epoch opening, measure and credit pages, and claims.
   - After every action, a keccak of the settlement state must equal `SettlementModel`'s, and reverts must match. The state covers the pools' occupancy, every Mantle budget, every pool-epoch, every measure, every credit and claim, and EMBER balances.
-  - The model computes measures by splitting accrual at epoch boundaries, independently of the contract's record binary search. Each budget and payout is asserted equal to canonical `settleBaseEpoch` at generation time.
+  - The model mirrors the contract's records and page loop, segment for segment, so page progress is compared too.
+  - When each position finishes, its record-based sum must equal the model's own epoch-split accrual. Each budget and payout is asserted equal to canonical `settleBaseEpoch` at generation time.
   - Named cases:
     - a position touched after its epoch ended but before its page ran;
     - a lapse due inside an epoch with no transaction;
@@ -109,7 +126,8 @@ Total work grows with the number of positions, as the spec says. Settling an epo
     - an emergency exit mid-epoch, still credited;
     - a keeper five epochs late;
     - claim snapshots;
-    - pages split by lot count.
+    - pages split by lot count;
+    - record spam that resumes across pages.
 - **Invariants** (48 runs × 120 calls, `fail_on_revert` on): a random keeper finalizes, opens and pages between random custody and claim actions.
   - `minted + released ≤ base`, and `= base` once all pools are done;
   - `admitted ≤ target` and `paid ≤ admitted`;
@@ -117,8 +135,11 @@ Total work grows with the number of positions, as the spec says. Settling an epo
   - EMBER held equals unclaimed plus pending;
   - EMBER supply equals the Mantle's minted total;
   - emergency exit always works.
-- **Mutation checks:** all 10 fail the suite.
-  - a page re-counts a position;
+- **Mutation checks:** all 13 fail the suite.
+  - a finished position is counted again;
+  - a resumed slot restarts from its first segment;
+  - progress is not kept between pages;
+  - a page ignores the segment budget;
   - the measure runs to the touch time instead of the epoch end;
   - admission ignores occupancy;
   - the unused bucket is kept;

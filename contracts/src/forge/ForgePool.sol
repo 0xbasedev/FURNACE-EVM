@@ -112,6 +112,15 @@ contract ForgePool is ReentrancyGuardTransient {
         Plan plan;
     }
 
+    /// @dev Scratch state of one slot scan (keeps the scan loop within the stack).
+    struct SlotScan {
+        uint256 n;
+        uint256 i;
+        uint256 used;
+        uint256 s;
+        uint256 w;
+    }
+
     struct Occupancy {
         uint40 time;
         uint64 cumulative;
@@ -347,18 +356,33 @@ contract ForgePool is ReentrancyGuardTransient {
     ///         Requires the position synced past t1, so every lapse due by t1 has its
     ///         back-dated record. Measures stop at an emergency exit.
     function epochMeasure(uint256 id, uint256 t0, uint256 t1) external view returns (uint256 s, uint256 w) {
-        if (t0 > t1) revert BadInterval(t0, t1);
-        Position storage p = _positions[id];
-        if (t1 > p.lastCheckpoint) revert NotSynced(id, p.lastCheckpoint);
-        if (p.closedAt != 0 && p.closedAt < t1) t1 = p.closedAt;
+        t1 = _measurable(id, t0, t1);
         if (t1 <= t0) return (0, 0);
-        uint32 mask = p.historyMask;
+        uint32 mask = _positions[id].historyMask;
         for (uint256 j; j < MAX_LOTS; ++j) {
             if (mask & (1 << j) == 0) continue;
-            (uint256 ds, uint256 dw) = _slotMeasure(_history[id][j], _lots[id][j], t0, t1);
+            (uint256 ds, uint256 dw,,,) = _slotMeasure(_history[id][j], _lots[id][j], t0, t1, 0, type(uint256).max);
             s += ds;
             w += dw;
         }
+    }
+
+    /// @notice One slot's measures over [t0, t1], resumable: examines at most `maxSegs`
+    ///         record segments starting at `from` (0 = the first that can overlap t0).
+    ///         Returns the resume point `next` when not `done`. Settlement pages use this
+    ///         so a slot with any number of records settles over bounded calls.
+    function measureSlot(uint256 id, uint256 slot, uint256 t0, uint256 t1, uint256 from, uint256 maxSegs)
+        external
+        view
+        returns (uint256 s, uint256 w, uint256 next, uint256 used, bool done)
+    {
+        t1 = _measurable(id, t0, t1);
+        if (t1 <= t0) return (0, 0, 0, 0, true);
+        return _slotMeasure(_history[id][slot], _lots[id][slot], t0, t1, from, maxSegs);
+    }
+
+    function historyMaskOf(uint256 id) external view returns (uint32) {
+        return _positions[id].historyMask;
     }
 
     function ticketOf(uint256 id, uint32 ticketId) external view returns (Ticket memory) {
@@ -606,41 +630,83 @@ contract ForgePool is ReentrancyGuardTransient {
         return Lot(uint40(since), amount.toUint96(), uint32(age), uint32(part), uint24(heldBy), 0);
     }
 
+    /// @dev Checks a measure interval and clips it at an emergency exit.
+    function _measurable(uint256 id, uint256 t0, uint256 t1) internal view returns (uint256) {
+        if (t0 > t1) revert BadInterval(t0, t1);
+        Position storage p = _positions[id];
+        if (t1 > p.lastCheckpoint) revert NotSynced(id, p.lastCheckpoint);
+        if (p.closedAt != 0 && p.closedAt < t1) t1 = p.closedAt;
+        return t1;
+    }
+
     /// @dev Measures of one slot over [t0, t1]: segment i is history[i] (or the head
-    ///      for i == n) and lasts until the next segment begins.
-    function _slotMeasure(mapping(uint256 => Record) storage history, Lot storage head, uint256 t0, uint256 t1)
+    ///      for i == n) and lasts until the next segment begins. Examines at most
+    ///      `maxSegs` segments from `from` (1-based; 0 = binary-search the first that can
+    ///      overlap t0) and returns the 1-based resume index when it stops early.
+    function _slotMeasure(
+        mapping(uint256 => Record) storage history,
+        Lot storage head,
+        uint256 t0,
+        uint256 t1,
+        uint256 from,
+        uint256 maxSegs
+    ) internal view returns (uint256, uint256, uint256, uint256, bool) {
+        SlotScan memory c;
+        c.n = head.records;
+        c.i = from != 0 ? from - 1 : _firstSegment(history, c.n, head.since, t0);
+        for (; c.i <= c.n; ++c.i) {
+            if (c.used == maxSegs) return (c.s, c.w, c.i + 1, c.used, false);
+            if (!_scanSegment(history, head, c, t0, t1)) break;
+        }
+        return (c.s, c.w, 0, c.used, true);
+    }
+
+    /// @dev Adds segment `c.i` if it starts before t1; false once segments pass t1.
+    function _scanSegment(
+        mapping(uint256 => Record) storage history,
+        Lot storage head,
+        SlotScan memory c,
+        uint256 t0,
+        uint256 t1
+    ) internal view returns (bool) {
+        Record memory r = c.i < c.n ? history[c.i] : Record(head.since, head.amount, head.age, head.participated);
+        if (r.since >= t1) return false;
+        ++c.used;
+        uint256 segEnd = c.i + 1 < c.n ? history[c.i + 1].since : (c.i + 1 == c.n ? head.since : type(uint256).max);
+        (uint256 ds, uint256 dw) = _segment(r, segEnd, t0, t1);
+        c.s += ds;
+        c.w += dw;
+        return true;
+    }
+
+    /// @dev The last segment starting at or before t0 (or the first segment).
+    function _firstSegment(mapping(uint256 => Record) storage history, uint256 n, uint256 headSince, uint256 t0)
         internal
         view
+        returns (uint256)
+    {
+        if (headSince <= t0) return n;
+        (uint256 lo, uint256 hi) = (0, n);
+        while (lo < hi) {
+            uint256 mid = (lo + hi) / 2;
+            if (history[mid].since <= t0) lo = mid + 1;
+            else hi = mid;
+        }
+        return lo == 0 ? 0 : lo - 1;
+    }
+
+    /// @dev One segment's contribution over its overlap with [t0, t1].
+    function _segment(Record memory r, uint256 segEnd, uint256 t0, uint256 t1)
+        internal
+        pure
         returns (uint256 s, uint256 w)
     {
-        uint256 n = head.records;
-        uint256 headSince = head.since;
-        // First segment that may overlap t0: the last one starting at or before t0.
-        uint256 i;
-        if (headSince <= t0) {
-            i = n;
-        } else {
-            (uint256 lo, uint256 hi) = (0, n);
-            while (lo < hi) {
-                uint256 mid = (lo + hi) / 2;
-                if (history[mid].since <= t0) lo = mid + 1;
-                else hi = mid;
-            }
-            i = lo == 0 ? 0 : lo - 1;
-        }
-        for (; i <= n; ++i) {
-            Record memory r = i < n
-                ? history[i]
-                : Record(head.since, head.amount, head.age, head.participated);
-            if (r.since >= t1) break;
-            uint256 end = i + 1 < n ? history[i + 1].since : (i + 1 == n ? headSince : type(uint256).max);
-            if (end <= t0 || r.amount == 0) continue;
-            uint256 a = r.since > t0 ? r.since : t0;
-            uint256 b = end < t1 ? end : t1;
-            uint256 age = Math.min(r.age + (a - r.since), P.HEAT_AGE_CAP);
-            s += uint256(r.amount) * (b - a);
-            w += uint256(r.amount) * HeatMath.integrateHeat(age, b - a, 0);
-        }
+        if (segEnd <= t0 || r.amount == 0) return (0, 0);
+        uint256 a = r.since > t0 ? r.since : t0;
+        uint256 b = segEnd < t1 ? segEnd : t1;
+        uint256 age = Math.min(r.age + (a - r.since), P.HEAT_AGE_CAP);
+        s = uint256(r.amount) * (b - a);
+        w = uint256(r.amount) * HeatMath.integrateHeat(age, b - a, 0);
     }
 
     // ── helpers ───────────────────────────────────────────────────────────
