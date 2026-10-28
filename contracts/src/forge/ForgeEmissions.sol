@@ -218,6 +218,7 @@ contract ForgeEmissions is ReentrancyGuardTransient {
 
     function _measureSlot(uint256 epoch, ForgePool pool, Progress memory pr, uint256 j, uint256 budget)
         internal
+        view
         returns (uint256 used)
     {
         uint256 next;

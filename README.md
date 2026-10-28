@@ -26,7 +26,7 @@ EVM workspace for **FURNACE Protocol**, a loyalty-staking protocol built on EMBE
 ```sh
 git submodule update --init   # lib/forge-std
 pnpm install
-pnpm check          # typecheck, canonical checksums, config hash, CREATE3, gen freshness, forge exit gate, forge tests
+pnpm check          # typecheck, canonical checksums, config hash, CREATE3, gen freshness, forge exit gate, contract size gate, forge tests
 pnpm canonical:test # the canonical package's own tests + economics gate (pinned TypeScript 5.8.3)
 pnpm check:all      # both (CI runs both)
 pnpm gen            # regenerate FurnaceParams.sol, ScheduleTable.sol, oracle vectors, Forge + settlement scenarios
@@ -57,6 +57,7 @@ pnpm config:hash
     - exits never depend on settlement.
   - **Settlement mutations:** 13 planted bugs, each caught; see ADR 0005.
   - **CI gate:** `pnpm forge:gate` proves that a failing test fails the build. The upstream npm wrapper did not propagate forge's exit status.
+  - **Size gate:** `pnpm forge:sizes` fails the build if any contract exceeds the EIP-170 runtime limit (24,576 bytes). ForgePool had been 806 bytes over. The measure path now lives in the external library `ForgeMeasures`, and optimizer runs are 1,000, which puts ForgePool at 20,290 bytes.
 
 ## Toolchain
 

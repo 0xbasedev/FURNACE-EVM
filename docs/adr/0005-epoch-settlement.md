@@ -97,17 +97,19 @@ The custody PR stored one *cumulative* S/W per position. A position touched afte
 - **Casting and matching.** With no funded match reserve the spec keeps rewards liquid ("No prefunded quote means no match"), so paying liquid now conforms.
 - **Ashfall distribution** (Heat²), **Quote yield**, **Relic perks**, **Deeds**.
 
-## Gas (forge, optimizer 10,000 runs, solc-js 0.8.28)
+## Gas (forge, optimizer 1,000 runs, solc-js 0.8.28)
 
 | Path | Gas |
 |---|---:|
-| `openEpoch` (4 pools) | 237,619 |
-| Measure page: 1 position with 32 lots | 548,206 |
-| Measure page: 32 positions with 1 lot each | 3,018,478 |
-| Heaviest page of a record-spammed epoch (1,200 records in one slot) | 4,699,291 |
-| Credit page: 1 earner | 124,469 |
-| Credit page: 32 earners, one mint | 946,565 |
-| `requestClaim` | 35,087 |
+| `openEpoch` (4 pools) | 238,259 |
+| Measure page: 1 position with 32 lots | 582,930 |
+| Measure page: 32 positions with 1 lot each | 3,054,876 |
+| Heaviest page of a record-spammed epoch (1,200 records in one slot) | 4,702,133 |
+| Credit page: 1 earner | 124,875 |
+| Credit page: 32 earners, one mint | 948,151 |
+| `requestClaim` | 35,279 |
+
+- Every `measureSlot` call now pays a DELEGATECALL into `ForgeMeasures` (ADR 0004 §3). That adds about 6% to a page that measures 32 lots of one position, and about 1% to other pages.
 
 - Total work grows with population, as the spec says. Settling an epoch takes about ⌈slots/32⌉ measure pages plus ⌈earners/32⌉ credit pages per pool, plus one page per 256 extra record segments.
 - **The cursor walks every position id ever opened.** That includes closed and emptied positions and dust positions in the single-asset pools, so per-epoch work grows with the pool's *history*, not only its live stake. Each such position costs a `poke` and a mask read: cheap, but unbounded over time. Pruning closed positions, or indexing live ones, is a follow-up.

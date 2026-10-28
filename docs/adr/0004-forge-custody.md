@@ -34,6 +34,10 @@ This ADR covers custody: deposits, lots, cooling plans, execution, cancel and la
 - `epochMeasure(id, t0, t1)` binary-searches each used slot's records and sums `a·len` and `a·HeatMath.integrateHeat(age, len, 0)` per segment. It is exact over any interval, however late settlement runs, and it requires the position to be synced past `t1`.
 - Emergency exit sets `closedAt` and clears the slot masks. Measures stop there, and no per-slot records are written.
 - Records are never deleted, even after exit.
+- **Code size.** The measure path (segment scan, binary search, `integrateHeat`) lives in the external library `ForgeMeasures`. The pool reaches it by DELEGATECALL with pointers into its own storage. Without the split, ForgePool's runtime code was 25,382 bytes, over the EIP-170 limit of 24,576, so it could not have been deployed.
+  - The library and optimizer runs of 1,000 (down from 10,000) bring it to 20,290 bytes, leaving room for Seals.
+  - `pnpm forge:sizes`, part of `pnpm check`, fails the build if any contract in `contracts/src` exceeds the limit.
+  - The library is a separate deploy artifact, linked into ForgePool.
 - The custody differential still replays all 16 scenarios to the same state hashes as the earlier cumulative-S/W version. S/W are now read through `epochMeasure(id, 0, lastCheckpoint)`, and lots are extrapolated to the checkpoint.
 
 **4. Fees are booked, never pushed.**
@@ -94,25 +98,24 @@ This ADR covers custody: deposits, lots, cooling plans, execution, cancel and la
 | Participation storage | Saturates at the 30-day Ashfall threshold | The only consumer v5.5 defines; it makes capped cohorts mergeable |
 | Emergency exit | Closes the position | Simplest state; measures remain readable |
 
-## Gas (forge, optimizer 10,000 runs, solc-js 0.8.28)
+## Gas (forge, optimizer 1,000 runs, solc-js 0.8.28)
+
+Measured with checkpoint records; the earlier cumulative-S/W figures (at 10,000 runs) are in brackets.
 
 | Path | Gas |
 |---|---:|
-Measured with checkpoint records; the earlier cumulative-S/W figures are in brackets.
+| `requestCooling`, 16 lot splits | 1,007,224 (730,423) |
+| `requestCooling` 100%, 32 lots | 1,842,891 (1,048,053) |
+| `executeWithdrawal`, 16 lots | 526,333 (238,507) |
+| `executeWithdrawal`, 4 lots + 6 pending haircut | 271,027 (193,584) |
+| `executeWithdrawal`, 32 lots | 94,996 (97,305) |
+| `cancelCooling`, 4 slices to reserved slots | 129,049 (119,693) |
+| `poke`, resolving 5 lapses | 630,896 (868,056) |
+| `poke`, 32 lots | 2,659 (400,637) |
+| `emergencyExit`, all lots frozen | 48,419 (60,514) |
+| `emergencyExit`, resolving 8 unprocessed lapses first (worst case) | 932,472 (1,125,364) |
 
-| Path | Gas |
-|---|---:|
-| `requestCooling`, 16 lot splits | 1,002,582 (730,423) |
-| `requestCooling` 100%, 32 lots | 1,833,689 (1,048,053) |
-| `executeWithdrawal`, 16 lots | 521,659 (238,507) |
-| `executeWithdrawal`, 4 lots + 6 pending haircut | 268,315 (193,584) |
-| `executeWithdrawal`, 32 lots | 92,476 (97,305) |
-| `cancelCooling`, 4 slices to reserved slots | 128,069 (119,693) |
-| `poke`, resolving 5 lapses | 626,806 (868,056) |
-| `poke`, 32 lots | 2,613 (400,637) |
-| `emergencyExit`, all lots frozen | 47,595 (60,514) |
-| `emergencyExit`, resolving 8 unprocessed lapses first (worst case) | 926,391 (1,125,364) |
-
+- Lowering optimizer runs from 10,000 to 1,000 (for code size) costs under 1% on these paths.
 - Records make syncs and exits cheaper. Changes cost more, because each changed lot writes a fresh history slot (about 22k) as well as its fresh slice storage.
 - The record count lives in the head, so no array-length slot is written.
 - Packing slices, or storing a slice as a fraction of its lot until a haircut forces materialization, are possible optimizations. Both need the same differential evidence before they replace this version.

@@ -10,7 +10,9 @@ solc = "tools/solc"
 offline = true
 evm_version = "cancun"
 optimizer = true
-optimizer_runs = 10_000
+# 1,000 runs: ForgePool must stay under the EIP-170 runtime limit (24,576 B) with room for
+# Seals; `pnpm forge:sizes` fails the build if any contract in contracts/src exceeds it.
+optimizer_runs = 1_000
 bytecode_hash = "none"
 # Differential tests read vectors generated from furnace.config.ts (pnpm gen); no ffi.
 ffi = false

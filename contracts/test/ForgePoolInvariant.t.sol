@@ -4,6 +4,7 @@ pragma solidity 0.8.28;
 import {Test} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ForgePool} from "../src/forge/ForgePool.sol";
+import {Lot} from "../src/forge/ForgeMeasures.sol";
 import {FurnaceParams as P} from "../src/generated/FurnaceParams.sol";
 import {MockERC20} from "./utils/MockERC20.sol";
 
@@ -193,7 +194,7 @@ contract ForgePoolInvariantTest is Test {
             assertLe(pool.lotCount(id) + p.reservedSlots, 32);
             assertLe(p.pendingCount, pool.MAX_PENDING_TICKETS());
             for (uint256 j; j < 32; ++j) {
-                ForgePool.Lot memory l = pool.lotOf(id, j);
+                Lot memory l = pool.lotOf(id, j);
                 bool used = p.usedMask & (1 << j) != 0;
                 if (p.closedAt == 0) assertEq(used, l.amount != 0 || l.heldBy != 0, "usedMask");
                 else assertFalse(used, "closed positions use no slots");
