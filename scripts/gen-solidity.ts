@@ -15,7 +15,7 @@ import cfg, { CREATEX_FACTORY, heatMultiplier, baseEmissionPerDay } from '../can
 import { emissionPerDay, factorTable, HALF_LIFE } from './schedule';
 import {
   RAY, AGE_CAP, ray, parseUnits, heatPrimitive, integrateHeat, cooledAge, deedAge,
-  allocateMint, accruedPoolBudget, vested, DAY as DAY_N,
+  allocateMint, accruedPoolBudget, vested, DAY as DAY_N, isqrt, squaredHeatPrimitive, integrateSquaredHeat,
 } from '../canonical/accounting';
 import { canonicalize, keccakHex } from './canonical';
 import { forgeVectors } from './forge-scenarios';
@@ -102,6 +102,13 @@ milestones.forEach((m, i) => {
   c('uint256', `MILESTONE_${i}_SECONDS`, `${m.days} days`, m.key);
   c('uint256', `MILESTONE_${i}_BUMP_RAY`, ray(String(m.heatBump)));
 });
+// Heat² primitive roots at the milestones, as canonical squaredHeatPrimitive forms them:
+// T3(x) = isqrt(x³·RAY²/R), T5(x) = isqrt(x⁵·RAY²/R). Only the live endpoint is computed on chain.
+milestones.forEach((m, i) => {
+  const x = BigInt(m.days) * DAY;
+  c('uint256', `MILESTONE_${i}_T3`, isqrt(x ** 3n * RAY * RAY / AGE_CAP));
+  c('uint256', `MILESTONE_${i}_T5`, isqrt(x ** 5n * RAY * RAY / AGE_CAP));
+});
 c('uint256', 'DEED_HEAT_CARRY_PCT', f.deeds.heatCarryPct);
 
 section('Forge custody: fees, cooling plans, emergency exit (spec v5.5 §4, §11)');
@@ -142,6 +149,22 @@ wd.tiers.forEach((t, i) => {
 c('uint256', 'WITHDRAW_EXECUTION_WINDOW', wd.executionWindowSeconds);
 c('uint256', 'COOLING_PLAN_HORIZON', ex.planHorizonSeconds);
 c('uint256', 'ASHFALL_MIN_PARTICIPATION', `${cfg.execution.ashfall.minimumParticipationDays} days`, 'actual participation, stored saturating here');
+// Ashfall eligibility (spec §8, §12): a lot's actual participation AND its position's active Streak
+// must both reach their minimums; the Streak minimum is the `minRelic` Relic's days. Weight is stake × Heat².
+const ashCfg = cfg.execution.ashfall;
+const ashfallPolicy: [string, unknown, unknown][] = [
+  ['execution.ashfall.lotEligibility', ashCfg.lotEligibility, 'actualParticipationAgeAndActiveStreak'],
+  ['execution.ashfall.founderFloorCountsAsParticipation', ashCfg.founderFloorCountsAsParticipation, false],
+  ['execution.ashfall.transportBurnCredit', ashCfg.transportBurnCredit, false],
+  ['emissions.ashfall.enabled', ash.enabled, true],
+  ['emissions.ashfall.distributionWeight', ash.distributionWeight, 'heatSquared'],
+  ['emissions.ashfall.rolloverUndistributed', ash.rolloverUndistributed, true],
+  ['forge.emergencyExit.forfeitsAshfall', f.emergencyExit.forfeitsAshfall, true],
+];
+for (const [path, got, want] of ashfallPolicy) if (got !== want) throw new Error(`Ashfall implements ${path} = ${String(want)}, config has ${String(got)}`);
+const minRelic = f.relics.find((r) => r.key === ash.minRelic);
+if (!minRelic) throw new Error(`Ashfall minRelic ${ash.minRelic} is not a Relic`);
+c('uint256', 'ASHFALL_MIN_STREAK', `${minRelic.days} days`, `${minRelic.key}: the position's active Streak`);
 
 section('Base epoch settlement: pools, pages, claims (spec v5.5 §4, §10, §11)');
 const st = cfg.execution.settlement;
@@ -296,6 +319,9 @@ const vectors = {
   version: cfg.version,
   primitive: { ageSeconds: S(ages), ray: S(ages.map(heatPrimitive)) },
   integrate: { ageSeconds: S(integ.map((x) => x.age)), activeSeconds: S(integ.map((x) => x.active)), bonusRay: S(integ.map((x) => x.bonus)), ray: S(integ.map((x) => x.out)) },
+  // Heat² (Ashfall weight): the primitive at every sampled age, with and without an ordinary bonus.
+  squaredPrimitive: { ageSeconds: S([...ages, ...ages]), bonusRay: S([...ages.map(() => 0n), ...ages.map((_, i) => (i % 2 ? ray('0.65') : rnd(ray('0.65') + 1n)))]), ray: [] as string[] },
+  integrateSquared: { ageSeconds: S(integ.map((x) => x.age)), activeSeconds: S(integ.map((x) => x.active)), bonusRay: S(integ.map((x) => x.bonus)), ray: S(integ.map((x) => integrateSquaredHeat(x.age, x.active, x.bonus))) },
   cool: { ageSeconds: S(cools.map((x) => x.age)), withdrawn: S(cools.map((x) => x.withdrawn)), reference: S(cools.map((x) => x.ref)), out: S(cools.map((x) => x.out)) },
   deed: { ageSeconds: S(ages), out: S(ages.map(deedAge)) },
   mint: {
@@ -309,6 +335,7 @@ const vectors = {
   // Exact integer schedule (scripts/schedule.ts): every day 0..1700 plus far-out days.
   emission: { day: emissionDays.map(String), wad: emissionDays.map((d) => emissionPerDay(BigInt(d)).toString()) },
 };
+vectors.squaredPrimitive.ray = vectors.squaredPrimitive.ageSeconds.map((a, i) => String(squaredHeatPrimitive(BigInt(a), BigInt(vectors.squaredPrimitive.bonusRay[i]))));
 const vectorsJson = JSON.stringify(vectors, null, 2) + '\n';
 
 // ── write or check ───────────────────────────────────────────────────────

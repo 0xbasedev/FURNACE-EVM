@@ -2,6 +2,8 @@
 pragma solidity 0.8.28;
 
 import {Test} from "forge-std/Test.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {Mantle} from "../src/Mantle.sol";
 import {ForgePool} from "../src/forge/ForgePool.sol";
 import {ForgeEmissions} from "../src/forge/ForgeEmissions.sol";
 import {SettlementFixture} from "./ForgeEmissions.t.sol";
@@ -12,9 +14,17 @@ contract SettlementHandler is Test {
     address internal mantleAddr;
     address[3] internal users;
     uint256[2][] internal owned; // (pool, id)
+    /// The Protocol burn registrar and the three ledger consumers (see SettlementFixture).
+    address[4] internal actors;
 
-    constructor(ForgePool[4] memory pools_, ForgeEmissions emissions_, address mantle_, address[3] memory users_) {
-        (pools, emissions, mantleAddr, users) = (pools_, emissions_, mantle_, users_);
+    constructor(
+        ForgePool[4] memory pools_,
+        ForgeEmissions emissions_,
+        address mantle_,
+        address[3] memory users_,
+        address[4] memory actors_
+    ) {
+        (pools, emissions, mantleAddr, users, actors) = (pools_, emissions_, mantle_, users_, actors_);
         for (uint256 u; u < 3; ++u) {
             for (uint256 i; i < 4; ++i) {
                 vm.prank(users[u]);
@@ -94,6 +104,40 @@ contract SettlementHandler is Test {
         vm.warp(block.timestamp + bound(dt, 0, 2 days));
     }
 
+    /// Rarely, a long quiet stretch: positions cross the 30-day Ashfall minimums.
+    function longWarp(uint256 dt, uint256 coin) external {
+        if (coin % 6 != 0) return;
+        vm.warp(block.timestamp + bound(dt, 10 days, 35 days));
+    }
+
+    /// A user hands EMBER to the Protocol registrar, which burns it: next epoch's Ashfall.
+    function burn(uint256 who, uint256 amount) external {
+        address user = users[who % 3];
+        IERC20 ember = emissions.EMBER();
+        amount = bound(amount, 0, ember.balanceOf(user));
+        if (amount == 0) return;
+        vm.prank(user);
+        ember.transfer(actors[0], amount);
+        vm.startPrank(actors[0]);
+        ember.approve(mantleAddr, amount);
+        Mantle(mantleAddr).burnRegistered(amount);
+        vm.stopPrank();
+    }
+
+    function burnForfeits() external {
+        emissions.burnForfeits();
+    }
+
+    /// The ledgers' consumers pull what they are owed.
+    function take(uint256 seed, uint256 which) external {
+        (, uint256 poolIdx, uint256 id,) = _pick(seed);
+        which %= 3;
+        vm.prank(actors[1 + which]);
+        if (which == 0) emissions.takeCapstone(poolIdx, id);
+        else if (which == 1) emissions.takeMatchReserve();
+        else emissions.takeSealedPot(poolIdx);
+    }
+
     function seal(uint256 seed, uint256 track) external {
         (ForgePool pool,, uint256 id, address owner) = _pick(seed);
         vm.prank(owner);
@@ -106,12 +150,17 @@ contract SettlementHandler is Test {
         try emissions.settleSeal(poolIdx, id, pool.positionOf(id).sealCount) {} catch {}
     }
 
-    /// The keeper: finalize what has ended, open it, and page whatever is pending.
+    /// The keeper: finalize what has ended (catching up several epochs), open it, and page
+    /// whatever is pending.
     function keep(uint256 pages) external {
-        (bool ok,) = mantleAddr.call(abi.encodeWithSignature("finalizeEpoch()"));
-        ok;
-        try emissions.openEpoch() {} catch {}
-        pages = bound(pages, 1, 6);
+        for (uint256 k; k < 8; ++k) {
+            (bool ok,) = mantleAddr.call(abi.encodeWithSignature("finalizeEpoch()"));
+            if (!ok) break;
+        }
+        for (uint256 k; k < 8; ++k) {
+            try emissions.openEpoch() {} catch { break; }
+        }
+        pages = bound(pages, 1, 12);
         for (uint256 e; e < emissions.nextEpoch() && pages != 0; ++e) {
             for (uint256 i; i < 4 && pages != 0; ++i) {
                 ForgeEmissions.Phase ph = emissions.poolEpoch(e, i).phase;
@@ -163,7 +212,31 @@ contract SettlementInvariantTest is SettlementFixture {
         _deploySettlement(block.timestamp);
         address[3] memory users = [_user(1), _user(2), _user(3)];
         for (uint256 u; u < 3; ++u) _fund(users[u]);
-        handler = new SettlementHandler(pools, emissions, address(mantle), users);
+        handler = new SettlementHandler(
+            pools, emissions, address(mantle), users, [registrar, capstone, matchReserveSink, sealedPotStream]
+        );
+        // A diligent keeper settles the first 31 days, so every starting position meets the
+        // 30-day Ashfall minimums and every user holds claimed EMBER to burn: random runs
+        // then exercise Ashfall budgets, Heat² credits and roll-backs, not just base.
+        for (uint256 e; e < 31; ++e) {
+            skip(1 days);
+            mantle.finalizeEpoch();
+            emissions.openEpoch();
+            for (uint256 i; i < 4; ++i) {
+                while (emissions.poolEpoch(e, i).phase != ForgeEmissions.Phase.Done) emissions.advance(e, i);
+            }
+        }
+        for (uint256 k; k < handler.ownedCount(); ++k) {
+            (uint256 i, uint256 id) = handler.ownedAt(k);
+            vm.prank(pools[i].positionOf(id).owner);
+            emissions.requestClaim(i, id);
+        }
+        skip(1 days);
+        for (uint256 k; k < handler.ownedCount(); ++k) {
+            (uint256 i, uint256 id) = handler.ownedAt(k);
+            vm.prank(pools[i].positionOf(id).owner);
+            emissions.executeClaim(i, id);
+        }
         targetContract(address(handler));
     }
 
@@ -192,8 +265,30 @@ contract SettlementInvariantTest is SettlementFixture {
         }
     }
 
-    /// EMBER held by ForgeEmissions backs exactly the unclaimed and pending rewards,
-    /// and EMBER supply equals what the Mantle minted.
+    /// Every finalized epoch's Ashfall: minted + rolled ≤ budget, and = budget once all pools
+    /// are done; no pool pays more than its share.
+    function invariant_ashfallConserved() public view {
+        uint256 opened = emissions.nextEpoch();
+        for (uint256 e; e < mantle.nextEpoch(); ++e) {
+            (, uint128 ashfall,, uint128 minted,, uint128 rolled) = mantle.budgets(e);
+            assertLe(uint256(minted) + rolled, ashfall);
+            if (e >= opened) continue;
+            bool done = true;
+            uint256 paid;
+            for (uint256 i; i < 4; ++i) {
+                ForgeEmissions.PoolEpoch memory pe = emissions.poolEpoch(e, i);
+                done = done && pe.phase == ForgeEmissions.Phase.Done;
+                assertLe(pe.ashfallPaid, pe.ashfall, "a pool pays at most its Ashfall share");
+                paid += pe.ashfallPaid;
+            }
+            assertEq(paid, minted, "minted Ashfall is exactly what pools credited");
+            if (done) assertEq(uint256(minted) + rolled, ashfall, "every Ashfall wei credited or rolled back");
+        }
+    }
+
+    /// EMBER held by ForgeEmissions backs exactly the unclaimed and pending rewards and
+    /// every Seal ledger, and EMBER supply equals the Mantle's ledger (mints minus
+    /// recognized burns: registered burns and burned forfeits).
     function invariant_rewardsBacked() public view {
         uint256 owed = emissions.burnLane() + emissions.matchReserve();
         for (uint256 i; i < 4; ++i) owed += emissions.sealedPot(i);
@@ -204,12 +299,7 @@ contract SettlementInvariantTest is SettlementFixture {
             for (uint256 j = 1; j <= seals; ++j) owed += emissions.sealEscrow(i, id, j);
         }
         assertEq(ember.balanceOf(address(emissions)), owed, "EMBER held backs every claim and escrow ledger");
-        uint256 minted;
-        for (uint256 e; e < mantle.nextEpoch(); ++e) {
-            (,, uint128 m,,,) = mantle.budgets(e);
-            minted += m;
-        }
-        assertEq(ember.totalSupply(), minted);
+        assertEq(ember.totalSupply(), mantle.accounted(), "supply equals the Mantle's ledger");
     }
 
     /// Settlement state never blocks principal: every open position can exit.

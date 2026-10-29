@@ -4,7 +4,7 @@ pragma solidity 0.8.28;
 import {Test} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ForgePool} from "../src/forge/ForgePool.sol";
-import {Lot, Seal, SealStatus} from "../src/forge/ForgeMeasures.sol";
+import {Lot, Record, Seal, SealStatus} from "../src/forge/ForgeMeasures.sol";
 import {FurnaceParams as P} from "../src/generated/FurnaceParams.sol";
 import {MockERC20} from "./utils/MockERC20.sol";
 
@@ -130,7 +130,7 @@ contract ForgeHandler is Test {
 
     function _after() internal {
         for (uint256 i; i < ids.length; ++i) {
-            (uint256 s, uint256 w, uint256 ss, uint256 sw) =
+            (uint256 s, uint256 w, uint256 ss, uint256 sw,) =
                 pool.epochMeasure(ids[i], 0, pool.positionOf(ids[i]).lastCheckpoint);
             if (s < lastS[ids[i]] || w < lastW[ids[i]] || ss > s || sw > w) monotoneBroken = true;
             (lastS[ids[i]], lastW[ids[i]]) = (s, w);
@@ -238,6 +238,31 @@ contract ForgePoolInvariantTest is Test {
                 if (tag == 0) continue;
                 assertEq(tag, p.sealCount, "only the latest Seal tags heads");
                 assertTrue(s.cohortMask & (1 << j) != 0, "only cohort slots are tagged");
+            }
+        }
+    }
+
+    /// Each active record segment has one Streak anchor (ADR 0007): the anchor is at or before
+    /// the segment's start, and the next segment's anchor is either the same or a reset at the
+    /// boundary. A reset strictly inside an active segment would give it the wrong anchor.
+    function invariant_streakAnchorsAlignWithRecords() public view {
+        for (uint256 i; i < handler.idCount(); ++i) {
+            uint256 id = handler.ids(i);
+            ForgePool.Position memory p = pool.positionOf(id);
+            for (uint256 j; j < 32; ++j) {
+                Lot memory head = pool.lotOf(id, j);
+                if (head.amount != 0 && p.closedAt == 0) assertLe(p.streakStart, head.since, "active head after its anchor");
+                for (uint256 k; k < head.records; ++k) {
+                    Record memory r = pool.historyAt(id, j, k);
+                    if (r.amount == 0) continue;
+                    assertLe(r.streak, r.since, "anchor at or before the segment");
+                    (uint256 nextSince, uint256 nextStreak) = k + 1 < head.records
+                        ? (pool.historyAt(id, j, k + 1).since, pool.historyAt(id, j, k + 1).streak)
+                        : (head.since, p.streakStart);
+                    if (nextStreak != r.streak && p.closedAt == 0) {
+                        assertGe(nextStreak, nextSince, "no Streak reset inside an active segment");
+                    }
+                }
             }
         }
     }

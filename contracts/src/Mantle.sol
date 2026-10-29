@@ -98,6 +98,7 @@ contract Mantle {
     event BaseReleased(uint256 indexed epoch, uint256 amount);
     event AshfallRolled(uint256 indexed epoch, uint256 amount);
     event BurnRecognized(address indexed registrar, BurnCategory indexed category, uint256 amount, uint256 credit, uint256 indexed epoch);
+    event ForfeitBurned(uint256 amount, uint256 indexed epoch);
 
     constructor(
         IEmberMintBurn ember,
@@ -253,6 +254,15 @@ contract Mantle {
         uint256 epoch = epochAt(block.timestamp);
         creditsOf[epoch] += credit;
         emit BurnRecognized(msg.sender, category, amount, credit, epoch);
+    }
+
+    /// @notice The distributor burns forfeited Seal escrow (its own EMBER, approved to the
+    ///         Mantle). A recognized burn: the ledger shrinks. It earns NO Ashfall credit:
+    ///         Seal forfeits are not among the config's Ashfall sources (ADR 0007).
+    function burnForfeited(uint256 amount) external onlyDistributor {
+        EMBER.burnFrom(msg.sender, amount);
+        accounted -= amount;
+        emit ForfeitBurned(amount, epochAt(block.timestamp));
     }
 
     // ── Internals ───────────────────────────────────────────────────────

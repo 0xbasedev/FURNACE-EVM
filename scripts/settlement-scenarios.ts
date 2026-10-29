@@ -3,7 +3,7 @@
 // the settlement state (budgets, pages, measures, credits, claims, balances) per step.
 import { keccak_256 } from '@noble/hashes/sha3.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
-import { DAY } from '../canonical/accounting';
+import { DAY, RAY } from '../canonical/accounting';
 import { Revert, MIN_STAKE_LP } from './forge-model';
 import { SettlementModel, Phase } from './settlement-model';
 
@@ -11,25 +11,30 @@ export const S0 = 1_800_000_000n; // Mantle START in the settlement tests
 const E = 10n ** 18n;
 const HOUR = 3_600n;
 
-export enum K { Open, Deposit, Request, Execute, Cancel, Emergency, Poke, Finalize, OpenEpoch, Advance, RequestClaim, ExecuteClaim, Seal, SettleSeal }
+export enum K {
+  Open, Deposit, Request, Execute, Cancel, Emergency, Poke, Finalize, OpenEpoch, Advance, RequestClaim, ExecuteClaim, Seal, SettleSeal,
+  Burn, BurnForfeits, TakeCapstone, TakeMatchReserve, TakeSealedPot,
+}
 export interface Act { kind: K; time: bigint; pool: number; pos: number; arg: bigint }
 
 /** Word layout mirrored by contracts/test/ForgeEmissions.t.sol::snapshot. */
 function words(m: SettlementModel, positions: number, now: bigint): bigint[] {
   const out: bigint[] = [];
   for (const pool of m.pools) out.push(pool.active, pool.frozen, pool.occupiedAt(now), BigInt(pool.positions.length));
-  out.push(BigInt(m.mantle.length));
-  for (const me of m.mantle) out.push(me.base, me.minted, me.released);
+  out.push(BigInt(m.mantle.length), m.queued, m.accounted);
+  for (const me of m.mantle) out.push(me.base, me.minted, me.released, me.ashfall, me.ashfallMinted, me.ashfallRolled);
+  for (let e = 0; e <= m.epochAt(now); e++) out.push(m.credits.get(e) ?? 0n);
   out.push(BigInt(m.nextOpen), m.emberHeld);
   for (let e = 0; e < m.nextOpen; e++) for (let i = 0; i < 4; i++) {
     const pe = m.epoch(e, i);
     out.push(BigInt(pe.phase), BigInt(pe.positions), BigInt(pe.cursor), BigInt(pe.credited), BigInt(pe.escrowed), pe.target, pe.admitted,
-      pe.bucket, pe.flat, pe.heat, pe.escrow, pe.paid, pe.S, pe.W, pe.C, BigInt(pe.earners.length), BigInt(pe.sealed.length));
+      pe.bucket, pe.flat, pe.heat, pe.escrow, pe.paid, pe.S, pe.W, pe.C, BigInt(pe.earners.length), BigInt(pe.sealed.length),
+      pe.ashfall, pe.ashfallPaid, pe.Q);
     const pr = m.progressOf(e, i);
-    out.push(BigInt(pr.id), BigInt(pr.slot), pr.seg, BigInt(pr.seal), pr.s, pr.w, pr.ss, pr.sw);
+    out.push(BigInt(pr.id), BigInt(pr.slot), pr.seg, BigInt(pr.seal), pr.s, pr.w, pr.ss, pr.sw, pr.q / RAY, pr.q % RAY);
     for (const id of pe.earners) {
       const x = m.measures.get(`${e}:${i}:${id}`)!;
-      out.push(BigInt(id), x.s, x.w, x.b, x.c, x.escrow, BigInt(x.seal));
+      out.push(BigInt(id), x.s, x.w, x.b, x.c, x.escrow, BigInt(x.seal), x.q);
     }
   }
   for (let i = 0; i < 4; i++) for (let id = 1; id <= positions; id++) {
@@ -41,6 +46,7 @@ function words(m: SettlementModel, positions: number, now: bigint): bigint[] {
   }
   out.push(m.burnLane, m.matchReserve, ...m.sealedPot);
   for (let id = 1; id <= positions; id++) out.push(m.emberOf.get(id) ?? 0n);
+  out.push(...m.consumerEmber, 0n); // the registrar burns all it receives
   return out;
 }
 
@@ -70,6 +76,11 @@ function apply(m: SettlementModel, a: Act): { model: SettlementModel; reverted: 
       case K.ExecuteClaim: x.executeClaim(a.pool, a.pos, a.time); break;
       case K.Seal: pool.seal(a.pos, Number(a.arg), a.time); break;
       case K.SettleSeal: x.settleSeal(a.pool, a.pos, Number(a.arg), a.time); break;
+      case K.Burn: x.burnRegistered(a.pos, a.arg, a.time); break;
+      case K.BurnForfeits: x.burnForfeits(); break;
+      case K.TakeCapstone: x.takeCapstone(a.pool, a.pos); break;
+      case K.TakeMatchReserve: x.takeMatchReserve(); break;
+      case K.TakeSealedPot: x.takeSealedPot(a.pool); break;
     }
     return { model: x, reverted: false };
   } catch (e) {
@@ -95,7 +106,12 @@ function record(sc: Scenario) {
     probe.push(String(m.emberHeld), String(m.nextOpen), String(m.mantle.length));
   });
   const credited = [...m.epochs.values()].reduce((n, pe) => n + pe.paid, 0n);
-  return { positions: sc.positions, steps: sc.actions.length, reverts, credited: String(credited), actions: flat, hash, probe };
+  const ashfall = [...m.epochs.values()].reduce((n, pe) => n + pe.ashfallPaid, 0n);
+  const rolled = m.mantle.reduce((n, me) => n + me.ashfallRolled, 0n);
+  return {
+    positions: sc.positions, steps: sc.actions.length, reverts, credited: String(credited), ashfall: String(ashfall), ashfallRolled: String(rolled),
+    actions: flat, hash, probe,
+  };
 }
 
 // ── scripted ──────────────────────────────────────────────────────────────
@@ -212,6 +228,8 @@ scripted.push(
     ...settle(at(30n, 4n), 1, 4, [2]), // a late credit after completion goes straight there
     A(K.Seal, at(30n, 5n), 2, 1, 1n), // SealGap
     A(K.Seal, at(31n, 2n), 2, 1, 1n),
+    A(K.TakeCapstone, at(31n, 3n), 2, 1), // the Capstone pulls the vested escrow
+    A(K.TakeCapstone, at(31n, 3n), 2, 1), // nothing left: pays 0
   ] },
   { name: 'sealForfeitRouted', positions: 2, actions: [
     A(K.Open, at(0n), 0, 1, 600n * E),
@@ -225,6 +243,13 @@ scripted.push(
     A(K.Emergency, at(1n, 18n), 0, 2), // forfeits position 2's Seal
     ...settle(at(2n), 1, 4, [0]), // late credits of forfeited Seals are routed directly
     A(K.SettleSeal, at(2n, 1n), 0, 2, 1n),
+    // The ledgers' consumers: the burn lane burns (no Ashfall credit), the others pull.
+    A(K.BurnForfeits, at(2n, 2n)),
+    A(K.TakeMatchReserve, at(2n, 2n)),
+    A(K.TakeSealedPot, at(2n, 2n), 0),
+    A(K.TakeSealedPot, at(2n, 2n), 1), // empty pot: pays 0
+    A(K.TakeSealedPot, at(2n, 2n), 7), // UnknownPool
+    A(K.BurnForfeits, at(2n, 3n)), // nothing left
   ] },
   { name: 'sealPausedInEpoch', positions: 1, actions: [
     A(K.Open, at(0n), 3, 1, 5n * 10n ** 9n),
@@ -237,6 +262,39 @@ scripted.push(
     ...settle(at(3n), 2, 4, [3]),
   ] },
 );
+{ // Ashfall (ADR 0007). A burn in epoch 31 funds epoch 32's Ashfall, split by pool weight.
+  // Weight = stake·Heat² while the lot's actual participation AND the position's Streak are
+  // both ≥ 30 days. Pool 0: position 1 is eligible all day; position 2's Streak restarted on
+  // day 2 (an executed withdrawal), so it qualifies from day 32 + 9h, then it leaves by
+  // emergency exit before its credit and forfeits its share; position 3 (day 3) is too young
+  // until epoch 33. Pool 2 pays its one eligible staker; pool 3's fresh staker is not
+  // eligible, so its share rolls back; pool 1 is empty. Epoch 33 redistributes the queue.
+  const acts: Act[] = [
+    A(K.Open, at(0n), 0, 1, 1000n * E),
+    A(K.Open, at(0n), 0, 2, 3000n * E),
+    A(K.Open, at(0n), 2, 1, 500n * E),
+    ...settle(at(1n, 1n), 0, 2, [0, 2]),
+    A(K.RequestClaim, at(1n, 2n), 0, 1),
+    A(K.ExecuteClaim, at(2n, 2n), 0, 1),
+    A(K.Request, at(2n, 3n), 0, 2, 297n * E), // ≤10%: 6h
+    A(K.Execute, at(2n, 9n), 0, 2, 1n), // resets position 2's Streak
+    A(K.Open, at(3n), 0, 3, 200n * E),
+    A(K.Burn, at(3n, 1n), 0, 1, 10n ** 30n), // more EMBER than it has: reverts
+  ];
+  for (let e = 1; e <= 30; e++) acts.push(...settle(at(31n), e, 2, [0, 2]));
+  acts.push(
+    A(K.Open, at(31n), 3, 1, 1000n * 10n ** 6n),
+    A(K.Burn, at(31n, 2n), 0, 1, 100n * E), // credits[31] = 50 EMBER
+    ...settle(at(32n, 1n), 31, 2, [0, 2, 3]), // epoch 31's Ashfall comes from epoch 30: none
+    A(K.Emergency, at(33n, 0n, 1800n), 0, 2), // after epoch 32 ended, before its credit
+    ...settle(at(33n, 1n), 32, 3, [0, 2, 3]),
+    ...settle(at(34n, 1n), 33, 3, [0, 2, 3]), // the rolled Ashfall, to the stayers
+    A(K.RequestClaim, at(34n, 2n), 0, 1),
+    A(K.ExecuteClaim, at(35n, 2n), 0, 1),
+    A(K.RequestClaim, at(34n, 2n + 24n), 0, 2), // emergency-exited: still claims its base rewards
+  );
+  scripted.push({ name: 'ashfallHeatSquared', positions: 3, actions: acts });
+}
 { // Due lapses cost page budget (LAPSE_UNITS each): three positions with two lapses due
   // when the page runs; the second cannot fit after the first, so it waits for page two.
   const acts: Act[] = [];
@@ -330,5 +388,7 @@ export function settlementVectors() {
   const all = [...scripted, ...random];
   const scenarios: Record<string, ReturnType<typeof record>> = {};
   for (const sc of all) scenarios[sc.name] = record(sc);
+  const ash = scenarios.ashfallHeatSquared;
+  if (BigInt(ash.ashfall) === 0n || BigInt(ash.ashfallRolled) === 0n) throw new Error('the Ashfall scenario must credit and roll Ashfall');
   return { start: String(S0), names: all.map((s) => s.name), phases: Object.keys(Phase).length / 2, scenarios };
 }

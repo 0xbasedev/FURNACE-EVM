@@ -3,7 +3,7 @@
 // keccak of the full raw state, plus a few readable probes, after every step.
 import { keccak_256 } from '@noble/hashes/sha3.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
-import { DAY } from '../canonical/accounting';
+import { DAY, RAY } from '../canonical/accounting';
 import { ForgeModel, run, MAX_LOTS, MAX_PENDING, MIN_STAKE_LP, TIERS, WINDOW, HORIZON, SealStatus } from './forge-model';
 
 export const T0 = 1_700_000_000n;
@@ -22,12 +22,13 @@ function words(s: Sim, positions: number, now: bigint): bigint[] {
   const out: bigint[] = [];
   for (let id = 1; id <= positions; id++) {
     const p = m.positions[id - 1];
-    if (!p) { out.push(...Array(24 + 5 * MAX_LOTS).fill(0n)); continue; }
+    if (!p) { out.push(...Array(25 + 5 * MAX_LOTS).fill(0n)); continue; }
     out.push(p.S, p.W, BigInt(p.lotCount), BigInt(p.reserved), BigInt(p.pending.length), p.paused, p.streakStart, p.last,
       p.closed ? 1n : 0n, p.ashfallForfeited ? 1n : 0n, p.plan?.start ?? 0n, p.plan?.reference ?? 0n, p.plan?.requested ?? 0n, BigInt(p.nextTicket - 1));
     const seal = p.seals[p.seals.length - 1];
     out.push(p.SS, p.SW, BigInt(p.seals.length), BigInt(seal?.track ?? 0), BigInt(seal?.status ?? SealStatus.None),
       seal?.start ?? 0n, seal?.pausedAt ?? 0n, seal?.pausedSeconds ?? 0n, seal?.endedAt ?? 0n, BigInt(seal?.cohort ?? 0));
+    out.push(p.Q / RAY); // Ashfall weight, accrued independently; the contract's comes from records
     p.lots.forEach((l, j) => out.push(l.amount, l.age, l.part, BigInt(l.heldBy), BigInt(p.heads.get(j)?.seal ?? 0)));
     for (const tid of p.pending) {
       const t = p.tickets.get(tid)!;
@@ -92,7 +93,8 @@ function record(sc: Scenario) {
     const m = sim.model, p1 = m.positions[0];
     probe.push(...[p1?.S ?? 0n, p1?.W ?? 0n, m.active, m.frozen, m.occupiedAt(a.time), p1?.SS ?? 0n].map(String));
   }
-  return { lp: sc.lp, positions: sc.positions, steps: sc.actions.length, reverts, actions: flat, hash, probe };
+  const ashfall = sim.model.positions.filter((p) => p.Q > 0n).length;
+  return { lp: sc.lp, positions: sc.positions, steps: sc.actions.length, reverts, ashfall, actions: flat, hash, probe };
 }
 
 // ── scripted scenarios ───────────────────────────────────────────────────
@@ -309,6 +311,8 @@ export function forgeVectors() {
   const all = [...scripted, ...random];
   const scenarios: Record<string, ReturnType<typeof record>> = {};
   for (const sc of all) scenarios[sc.name] = record(sc);
+  // The Ashfall weight comparison must not be vacuous: most scenarios reach both 30-day minimums.
+  if (Object.values(scenarios).filter((x) => x.ashfall > 0).length < 12) throw new Error('too few scenarios with an Ashfall weight');
   return {
     maxPendingTickets: MAX_PENDING, maxLots: MAX_LOTS, tiers: TIERS.map((t) => [String(t.maxPct), String(t.seconds)]),
     fund: String(FUND), names: all.map((s) => s.name), scenarios,

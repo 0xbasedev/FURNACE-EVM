@@ -23,12 +23,17 @@ struct Lot {
 }
 
 /// @dev A superseded head, valid from `since` until the next record's `since`.
+///      `streak` is the position's Streak start while the head was current. Every Streak
+///      reset (an executed withdrawal) rewrites each active head at the reset instant
+///      first, so an active segment never spans a reset; a head's own anchor is the
+///      position's current `streakStart` (ADR 0007).
 struct Record {
     uint40 since;
     uint96 amount;
     uint32 age;
     uint32 participated;
     uint8 seal;
+    uint40 streak;
 }
 
 enum SealStatus {
@@ -54,11 +59,16 @@ struct Seal {
 /// @dev One slot's measures over an interval. `sealedStakeSeconds` and
 ///      `sealedHeatSeconds` cover the tagged segments, clipped at their Seal's end and
 ///      not yet scaled by the bonus; `seal` is the last tag that contributed.
+///      The Ashfall weight ∫stake·Heat² dt over Ashfall-eligible time (RAY²-seconds) is
+///      kept exactly as ashfallQuotient·RAY + ashfallRemainder (remainder < RAY), so a
+///      position's weight is floored by RAY once, however its records subdivide it.
 struct SlotMeasure {
     uint256 stakeSeconds;
     uint256 heatSeconds;
     uint256 sealedStakeSeconds;
     uint256 sealedHeatSeconds;
+    uint256 ashfallQuotient;
+    uint256 ashfallRemainder;
     uint256 seal;
     uint256 next;
     uint256 used;
@@ -79,6 +89,8 @@ library ForgeMeasures {
         uint256 t1;
         uint256 tag; // cached Seal: its index and end
         uint256 tagEnd;
+        uint256 streak; // the head's Streak anchor
+        bool ashfall; // also measure the Ashfall weight
     }
 
     /// @notice A Seal's end: when it ended, else when it is due if it keeps running.
@@ -104,21 +116,24 @@ library ForgeMeasures {
     }
 
     /// @notice One slot's S = ∫stake dt and W = ∫stake·Heat dt (RAY) over [t0, t1], plus
-    ///         their sealed parts: segment i is history[i] (or the head for i == n) and
-    ///         lasts until the next segment begins. Examines at most `maxSegs` segments
-    ///         from `from` (1-based; 0 = binary-search the first that can overlap t0) and
+    ///         their sealed parts and, if `ashfall`, its Ashfall weight: segment i is
+    ///         history[i] (or the head for i == n, anchored at `streakStart`) and lasts
+    ///         until the next segment begins. Examines at most `maxSegs` segments from
+    ///         `from` (1-based; 0 = binary-search the first that can overlap t0) and
     ///         returns the 1-based resume index `next` when it stops early.
     function slotMeasure(
         mapping(uint256 => Record) storage history,
         Lot storage head,
         mapping(uint256 => Seal) storage seals,
+        uint256 streakStart,
+        bool ashfall,
         uint256 t0,
         uint256 t1,
         uint256 from,
         uint256 maxSegs
     ) public view returns (SlotMeasure memory m) {
         SlotScan memory c;
-        (c.n, c.t0, c.t1) = (head.records, t0, t1);
+        (c.n, c.t0, c.t1, c.streak, c.ashfall) = (head.records, t0, t1, streakStart, ashfall);
         c.i = from != 0 ? from - 1 : _firstSegment(history, c.n, head.since, t0);
         for (; c.i <= c.n; ++c.i) {
             if (m.used == maxSegs) {
@@ -130,11 +145,13 @@ library ForgeMeasures {
         m.done = true;
     }
 
-    /// @notice A position's measures over [t0, t1]: every slot in `mask`, unbounded.
+    /// @notice A position's measures over [t0, t1]: every slot in `mask`, unbounded,
+    ///         with the Ashfall weight.
     function positionMeasure(
         mapping(uint256 => mapping(uint256 => Record)) storage history,
         Lot[32] storage lots,
         mapping(uint256 => Seal) storage seals,
+        uint256 streakStart,
         uint32 mask,
         uint256 t0,
         uint256 t1
@@ -142,12 +159,25 @@ library ForgeMeasures {
         if (t1 <= t0) return total;
         for (uint256 j; j < 32; ++j) {
             if (mask & (1 << j) == 0) continue;
-            SlotMeasure memory m = slotMeasure(history[j], lots[j], seals, t0, t1, 0, type(uint256).max);
+            SlotMeasure memory m =
+                slotMeasure(history[j], lots[j], seals, streakStart, true, t0, t1, 0, type(uint256).max);
             total.stakeSeconds += m.stakeSeconds;
             total.heatSeconds += m.heatSeconds;
             total.sealedStakeSeconds += m.sealedStakeSeconds;
             total.sealedHeatSeconds += m.sealedHeatSeconds;
+            addAshfall(total, m.ashfallQuotient, m.ashfallRemainder);
         }
+    }
+
+    /// @notice Adds q·RAY + r (r < RAY) to `m`'s Ashfall weight, keeping its remainder < RAY.
+    function addAshfall(SlotMeasure memory m, uint256 q, uint256 r) internal pure {
+        r += m.ashfallRemainder;
+        if (r >= P.RAY) {
+            r -= P.RAY;
+            ++q;
+        }
+        m.ashfallQuotient += q;
+        m.ashfallRemainder = r;
     }
 
     /// @dev Adds segment `c.i` if it starts before t1; false once segments pass t1.
@@ -158,8 +188,9 @@ library ForgeMeasures {
         SlotScan memory c,
         SlotMeasure memory m
     ) private view returns (bool) {
-        Record memory r =
-            c.i < c.n ? history[c.i] : Record(head.since, head.amount, head.age, head.participated, head.seal);
+        Record memory r = c.i < c.n
+            ? history[c.i]
+            : Record(head.since, head.amount, head.age, head.participated, head.seal, uint40(c.streak));
         if (r.since >= c.t1) return false;
         ++m.used;
         uint256 segEnd = c.i + 1 < c.n ? history[c.i + 1].since : (c.i + 1 == c.n ? head.since : type(uint256).max);
@@ -171,6 +202,7 @@ library ForgeMeasures {
         uint256 w = uint256(r.amount) * HeatMath.integrateHeat(age, b - a, 0);
         m.stakeSeconds += s;
         m.heatSeconds += w;
+        if (c.ashfall) _ashfallSegment(r, a, b, m);
         if (r.seal == 0) return true;
         if (c.tag != r.seal) (c.tag, c.tagEnd) = (r.seal, sealEnd(seals[r.seal]));
         if (c.tagEnd <= a) return true;
@@ -182,6 +214,20 @@ library ForgeMeasures {
         m.sealedHeatSeconds += w;
         m.seal = r.seal;
         return true;
+    }
+
+    /// @dev Adds a segment's Ashfall weight over [a, b]: ordinary Heat squared (no Seal
+    ///      coefficient) while the lot's actual participation and its position's Streak
+    ///      have both reached their minimums. Participation grows 1:1 while the lot is
+    ///      active, so the eligible part is [e, b] for one start e.
+    function _ashfallSegment(Record memory r, uint256 a, uint256 b, SlotMeasure memory m) private pure {
+        uint256 e = uint256(r.streak) + P.ASHFALL_MIN_STREAK;
+        uint256 part = r.participated + (a - r.since);
+        if (part < P.ASHFALL_MIN_PARTICIPATION) e = Math.max(e, a + (P.ASHFALL_MIN_PARTICIPATION - part));
+        e = Math.max(e, a);
+        if (e >= b) return;
+        uint256 h2 = HeatMath.integrateSquaredHeat(r.age + (e - r.since), b - e, 0);
+        addAshfall(m, Math.mulDiv(r.amount, h2, P.RAY), mulmod(r.amount, h2, P.RAY));
     }
 
     /// @dev The last segment starting at or before t0 (or the first segment).
