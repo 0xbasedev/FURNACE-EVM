@@ -163,6 +163,21 @@ const scripted: Scenario[] = [
     A(Kind.Cancel, at(800n, 1n), 1, 2n), // young lot differs → own slot; capped merges
     A(Kind.Poke, at(801n), 1),
   ] },
+  { name: 'ashfallStreakReset', lp: true, positions: 2, actions: [
+    // The Ashfall weight around a Streak reset (ADR 0007). Position 1 is eligible from day 30.
+    // Its execute at day 40 + 6h resets the Streak: the records pushed then keep the old
+    // anchor (eligible up to the reset), and the head written at the reset carries the new
+    // one, so a record pushed at day 45 (within 30 days of the reset) is not eligible.
+    // Eligibility returns at day 70 + 6h. Position 2 is the unreset control.
+    A(Kind.Open, at(0n), 1, 1000n * E),
+    A(Kind.Open, at(0n), 2, 1000n * E),
+    A(Kind.Request, at(40n), 1, net(1000n * E) / 10n),
+    A(Kind.Execute, at(40n, 6n), 1, 1n),
+    A(Kind.Request, at(45n), 1, 10n * E),
+    A(Kind.Cancel, at(45n, 1n), 1, 2n),
+    A(Kind.Poke, at(75n), 1),
+    A(Kind.Poke, at(75n), 2),
+  ] },
   { name: 'emergencyWithPending', lp: false, positions: 3, actions: [
     A(Kind.Open, at(0n), 1, 777n * E),
     A(Kind.Open, at(1n), 2, 5n),

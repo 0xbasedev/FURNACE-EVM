@@ -67,6 +67,7 @@ contract ForgePoolDifferentialTest is ForgeFixture {
     function test_scenario_lapseLateTouch() public { _replay("lapseLateTouch"); }
     function test_scenario_lapseIdlePool() public { _replay("lapseIdlePool"); }
     function test_scenario_cappedMerge() public { _replay("cappedMerge"); }
+    function test_scenario_ashfallStreakReset() public { _replay("ashfallStreakReset"); }
     function test_scenario_emergencyWithPending() public { _replay("emergencyWithPending"); }
     function test_scenario_capacity16() public { _replay("capacity16"); }
     function test_scenario_capacity17() public { _replay("capacity17"); }
@@ -85,7 +86,7 @@ contract ForgePoolDifferentialTest is ForgeFixture {
 
     /// Every generated scenario has a test above; a new one fails this until added.
     function test_everyScenarioIsReplayed() public view {
-        assertEq(vm.parseJsonStringArray(forgeJson, ".names").length, 21, "add a test_scenario_* for each new scenario");
+        assertEq(vm.parseJsonStringArray(forgeJson, ".names").length, 22, "add a test_scenario_* for each new scenario");
     }
 
     function test_provisionalConstantsMatchModel() public {
