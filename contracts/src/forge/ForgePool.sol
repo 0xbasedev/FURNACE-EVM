@@ -9,7 +9,7 @@ import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/Reentrancy
 import {FurnaceParams as P} from "../generated/FurnaceParams.sol";
 import {HeatMath} from "../libraries/HeatMath.sol";
 import {LapseHeap} from "./LapseHeap.sol";
-import {Lot, Record, ForgeMeasures} from "./ForgeMeasures.sol";
+import {Lot, Record, Seal, SealStatus, SlotMeasure, ForgeMeasures} from "./ForgeMeasures.sol";
 
 /// @title ForgePool
 /// @notice Principal custody for one Forge pool (spec v5.5 §4, §9-§11; ADR 0004).
@@ -29,6 +29,13 @@ import {Lot, Record, ForgeMeasures} from "./ForgeMeasures.sol";
 ///         W = ∫stake·Heat dt over ANY past interval exactly, however late settlement
 ///         runs (ADR 0005). Between records a lot only ages, so syncs write nothing.
 ///         Pool occupancy (time with active principal) is an append-only log.
+///
+///         Seals (ADR 0006): an owner commits the position's current lots to a 30-365
+///         day term for a marginal bonus paid from the Conviction bucket into escrow.
+///         Lots earn under the Seal through a tag in their records; any pending cooling
+///         pauses it and extends the term; an executed withdrawal or emergency exit
+///         forfeits it; completion is back-dated to its due time. None of this adds an
+///         external call to any exit.
 contract ForgePool is ReentrancyGuardTransient {
     using SafeERC20 for IERC20;
     using SafeCast for uint256;
@@ -88,6 +95,7 @@ contract ForgePool is ReentrancyGuardTransient {
         bool ashfallForfeited;
         uint40 openedAt;
         uint40 closedAt; // emergency exit; measures stop here, records stay
+        uint8 sealCount; // the latest Seal is `_seals[id][sealCount]`
         Plan plan;
     }
 
@@ -116,6 +124,7 @@ contract ForgePool is ReentrancyGuardTransient {
     mapping(uint256 id => uint32[MAX_PENDING_TICKETS]) internal _pending;
     mapping(uint256 id => mapping(uint32 ticketId => Ticket)) internal _tickets;
     mapping(uint256 id => mapping(uint32 ticketId => mapping(uint256 slot => Slice))) internal _slices;
+    mapping(uint256 id => mapping(uint256 k => Seal)) internal _seals;
 
     event Opened(uint256 indexed id, address indexed owner);
     event Deposited(uint256 indexed id, uint256 slot, uint256 net, uint256 fee);
@@ -124,6 +133,10 @@ contract ForgePool is ReentrancyGuardTransient {
     event CoolingResumed(uint256 indexed id, uint32 indexed ticketId, Status status, uint256 at);
     event EmergencyExited(uint256 indexed id, uint256 net, uint256 fee);
     event FeesCollected(uint256 deposit, uint256 withdraw, uint256 emergency);
+    event Sealed(uint256 indexed id, uint256 indexed k, uint256 track, uint32 cohortMask);
+    event SealPaused(uint256 indexed id, uint256 indexed k, uint256 at);
+    event SealResumed(uint256 indexed id, uint256 indexed k, uint256 at);
+    event SealEnded(uint256 indexed id, uint256 indexed k, SealStatus status, uint256 at);
 
     error ZeroAddress();
     error UnknownPosition(uint256 id);
@@ -145,6 +158,12 @@ contract ForgePool is ReentrancyGuardTransient {
     error TicketIdOverflow(uint256 id);
     error NotSynced(uint256 id, uint256 lastCheckpoint);
     error BadInterval(uint256 t0, uint256 t1);
+    error UnknownTrack(uint256 track);
+    error CoolingPending(uint256 id);
+    error SealActive(uint256 id, uint256 k);
+    error SealGap(uint256 readyAt);
+    error SealLimit(uint256 id);
+    error NothingToSeal(uint256 id);
 
     constructor(IERC20 stakeToken, bool isLp, address feeCollector) {
         if (address(stakeToken) == address(0) || feeCollector == address(0)) revert ZeroAddress();
@@ -190,7 +209,14 @@ contract ForgePool is ReentrancyGuardTransient {
 
         ticketId = ++p.nextTicketId;
         if (ticketId > type(uint24).max) revert TicketIdOverflow(id);
+        Seal storage seal_ = _seals[id][p.sealCount];
+        bool pauses = p.pendingCount == 0 && seal_.status == SealStatus.Active;
+        if (pauses) seal_.pausedAt = uint40(block.timestamp); // before the freeze: its heads drop the tag
         uint32 sliceMask = _freeze(id, p, ticketId, _proRata(_lots[id], p.usedMask, amount, active));
+        if (pauses) {
+            _retag(id, p, seal_.cohortMask, block.timestamp);
+            emit SealPaused(id, p.sealCount, block.timestamp);
+        }
         _tickets[id][ticketId] = Ticket(uint128(amount), uint40(maturity), Status.Pending, false, sliceMask);
         _pending[id][p.pendingCount++] = ticketId;
 
@@ -212,6 +238,7 @@ contract ForgePool is ReentrancyGuardTransient {
         uint256 w = t.amount;
         uint256 balance = _activeOf(id, p) + _frozenOf(id, p);
 
+        _endSeal(id, p, SealStatus.Forfeited, block.timestamp);
         _releaseSlots(id, p, ticketId, t.sliceMask);
         _dropPending(id, p, ticketId, Status.Executed);
         _haircut(id, p, w, balance);
@@ -253,6 +280,7 @@ contract ForgePool is ReentrancyGuardTransient {
             delete _pending[id][k];
         }
         p.pendingCount = 0;
+        _endSeal(id, p, SealStatus.Forfeited, block.timestamp);
         // Heads and history stay: measures stop at `closedAt`, so no per-slot writes.
         p.usedMask = 0;
         p.reservedSlots = 0;
@@ -267,6 +295,31 @@ contract ForgePool is ReentrancyGuardTransient {
         _afterDecrease(uint40(block.timestamp));
         emit EmergencyExited(id, net, fee);
         STAKE_TOKEN.safeTransfer(p.owner, net);
+    }
+
+    /// @notice Seal the position's current lots for `track`'s term (ADR 0006). Later
+    ///         deposits never join; a pending cooling request pauses the Seal and extends
+    ///         its term; an executed withdrawal or emergency exit forfeits its unvested
+    ///         escrow, never principal. [P] A new Seal starts at least one epoch after the
+    ///         previous one ended, so each epoch's bonus belongs to exactly one Seal.
+    function seal(uint256 id, uint256 track) external nonReentrant returns (uint256 k) {
+        Position storage p = _touchOwned(id);
+        if (p.closedAt != 0) revert Closed(id);
+        if (track >= P.SEAL_TRACK_COUNT) revert UnknownTrack(track);
+        if (p.pendingCount != 0) revert CoolingPending(id);
+        if (p.usedMask == 0) revert NothingToSeal(id);
+        k = p.sealCount;
+        Seal storage last = _seals[id][k];
+        if (last.status == SealStatus.Active) revert SealActive(id, k);
+        if (k != 0 && block.timestamp < uint256(last.endedAt) + P.EPOCH_SECONDS) {
+            revert SealGap(uint256(last.endedAt) + P.EPOCH_SECONDS);
+        }
+        if (k == type(uint8).max) revert SealLimit(id);
+        p.sealCount = uint8(++k);
+        // No ticket is pending, so every used slot is an active lot: the cohort.
+        _seals[id][k] = Seal(uint8(track), SealStatus.Active, uint40(block.timestamp), 0, 0, 0, p.usedMask);
+        _retag(id, p, p.usedMask, block.timestamp);
+        emit Sealed(id, k, track, p.usedMask);
     }
 
     /// @notice Bring a position up to date: resolve due lapses (back-dated) and move its
@@ -316,25 +369,21 @@ contract ForgePool is ReentrancyGuardTransient {
         return _history[id][slot][i];
     }
 
-    /// @notice Number of slots whose records a measure must read (settlement page cost).
-    function historySlots(uint256 id) external view returns (uint256) {
-        return _popcount(_positions[id].historyMask);
-    }
-
     /// @notice Exact time-integrated measures of a position over [t0, t1]:
     ///         S = ∫stake dt and W = ∫stake·Heat dt (RAY), summed over its records.
     ///         Requires the position synced past t1, so every lapse due by t1 has its
     ///         back-dated record. Measures stop at an emergency exit.
-    function epochMeasure(uint256 id, uint256 t0, uint256 t1) external view returns (uint256 s, uint256 w) {
+    ///         Also returns their Seal-tagged parts, clipped at each Seal's end and not yet
+    ///         scaled by its bonus: Ss = ∫sealed stake dt and Ws = ∫sealed stake·Heat dt.
+    function epochMeasure(uint256 id, uint256 t0, uint256 t1)
+        external
+        view
+        returns (uint256 s, uint256 w, uint256 ss, uint256 sw)
+    {
         t1 = _measurable(id, t0, t1);
-        if (t1 <= t0) return (0, 0);
-        uint32 mask = _positions[id].historyMask;
-        for (uint256 j; j < MAX_LOTS; ++j) {
-            if (mask & (1 << j) == 0) continue;
-            (uint256 ds, uint256 dw,,,) = ForgeMeasures.slotMeasure(_history[id][j], _lots[id][j], t0, t1, 0, type(uint256).max);
-            s += ds;
-            w += dw;
-        }
+        SlotMeasure memory m =
+            ForgeMeasures.positionMeasure(_history[id], _lots[id], _seals[id], _positions[id].historyMask, t0, t1);
+        return (m.stakeSeconds, m.heatSeconds, m.sealedStakeSeconds, m.sealedHeatSeconds);
     }
 
     /// @notice One slot's measures over [t0, t1], resumable: examines at most `maxSegs`
@@ -344,11 +393,26 @@ contract ForgePool is ReentrancyGuardTransient {
     function measureSlot(uint256 id, uint256 slot, uint256 t0, uint256 t1, uint256 from, uint256 maxSegs)
         external
         view
-        returns (uint256 s, uint256 w, uint256 next, uint256 used, bool done)
+        returns (SlotMeasure memory m)
     {
         t1 = _measurable(id, t0, t1);
-        if (t1 <= t0) return (0, 0, 0, 0, true);
-        return ForgeMeasures.slotMeasure(_history[id][slot], _lots[id][slot], t0, t1, from, maxSegs);
+        if (t1 <= t0) {
+            m.done = true;
+            return m;
+        }
+        return ForgeMeasures.slotMeasure(_history[id][slot], _lots[id][slot], _seals[id], t0, t1, from, maxSegs);
+    }
+
+    /// @notice Pending tickets whose lapse is due by now: the lapses a sync would resolve.
+    function dueLapses(uint256 id) external view returns (uint256 n) {
+        Position storage p = _positions[id];
+        for (uint256 k; k < p.pendingCount; ++k) {
+            if (_deadline(_tickets[id][_pending[id][k]]) <= block.timestamp) ++n;
+        }
+    }
+
+    function sealOf(uint256 id, uint256 k) external view returns (Seal memory) {
+        return _seals[id][k];
     }
 
     function historyMaskOf(uint256 id) external view returns (uint32) {
@@ -452,6 +516,12 @@ contract ForgePool is ReentrancyGuardTransient {
             _resume(id, p, due, Status.Lapsed, uint40(dueAt), now_);
         }
         _advance(p, now_);
+        // A running Seal has no pending ticket, so no lapse can precede its due time.
+        Seal storage s = _seals[id][p.sealCount];
+        if (s.status == SealStatus.Active && s.pausedAt == 0) {
+            uint256 due = ForgeMeasures.sealEnd(s);
+            if (due <= now_) _endSeal(id, p, SealStatus.Completed, due);
+        }
     }
 
     function _earliestDue(uint256 id, Position storage p, uint40 now_)
@@ -496,20 +566,42 @@ contract ForgePool is ReentrancyGuardTransient {
                 if (lot.amount != 0 && age == s.age && part == s.participated && lot.amount + s.amount <= type(uint96).max) {
                     _setHead(id, p, j, _head(at, lot.amount + s.amount, age, part, 0));
                 } else {
-                    uint256 slot = _firstFree(p.usedMask);
-                    _setHead(id, p, slot, _head(at, s.amount, s.age, s.participated, 0));
-                    p.usedMask |= uint32(1 << slot);
+                    _returnToFreeSlot(id, p, j, s, at);
                 }
                 p.reservedSlots -= 1;
             }
         }
         _dropPending(id, p, ticketId, status);
+        if (p.pendingCount == 0) _unpauseSeal(id, p, at);
         if (!t.poolApplied) {
             _lapses.remove(_key(id, ticketId));
             frozenPrincipal -= t.amount;
             _increaseActive(t.amount, now_);
         }
         emit CoolingResumed(id, ticketId, status, at);
+    }
+
+    /// @dev A slice from slot j takes the first free slot; a sealed cohort's capital stays
+    ///      in the cohort.
+    function _returnToFreeSlot(uint256 id, Position storage p, uint256 j, Slice memory s, uint40 at) internal {
+        uint256 slot = _firstFree(p.usedMask);
+        Seal storage seal_ = _seals[id][p.sealCount];
+        if (seal_.status == SealStatus.Active && seal_.cohortMask & (1 << j) != 0) {
+            seal_.cohortMask |= uint32(1 << slot);
+        }
+        _setHead(id, p, slot, _head(at, s.amount, s.age, s.participated, 0));
+        p.usedMask |= uint32(1 << slot);
+    }
+
+    /// @dev The last pending ticket resolved at `at`: the Seal resumes and its term
+    ///      extends by the pause.
+    function _unpauseSeal(uint256 id, Position storage p, uint40 at) internal {
+        Seal storage s = _seals[id][p.sealCount];
+        if (s.status != SealStatus.Active) return;
+        s.pausedSeconds += uint40(at - s.pausedAt);
+        s.pausedAt = 0;
+        _retag(id, p, s.cohortMask, at);
+        emit SealResumed(id, p.sealCount, at);
     }
 
     function _dropPending(uint256 id, Position storage p, uint32 ticketId, Status status) internal {
@@ -584,8 +676,9 @@ contract ForgePool is ReentrancyGuardTransient {
         Lot memory head = _lots[id][slot];
         uint32 bit = uint32(1 << slot);
         next.records = head.records;
+        next.seal = _tag(id, p, slot);
         if (p.historyMask & bit != 0 && head.since != next.since) {
-            _history[id][slot][head.records] = Record(head.since, head.amount, head.age, head.participated);
+            _history[id][slot][head.records] = Record(head.since, head.amount, head.age, head.participated, head.seal);
             next.records = head.records + 1;
         }
         _lots[id][slot] = next;
@@ -597,7 +690,47 @@ contract ForgePool is ReentrancyGuardTransient {
         pure
         returns (Lot memory)
     {
-        return Lot(uint40(since), amount.toUint96(), uint32(age), uint32(part), uint24(heldBy), 0);
+        return Lot(uint40(since), amount.toUint96(), uint32(age), uint32(part), uint24(heldBy), 0, 0);
+    }
+
+    // ── Seals ─────────────────────────────────────────────────────────────
+
+    /// @dev The tag a head written now carries: the latest Seal while it runs, for its
+    ///      cohort's slots; otherwise 0.
+    function _tag(uint256 id, Position storage p, uint256 slot) internal view returns (uint8) {
+        uint256 k = p.sealCount;
+        if (k == 0) return 0;
+        Seal storage s = _seals[id][k];
+        if (s.status != SealStatus.Active || s.pausedAt != 0 || s.cohortMask & (1 << slot) == 0) return 0;
+        return uint8(k);
+    }
+
+    /// @dev Rewrite at `t` every active lot in `mask` whose tag is stale (a Seal starts,
+    ///      pauses or resumes). Heads already written at `t` are overwritten in place.
+    function _retag(uint256 id, Position storage p, uint32 mask, uint256 t) internal {
+        Lot[MAX_LOTS] storage lots = _lots[id];
+        for (uint256 j; j < MAX_LOTS; ++j) {
+            if (mask & (1 << j) == 0) continue;
+            Lot memory lot = lots[j];
+            if (lot.amount == 0 || lot.seal == _tag(id, p, j)) continue;
+            (uint256 age, uint256 part) = _lotAt(lot, t);
+            _setHead(id, p, j, _head(t, lot.amount, age, part, lot.heldBy));
+        }
+    }
+
+    /// @dev Complete (at its due time) or forfeit the running or paused Seal. No writes to
+    ///      lots: measures clip every tagged segment at `endedAt`.
+    function _endSeal(uint256 id, Position storage p, SealStatus status, uint256 at) internal {
+        uint256 k = p.sealCount;
+        Seal storage s = _seals[id][k];
+        if (s.status != SealStatus.Active) return;
+        if (s.pausedAt != 0) {
+            s.pausedSeconds += uint40(at - s.pausedAt);
+            s.pausedAt = 0;
+        }
+        s.status = status;
+        s.endedAt = uint40(at);
+        emit SealEnded(id, k, status, at);
     }
 
     /// @dev Checks a measure interval and clips it at an emergency exit.

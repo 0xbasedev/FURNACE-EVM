@@ -11,7 +11,7 @@ export const S0 = 1_800_000_000n; // Mantle START in the settlement tests
 const E = 10n ** 18n;
 const HOUR = 3_600n;
 
-export enum K { Open, Deposit, Request, Execute, Cancel, Emergency, Poke, Finalize, OpenEpoch, Advance, RequestClaim, ExecuteClaim }
+export enum K { Open, Deposit, Request, Execute, Cancel, Emergency, Poke, Finalize, OpenEpoch, Advance, RequestClaim, ExecuteClaim, Seal, SettleSeal }
 export interface Act { kind: K; time: bigint; pool: number; pos: number; arg: bigint }
 
 /** Word layout mirrored by contracts/test/ForgeEmissions.t.sol::snapshot. */
@@ -23,16 +23,23 @@ function words(m: SettlementModel, positions: number, now: bigint): bigint[] {
   out.push(BigInt(m.nextOpen), m.emberHeld);
   for (let e = 0; e < m.nextOpen; e++) for (let i = 0; i < 4; i++) {
     const pe = m.epoch(e, i);
-    out.push(BigInt(pe.phase), BigInt(pe.positions), BigInt(pe.cursor), BigInt(pe.credited), pe.target, pe.admitted,
-      pe.flat, pe.heat, pe.paid, pe.S, pe.W, BigInt(pe.earners.length));
+    out.push(BigInt(pe.phase), BigInt(pe.positions), BigInt(pe.cursor), BigInt(pe.credited), BigInt(pe.escrowed), pe.target, pe.admitted,
+      pe.bucket, pe.flat, pe.heat, pe.escrow, pe.paid, pe.S, pe.W, pe.C, BigInt(pe.earners.length), BigInt(pe.sealed.length));
     const pr = m.progressOf(e, i);
-    out.push(BigInt(pr.id), BigInt(pr.slot), pr.seg, pr.s, pr.w);
-    for (const id of pe.earners) { const x = m.measures.get(`${e}:${i}:${id}`)!; out.push(BigInt(id), x.s, x.w); }
+    out.push(BigInt(pr.id), BigInt(pr.slot), pr.seg, BigInt(pr.seal), pr.s, pr.w, pr.ss, pr.sw);
+    for (const id of pe.earners) {
+      const x = m.measures.get(`${e}:${i}:${id}`)!;
+      out.push(BigInt(id), x.s, x.w, x.b, x.c, x.escrow, BigInt(x.seal));
+    }
   }
   for (let i = 0; i < 4; i++) for (let id = 1; id <= positions; id++) {
     const c = m.claims.get(`${i}:${id}`);
-    out.push(m.unclaimed.get(`${i}:${id}`) ?? 0n, c?.amount ?? 0n, c?.maturesAt ?? 0n);
+    const seals = m.pools[i].positions[id - 1]?.seals.length ?? 0;
+    out.push(m.unclaimed.get(`${i}:${id}`) ?? 0n, c?.amount ?? 0n, c?.maturesAt ?? 0n, m.capstoneOwed.get(`${i}:${id}`) ?? 0n,
+      BigInt(seals), BigInt(m.sealStatus(i, id, seals, now)));
+    for (let k = 1; k <= seals; k++) out.push(m.sealEscrow.get(`${i}:${id}:${k}`) ?? 0n);
   }
+  out.push(m.burnLane, m.matchReserve, ...m.sealedPot);
   for (let id = 1; id <= positions; id++) out.push(m.emberOf.get(id) ?? 0n);
   return out;
 }
@@ -61,6 +68,8 @@ function apply(m: SettlementModel, a: Act): { model: SettlementModel; reverted: 
       case K.Advance: x.advance(Number(a.arg), a.pool, a.time); break;
       case K.RequestClaim: x.requestClaim(a.pool, a.pos, a.time); break;
       case K.ExecuteClaim: x.executeClaim(a.pool, a.pos, a.time); break;
+      case K.Seal: pool.seal(a.pos, Number(a.arg), a.time); break;
+      case K.SettleSeal: x.settleSeal(a.pool, a.pos, Number(a.arg), a.time); break;
     }
     return { model: x, reverted: false };
   } catch (e) {
@@ -93,9 +102,9 @@ function record(sc: Scenario) {
 const at = (d: bigint, h = 0n, s = 0n) => S0 + d * DAY + h * HOUR + s;
 const A = (kind: K, time: bigint, pool = 0, pos = 0, arg = 0n): Act => ({ kind, time, pool, pos, arg });
 /** Finalize epoch e, open it, and advance every pool until it is done. */
-function settle(time: bigint, e: number, pages = 3): Act[] {
+function settle(time: bigint, e: number, pages = 3, pools = [0, 1, 2, 3]): Act[] {
   const out = [A(K.Finalize, time), A(K.OpenEpoch, time)];
-  for (let i = 0; i < 4; i++) for (let k = 0; k < pages; k++) out.push(A(K.Advance, time, i, 0, BigInt(e)));
+  for (const i of pools) for (let k = 0; k < pages; k++) out.push(A(K.Advance, time, i, 0, BigInt(e)));
   return out;
 }
 
@@ -172,6 +181,71 @@ const scripted: Scenario[] = [
     A(K.RequestClaim, at(3n, 2n), 2, 1), // nothing left
   ] },
 ];
+// ── Seals (ADR 0006) ─────────────────────────────────────────────────────
+scripted.push(
+  { name: 'sealCapBinds', positions: 2, actions: [
+    // A small 30-day sealer beside a large unsealed staker: its escrow is capped at the
+    // additive worth of +0.15 in the Heat budget, and the rest of the bucket returns.
+    A(K.Open, at(0n), 0, 1, 100n * E),
+    A(K.Open, at(0n), 0, 2, 900n * E),
+    A(K.Seal, at(0n, 1n), 0, 1, 0n),
+    ...settle(at(1n), 0, 4, [0]), // measure, escrow, credit
+    A(K.SettleSeal, at(1n, 1n), 0, 1, 1n), // still running: SealNotEnded
+    ...settle(at(2n), 1, 4, [0]),
+    A(K.RequestClaim, at(2n, 1n), 0, 1), // only the ordinary part is claimable
+    A(K.ExecuteClaim, at(3n, 1n), 0, 1),
+  ] },
+  { name: 'sealCandidateBinds', positions: 2, actions: [
+    // Two sealers alone in a pool: each takes its C-share of the bucket, under its cap.
+    A(K.Open, at(0n), 1, 1, 1000n * E),
+    A(K.Open, at(0n), 1, 2, 400n * E),
+    A(K.Seal, at(0n), 1, 1, 3n),
+    A(K.Seal, at(0n), 1, 2, 1n),
+    ...settle(at(1n), 0, 4, [1]),
+  ] },
+  { name: 'sealVestLate', positions: 1, actions: [
+    A(K.Open, at(0n), 2, 1, 500n * E),
+    A(K.Seal, at(0n, 2n), 2, 1, 0n), // 30 days: due day 30 + 2h
+    ...settle(at(1n), 0, 4, [2]), // credited while running: locked in sealEscrow
+    A(K.SettleSeal, at(30n, 3n), 2, 1, 1n), // completed by time: escrow → Capstone ledger
+    A(K.SettleSeal, at(30n, 3n), 2, 1, 1n), // nothing left
+    ...settle(at(30n, 4n), 1, 4, [2]), // a late credit after completion goes straight there
+    A(K.Seal, at(30n, 5n), 2, 1, 1n), // SealGap
+    A(K.Seal, at(31n, 2n), 2, 1, 1n),
+  ] },
+  { name: 'sealForfeitRouted', positions: 2, actions: [
+    A(K.Open, at(0n), 0, 1, 600n * E),
+    A(K.Open, at(0n), 0, 2, 600n * E),
+    A(K.Seal, at(0n), 0, 1, 2n),
+    A(K.Seal, at(0n), 0, 2, 1n),
+    ...settle(at(1n), 0, 4, [0]),
+    A(K.Request, at(1n, 6n), 0, 1, 10n * E), // pauses position 1's Seal
+    A(K.Execute, at(1n, 12n), 0, 1, 1n), // forfeits it
+    A(K.SettleSeal, at(1n, 13n), 0, 1, 1n), // routed 50/25/25
+    A(K.Emergency, at(1n, 18n), 0, 2), // forfeits position 2's Seal
+    ...settle(at(2n), 1, 4, [0]), // late credits of forfeited Seals are routed directly
+    A(K.SettleSeal, at(2n, 1n), 0, 2, 1n),
+  ] },
+  { name: 'sealPausedInEpoch', positions: 1, actions: [
+    A(K.Open, at(0n), 3, 1, 5n * 10n ** 9n),
+    A(K.Seal, at(0n), 3, 1, 1n),
+    A(K.Request, at(0n, 4n), 3, 1, 10n ** 8n), // paused from 4h ...
+    A(K.Cancel, at(0n, 10n), 3, 1, 1n), // ... to 10h: no sealed measure in between
+    A(K.Request, at(0n, 20n), 3, 1, 10n ** 8n), // 6h tier; lapses at +30h (inside epoch 1)
+    ...settle(at(3n), 0, 4, [3]),
+    ...settle(at(3n), 1, 4, [3]),
+    ...settle(at(3n), 2, 4, [3]),
+  ] },
+);
+{ // Due lapses cost page budget (LAPSE_UNITS each): three positions with two lapses due
+  // when the page runs; the second cannot fit after the first, so it waits for page two.
+  const acts: Act[] = [];
+  for (let id = 1; id <= 3; id++) acts.push(A(K.Open, at(0n), 0, id, 100n * E));
+  for (let id = 1; id <= 3; id++) acts.push(A(K.Request, at(0n, 1n), 0, id, 5n * E)); // 6h tier: lapses at +30h
+  for (let id = 1; id <= 3; id++) acts.push(A(K.Request, at(0n, 2n), 0, id, 4n * E));
+  acts.push(...settle(at(2n, 12n), 0, 5, [0]));
+  scripted.push({ name: 'lapseBudget', positions: 3, actions: acts });
+}
 { // Record spam: 1-wei request + cancel each second piles ~300 records into one slot,
   // more than one page's segment budget; the position resumes across pages.
   const acts: Act[] = [A(K.Open, at(0n), 0, 1, 100n * E), A(K.Open, at(0n), 0, 2, 50n * E), A(K.Deposit, at(0n, 1n), 0, 1, 100n * E)];
@@ -216,8 +290,9 @@ function randomScenario(name: string, seed: bigint, steps: number): Scenario {
     let work: [number, number] | undefined;
     for (let e = 0; e < m.nextOpen && !work; e++) for (let j = 0; j < 4 && !work; j++) {
       const ph = m.epoch(e, j).phase;
-      if (ph === Phase.Measuring || ph === Phase.Crediting) work = [e, j];
+      if (ph === Phase.Measuring || ph === Phase.Escrowing || ph === Phase.Crediting) work = [e, j];
     }
+    const locked = [...m.sealEscrow.entries()].filter(([, v]) => v > 0n).map(([k]) => k.split(':').map(Number));
     const owed = [...m.unclaimed.entries()].filter(([, v]) => v > 0n).map(([k]) => k.split(':').map(Number));
     const waiting = [...m.claims.keys()].map((k) => k.split(':').map(Number));
     if (roll < 10) a = A(K.Finalize, now);
@@ -226,6 +301,7 @@ function randomScenario(name: string, seed: bigint, steps: number): Scenario {
     else if (roll < 39) a = A(K.Advance, now, i, 0, BigInt(m.nextOpen + 1)); // not open: reverts
     else if (roll < 45 && owed.length) { const [pi, id] = owed[Number(rnd(BigInt(owed.length)))]; a = A(K.RequestClaim, now, pi, id); }
     else if (roll < 51 && waiting.length) { const [pi, id] = waiting[Number(rnd(BigInt(waiting.length)))]; a = A(K.ExecuteClaim, now, pi, id); }
+    else if (roll < 54 && locked.length) { const [pi, id, k] = locked[Number(rnd(BigInt(locked.length)))]; a = A(K.SettleSeal, now, pi, id, BigInt(k)); }
     else if (pos > opened) a = A(K.Open, now, i, opened + 1, (i === 3 ? 10n ** 6n : MIN_STAKE_LP * 2n) + rnd(500n * E));
     else {
       const p = pool.positions[pos - 1];
@@ -240,6 +316,7 @@ function randomScenario(name: string, seed: bigint, steps: number): Scenario {
         a = A(K.Execute, now, i, pos, BigInt(t.id));
       } else if (r2 < 82 && live.length) a = A(K.Cancel, now, i, pos, BigInt(live[0].id));
       else if (r2 < 83) a = A(K.Emergency, now, i, pos);
+      else if (r2 < 93) a = A(K.Seal, now, i, pos, rnd(4n));
       else a = A(K.Poke, now, i, pos);
     }
     acts.push(a);

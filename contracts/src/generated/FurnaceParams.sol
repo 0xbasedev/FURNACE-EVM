@@ -84,6 +84,20 @@ library FurnaceParams {
     uint256 internal constant FORGE_POOL_3_ALLOC_POINTS = 200; // usdc-single
     bool internal constant FORGE_POOL_3_IS_LP = false;
 
+    // ── Seals: Conviction tracks, escrow and forfeiture (spec v5.5 §10) ──
+    uint256 internal constant SEAL_TRACK_COUNT = 4;
+    uint256 internal constant SEAL_TRACK_0_SECONDS = 30 days; // Ember
+    uint256 internal constant SEAL_TRACK_0_BONUS_RAY = 150000000000000000000000000; // +0.15
+    uint256 internal constant SEAL_TRACK_1_SECONDS = 90 days; // Forge
+    uint256 internal constant SEAL_TRACK_1_BONUS_RAY = 250000000000000000000000000; // +0.25
+    uint256 internal constant SEAL_TRACK_2_SECONDS = 180 days; // Kiln
+    uint256 internal constant SEAL_TRACK_2_BONUS_RAY = 350000000000000000000000000; // +0.35
+    uint256 internal constant SEAL_TRACK_3_SECONDS = 365 days; // Eternal
+    uint256 internal constant SEAL_TRACK_3_BONUS_RAY = 500000000000000000000000000; // +0.5
+    uint256 internal constant SEAL_FORFEIT_BURN_PCT = 50;
+    uint256 internal constant SEAL_FORFEIT_MATCH_RESERVE_PCT = 25;
+    uint256 internal constant SEAL_FORFEIT_SEALED_POT_PCT = 25;
+
     // ── Deterministic deployment registry (CREATE3). PROVISIONAL while the deployer is 0x1111111111111111111111111111111111111111 ──
     //    Only MINED entries become constants; unmined modules are constructor/initializer inputs.
     address internal constant CREATEX = 0xba5Ed099633D3B313e4D5F7bdc1305d3c28ba5Ed;

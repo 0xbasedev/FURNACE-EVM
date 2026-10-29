@@ -76,7 +76,9 @@ contract ForgeEmissionsDifferentialTest is SettlementFixture {
         OpenEpoch,
         Advance,
         RequestClaim,
-        ExecuteClaim
+        ExecuteClaim,
+        Seal,
+        SettleSeal
     }
 
     string json;
@@ -93,12 +95,18 @@ contract ForgeEmissionsDifferentialTest is SettlementFixture {
     function test_settle_claimSnapshot() public { _replay("claimSnapshot"); }
     function test_settle_pagedLots() public { _replay("pagedLots"); }
     function test_settle_recordSpam() public { _replay("recordSpam"); }
+    function test_settle_lapseBudget() public { _replay("lapseBudget"); }
+    function test_settle_sealCapBinds() public { _replay("sealCapBinds"); }
+    function test_settle_sealCandidateBinds() public { _replay("sealCandidateBinds"); }
+    function test_settle_sealVestLate() public { _replay("sealVestLate"); }
+    function test_settle_sealForfeitRouted() public { _replay("sealForfeitRouted"); }
+    function test_settle_sealPausedInEpoch() public { _replay("sealPausedInEpoch"); }
     function test_settle_random0() public { _replay("random0"); }
     function test_settle_random1() public { _replay("random1"); }
     function test_settle_random2() public { _replay("random2"); }
 
     function test_everySettlementScenarioIsReplayed() public view {
-        assertEq(vm.parseJsonStringArray(json, ".names").length, 11, "add a test_settle_* for each new scenario");
+        assertEq(vm.parseJsonStringArray(json, ".names").length, 17, "add a test_settle_* for each new scenario");
     }
 
     function _uints(string memory key) internal view returns (uint256[] memory out) {
@@ -139,6 +147,8 @@ contract ForgeEmissionsDifferentialTest is SettlementFixture {
             emissions.openEpoch();
         } else if (kind == K.Advance) {
             emissions.advance(arg, poolIdx);
+        } else if (kind == K.SettleSeal) {
+            emissions.settleSeal(poolIdx, pos, arg);
         } else {
             vm.prank(_user(pos));
             if (kind == K.Open) assertEq(pool.open(arg), pos, "position id");
@@ -149,6 +159,7 @@ contract ForgeEmissionsDifferentialTest is SettlementFixture {
             else if (kind == K.Emergency) pool.emergencyExit(pos);
             else if (kind == K.Poke) pool.poke(pos);
             else if (kind == K.RequestClaim) emissions.requestClaim(poolIdx, pos);
+            else if (kind == K.Seal) pool.seal(pos, arg);
             else emissions.executeClaim(poolIdx, pos);
         }
     }
@@ -182,11 +193,12 @@ contract ForgeEmissionsDifferentialTest is SettlementFixture {
         }
         for (uint256 i; i < 4; ++i) {
             for (uint256 id = 1; id <= positions; ++id) {
-                ForgeEmissions.Claim memory c = emissions.claimOf(i, id);
-                (w[n], w[n + 1], w[n + 2]) = (emissions.unclaimed(i, id), c.amount, c.maturesAt);
-                n += 3;
+                n = _pushHolder(w, n, i, id);
             }
         }
+        (w[n], w[n + 1]) = (emissions.burnLane(), emissions.matchReserve());
+        n += 2;
+        for (uint256 i; i < 4; ++i) w[n++] = emissions.sealedPot(i);
         for (uint256 id = 1; id <= positions; ++id) w[n++] = ember.balanceOf(_user(id));
         assembly ("memory-safe") {
             mstore(w, n)
@@ -194,41 +206,60 @@ contract ForgeEmissionsDifferentialTest is SettlementFixture {
         return keccak256(abi.encodePacked(w));
     }
 
+    function _pushHolder(uint256[] memory w, uint256 n, uint256 i, uint256 id) internal view returns (uint256) {
+        ForgeEmissions.Claim memory c = emissions.claimOf(i, id);
+        uint256 seals = pools[i].positionOf(id).sealCount;
+        (w[n], w[n + 1], w[n + 2]) = (emissions.unclaimed(i, id), c.amount, c.maturesAt);
+        (w[n + 3], w[n + 4], w[n + 5]) = (emissions.capstoneOwed(i, id), seals, uint256(emissions.sealStatus(i, id, seals)));
+        n += 6;
+        for (uint256 k = 1; k <= seals; ++k) w[n++] = emissions.sealEscrow(i, id, k);
+        return n;
+    }
+
     function _pushProgress(uint256[] memory w, uint256 n, uint256 e, uint256 i) internal view returns (uint256) {
         ForgeEmissions.Progress memory pr = emissions.progressOf(e, i);
-        w[n] = pr.id;
-        w[n + 1] = pr.slot;
-        w[n + 2] = pr.seg;
-        w[n + 3] = pr.stakeSeconds;
-        w[n + 4] = pr.heatSeconds;
-        return n + 5;
+        (w[n], w[n + 1], w[n + 2], w[n + 3]) = (pr.id, pr.slot, pr.seg, pr.seal);
+        (w[n + 4], w[n + 5], w[n + 6], w[n + 7]) =
+            (pr.stakeSeconds, pr.heatSeconds, pr.sealedStakeSeconds, pr.sealedHeatSeconds);
+        return n + 8;
     }
 
     function _pushPoolEpoch(uint256[] memory w, uint256 n, uint256 e, uint256 i) internal view returns (uint256) {
         ForgeEmissions.PoolEpoch memory pe = emissions.poolEpoch(e, i);
-        uint256[12] memory head = [
+        uint256[17] memory head = [
             uint256(pe.phase),
             pe.positions,
             pe.cursor,
             pe.credited,
+            pe.escrowed,
             pe.target,
             pe.admitted,
+            pe.bucket,
             pe.flat,
             pe.heat,
+            pe.escrow,
             pe.paid,
             pe.stakeSeconds,
             pe.heatSeconds,
-            emissions.earnerCount(e, i)
+            pe.candidateSeconds,
+            emissions.earnerCount(e, i),
+            emissions.sealedEarnerCount(e, i)
         ];
-        for (uint256 k; k < 12; ++k) w[n++] = head[k];
+        for (uint256 k; k < 17; ++k) w[n++] = head[k];
         n = _pushProgress(w, n, e, i);
-        for (uint256 k; k < head[11]; ++k) {
-            uint256 id = emissions.earnerAt(e, i, k);
-            ForgeEmissions.Measure memory m = emissions.measureOf(e, i, id);
-            (w[n], w[n + 1], w[n + 2]) = (id, m.stakeSeconds, m.heatSeconds);
-            n += 3;
-        }
+        for (uint256 k; k < head[15]; ++k) n = _pushMeasure(w, n, e, i, emissions.earnerAt(e, i, k));
         return n;
+    }
+
+    function _pushMeasure(uint256[] memory w, uint256 n, uint256 e, uint256 i, uint256 id)
+        internal
+        view
+        returns (uint256)
+    {
+        ForgeEmissions.Measure memory m = emissions.measureOf(e, i, id);
+        (w[n], w[n + 1], w[n + 2], w[n + 3]) = (id, m.stakeSeconds, m.heatSeconds, m.sealSeconds);
+        (w[n + 4], w[n + 5], w[n + 6]) = (m.candidateSeconds, m.escrow, m.seal);
+        return n + 7;
     }
 }
 
@@ -250,7 +281,7 @@ contract ForgeEmissionsTest is SettlementFixture {
         for (uint256 i; i < 4; ++i) {
             while (true) {
                 ForgeEmissions.Phase ph = emissions.poolEpoch(e, i).phase;
-                if (ph != ForgeEmissions.Phase.Measuring && ph != ForgeEmissions.Phase.Crediting) break;
+                if (ph == ForgeEmissions.Phase.None || ph == ForgeEmissions.Phase.Done) break;
                 emissions.advance(e, i);
             }
         }

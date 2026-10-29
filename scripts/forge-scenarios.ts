@@ -4,14 +4,14 @@
 import { keccak_256 } from '@noble/hashes/sha3.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
 import { DAY } from '../canonical/accounting';
-import { ForgeModel, run, MAX_LOTS, MAX_PENDING, MIN_STAKE_LP, TIERS, WINDOW, HORIZON } from './forge-model';
+import { ForgeModel, run, MAX_LOTS, MAX_PENDING, MIN_STAKE_LP, TIERS, WINDOW, HORIZON, SealStatus } from './forge-model';
 
 export const T0 = 1_700_000_000n;
 export const FUND = 10n ** 30n;
 const E = 10n ** 18n;
 const HOUR = 3_600n;
 
-export enum Kind { Open, Deposit, Request, Execute, Cancel, Emergency, Poke, Collect }
+export enum Kind { Open, Deposit, Request, Execute, Cancel, Emergency, Poke, Collect, Seal }
 export interface Action { kind: Kind; time: bigint; pos: number; arg: bigint }
 
 interface Sim { model: ForgeModel; users: bigint[]; collector: bigint }
@@ -22,10 +22,13 @@ function words(s: Sim, positions: number, now: bigint): bigint[] {
   const out: bigint[] = [];
   for (let id = 1; id <= positions; id++) {
     const p = m.positions[id - 1];
-    if (!p) { out.push(...Array(14 + 4 * MAX_LOTS).fill(0n)); continue; }
+    if (!p) { out.push(...Array(24 + 5 * MAX_LOTS).fill(0n)); continue; }
     out.push(p.S, p.W, BigInt(p.lotCount), BigInt(p.reserved), BigInt(p.pending.length), p.paused, p.streakStart, p.last,
       p.closed ? 1n : 0n, p.ashfallForfeited ? 1n : 0n, p.plan?.start ?? 0n, p.plan?.reference ?? 0n, p.plan?.requested ?? 0n, BigInt(p.nextTicket - 1));
-    for (const l of p.lots) out.push(l.amount, l.age, l.part, BigInt(l.heldBy));
+    const seal = p.seals[p.seals.length - 1];
+    out.push(p.SS, p.SW, BigInt(p.seals.length), BigInt(seal?.track ?? 0), BigInt(seal?.status ?? SealStatus.None),
+      seal?.start ?? 0n, seal?.pausedAt ?? 0n, seal?.pausedSeconds ?? 0n, seal?.endedAt ?? 0n, BigInt(seal?.cohort ?? 0));
+    p.lots.forEach((l, j) => out.push(l.amount, l.age, l.part, BigInt(l.heldBy), BigInt(p.heads.get(j)?.seal ?? 0)));
     for (const tid of p.pending) {
       const t = p.tickets.get(tid)!;
       out.push(BigInt(tid), t.amount, t.maturity, 1n, t.poolApplied ? 1n : 0n);
@@ -59,6 +62,7 @@ function apply(s: Sim, a: Action): { sim: Sim; reverted: boolean } {
       case Kind.Emergency: u[a.pos - 1] += m.emergency(a.pos, a.time); return;
       case Kind.Poke: m.poke(a.pos, a.time); return;
       case Kind.Collect: return;
+      case Kind.Seal: m.seal(a.pos, Number(a.arg), a.time); return;
     }
   });
   if (r.reverted) return { sim: s, reverted: true };
@@ -86,7 +90,7 @@ function record(sc: Scenario) {
     flat.push(String(a.kind), String(a.time), String(a.pos), String(a.arg), r.reverted ? '1' : '0');
     hash.push(hashWords(words(sim, sc.positions, a.time)));
     const m = sim.model, p1 = m.positions[0];
-    probe.push(...[p1?.S ?? 0n, p1?.W ?? 0n, m.active, m.frozen, m.occupiedAt(a.time)].map(String));
+    probe.push(...[p1?.S ?? 0n, p1?.W ?? 0n, m.active, m.frozen, m.occupiedAt(a.time), p1?.SS ?? 0n].map(String));
   }
   return { lp: sc.lp, positions: sc.positions, steps: sc.actions.length, reverts, actions: flat, hash, probe };
 }
@@ -170,6 +174,64 @@ const scripted: Scenario[] = [
     A(Kind.Collect, at(11n), 0),
   ] },
 ];
+// ── Seals (ADR 0006) ─────────────────────────────────────────────────────
+scripted.push(
+  { name: 'sealPauseExtend', lp: true, positions: 1, actions: [
+    A(Kind.Open, at(0n), 1, 1000n * E),
+    A(Kind.Seal, at(1n), 1, 0n), // 30-day Ember track: the cohort is the one lot
+    A(Kind.Deposit, at(2n), 1, 500n * E), // a top-up never joins
+    A(Kind.Request, at(5n), 1, 100n * E), // pauses the Seal
+    A(Kind.Seal, at(5n, 1n), 1, 1n), // CoolingPending
+    A(Kind.Cancel, at(6n), 1, 1n), // resumes: the term extends by one day
+    A(Kind.Poke, at(31n, 12n), 1), // not due yet (due on day 32)
+    A(Kind.Seal, at(31n, 13n), 1, 2n), // SealActive
+    A(Kind.Poke, at(33n), 1), // completed, back-dated to day 32
+    A(Kind.Seal, at(33n), 1, 3n), // SealGap: needs one epoch after the end
+    A(Kind.Seal, at(34n), 1, 3n), // a new 365-day Seal over both lots
+    A(Kind.Poke, at(60n), 1),
+  ] },
+  { name: 'sealLapseUnpause', lp: true, positions: 1, actions: [
+    A(Kind.Open, at(0n), 1, 1000n * E),
+    A(Kind.Seal, at(0n), 1, 0n),
+    A(Kind.Request, at(29n), 1, net(1000n * E)), // 100% → 72h, lapses at +96h (day 33)
+    A(Kind.Poke, at(40n), 1), // lapse back-dated to day 33; due day 34; completed then
+    A(Kind.Poke, at(41n), 1),
+  ] },
+  { name: 'sealForfeitExecute', lp: true, positions: 1, actions: [
+    A(Kind.Open, at(0n), 1, 1000n * E),
+    A(Kind.Seal, at(1n), 1, 1n),
+    A(Kind.Deposit, at(3n), 1, 300n * E),
+    A(Kind.Request, at(10n), 1, 50n * E),
+    A(Kind.Execute, at(10n, 6n), 1, 1n), // forfeits the Seal
+    A(Kind.Seal, at(10n, 7n), 1, 0n), // SealGap: one epoch after the forfeit
+    A(Kind.Seal, at(11n, 6n), 1, 0n), // a fresh Seal over every lot, top-up included
+    A(Kind.Poke, at(20n), 1),
+  ] },
+  { name: 'sealCohortJoin', lp: true, positions: 1, actions: [
+    A(Kind.Open, at(0n), 1, 1000n * E),
+    A(Kind.Deposit, at(0n, 1n), 1, 1000n * E),
+    A(Kind.Seal, at(1n), 1, 2n), // cohort: slots 0 and 1
+    A(Kind.Deposit, at(2n), 1, 1000n * E), // slot 2: not sealed
+    A(Kind.Request, at(3n), 1, 300n * E), // pro-rata from all three: three reserved slots
+    A(Kind.Request, at(3n, 1n), 1, 300n * E),
+    A(Kind.Cancel, at(3n, 2n), 1, 1n), // slices → new slots: from 0 and 1 they join, from 2 not
+    A(Kind.Poke, at(4n), 1),
+    A(Kind.Cancel, at(4n, 1n), 1, 2n), // last ticket: the Seal resumes over the grown cohort
+    A(Kind.Poke, at(10n), 1),
+  ] },
+  { name: 'sealEmergency', lp: false, positions: 2, actions: [
+    A(Kind.Open, at(0n), 1, 1000n * E),
+    A(Kind.Open, at(0n), 2, 10n * E),
+    A(Kind.Seal, at(0n, 1n), 1, 3n),
+    A(Kind.Seal, at(0n, 1n), 2, 4n), // UnknownTrack
+    A(Kind.Request, at(5n), 1, 10n * E), // paused
+    A(Kind.Emergency, at(6n), 1), // forfeited while paused
+    A(Kind.Seal, at(40n), 1, 0n), // Closed
+    A(Kind.Request, at(41n), 2, net(10n * E)),
+    A(Kind.Execute, at(44n), 2, 1n), // position 2 is empty now
+    A(Kind.Seal, at(44n, 1n), 2, 0n), // NothingToSeal
+  ] },
+);
 // Capacity edges: 16 young lots may split (16 + 16 = 32); 17 cannot, but 100% always can.
 for (const n of [16, 17]) {
   const actions: Action[] = [A(Kind.Open, at(0n), 1, 100n * E)];
@@ -220,7 +282,8 @@ function randomScenario(name: string, seed: bigint, steps: number, lp: boolean):
       else {
         const r2 = Number(rnd(100n));
         if (r2 < 12) a = A(Kind.Deposit, now, pos, rnd(500n * E) + 1n);
-        else if (r2 < 80) a = A(Kind.Request, now, pos, active === 0n ? 1n : rnd(3n) === 0n ? active : rnd(active) + 1n);
+        else if (r2 < 72) a = A(Kind.Request, now, pos, active === 0n ? 1n : rnd(3n) === 0n ? active : rnd(active) + 1n);
+        else if (r2 < 80) a = A(Kind.Seal, now, pos, rnd(5n)); // track 4 is unknown: reverts
         else if (r2 < 85) a = A(Kind.Execute, now, pos, anyId); // stale or wrong ids revert
         else if (r2 < 90) a = A(Kind.Cancel, now, pos, anyId);
         else if (r2 < 94) a = A(Kind.Collect, now, 0);

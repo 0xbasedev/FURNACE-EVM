@@ -1,11 +1,12 @@
-// Exact BigInt reference of ForgePool custody (docs/adr/0004-forge-custody.md).
-// One pool: positions of ≤32 lots, cooling plans with frozen slices, lazy lapses,
-// in-kind exits, cumulative S/W measures and the pool occupancy log.
+// Exact BigInt reference of ForgePool custody (docs/adr/0004-forge-custody.md) and
+// Seals (docs/adr/0006-seals.md). One pool: positions of ≤32 lots, cooling plans with
+// frozen slices, lazy lapses, in-kind exits, cumulative S/W measures (and their sealed
+// parts, accrued independently of the records) and the pool occupancy log.
 // Built on canonical/accounting.ts (integrateHeat, cooledAge). Rules marked [P] in
 // ADR 0004 are this repo's provisional readings: matching this model proves the
 // Solidity port is internally consistent, NOT that a [P] rule is canonical.
 import cfg from '../canonical/furnace.config';
-import { AGE_CAP, DAY, integrateHeat, cooledAge, parseUnits } from '../canonical/accounting';
+import { AGE_CAP, DAY, integrateHeat, cooledAge, parseUnits, ray } from '../canonical/accounting';
 
 export const MAX_LOTS = cfg.forge.heat.maxLotsPerPosition;
 export const MAX_PENDING = 8; // [P] not in the canonical config
@@ -17,6 +18,14 @@ export const DEPOSIT_FEE_PCT = BigInt(cfg.forge.fees.depositPct);
 export const WITHDRAW_FEE_PCT = BigInt(cfg.forge.fees.withdrawPct);
 export const EMERGENCY_FEE_PCT = BigInt(cfg.forge.emergencyExit.feePct);
 export const MIN_STAKE_LP = parseUnits(cfg.forge.minStakeLp, 18);
+export const SEAL_TRACKS = cfg.forge.convictionTracks.tracks.map((t) => ({ seconds: BigInt(t.days) * DAY, bonus: ray(String(t.bonus)) }));
+export const SEAL_GAP = BigInt(cfg.emissions.epochSeconds); // [P] ForgePool.seal
+export enum SealStatus { None, Active, Completed, Forfeited }
+export interface SealM { track: number; status: SealStatus; start: bigint; pausedAt: bigint; pausedSeconds: bigint; endedAt: bigint; cohort: number }
+/** A Seal's end: when it ended, else when it is due if it keeps running (ForgeMeasures.sealEnd). */
+export const sealEnd = (s: SealM) => (s.endedAt !== 0n ? s.endedAt : s.start + SEAL_TRACKS[s.track].seconds + s.pausedSeconds);
+const bit = (j: number) => (1 << j) >>> 0;
+const has = (mask: number, j: number) => ((mask >>> j) & 1) === 1;
 
 export class Revert extends Error {}
 const need = (ok: boolean, why: string) => { if (!ok) throw new Revert(why); };
@@ -36,8 +45,10 @@ export interface Position {
   openedAt: bigint; closedAt: bigint;
   /** Mirror of ForgePool's checkpoint records: each slot's head and superseded heads. */
   heads: Map<number, Rec>; history: Map<number, Rec[]>;
+  /** Seals (index k-1) and the sealed parts of S/W, accrued from the Seal state itself. */
+  seals: SealM[]; SS: bigint; SW: bigint; epochSS: Map<bigint, bigint>; epochSW: Map<bigint, bigint>;
 }
-export interface Rec { since: bigint; amount: bigint; age: bigint; part: bigint }
+export interface Rec { since: bigint; amount: bigint; age: bigint; part: bigint; seal: number }
 const UINT96_MAX = (1n << 96n) - 1n;
 export interface Occ { time: bigint; cum: bigint; on: boolean }
 
@@ -118,18 +129,25 @@ export class ForgeModel {
     for (let a = p.last; a < t;) {
       const b = !epochs ? t : a < this.epochStart! ? min(t, this.epochStart!) : min(t, this.epochStart! + (this.epochOf(a) + 1n) * this.epochSeconds!);
       const d = b - a;
-      for (const lot of p.lots) {
-        if (lot.amount === 0n) continue;
+      const seal = this.running(p);
+      p.lots.forEach((lot, j) => {
+        if (lot.amount === 0n) return;
         const s = lot.amount * d, w = lot.amount * integrateHeat(lot.age, d, 0n);
+        const sealed = seal !== undefined && has(seal.cohort, j);
         p.S += s; p.W += w;
+        if (sealed) { p.SS += s; p.SW += w; }
         if (epochs && a >= this.epochStart!) {
           const e = this.epochOf(a);
           p.epochS.set(e, (p.epochS.get(e) ?? 0n) + s);
           p.epochW.set(e, (p.epochW.get(e) ?? 0n) + w);
+          if (sealed) {
+            p.epochSS.set(e, (p.epochSS.get(e) ?? 0n) + s);
+            p.epochSW.set(e, (p.epochSW.get(e) ?? 0n) + w);
+          }
         }
         lot.age = min(lot.age + d, AGE_CAP);
         lot.part = min(lot.part + d, PART_CAP);
-      }
+      });
       a = b;
     }
     if (p.pending.length > 0) p.paused += dt;
@@ -145,6 +163,12 @@ export class ForgeModel {
       if (!due) break;
       this.accrue(p, deadline(due));
       this.resume(p, due, 'lapsed', now);
+    }
+    // A running Seal has no pending ticket: it completes at its due time, back-dated.
+    const s = this.running(p);
+    if (s && sealEnd(s) <= now) {
+      this.accrue(p, sealEnd(s));
+      this.endSeal(p, SealStatus.Completed, sealEnd(s));
     }
     this.accrue(p, now);
   }
@@ -169,6 +193,8 @@ export class ForgeModel {
           this.recordHead(p, slot);
         } else {
           const j = this.firstFree(p);
+          const seal = this.current(p);
+          if (seal?.status === SealStatus.Active && has(seal.cohort, slot)) seal.cohort = (seal.cohort | bit(j)) >>> 0;
           p.lots[j] = { amount: s.amount, age: s.age, part: s.part, heldBy: 0 };
           p.historySlots.add(j); p.lotCount++;
           this.recordHead(p, j);
@@ -177,6 +203,7 @@ export class ForgeModel {
       }
     }
     this.dropPending(p, t, status);
+    if (p.pending.length === 0) this.unpause(p);
     if (!t.poolApplied) {
       if (status === 'lapsed' && this.active === 0n) throw new Error('invariant: unapplied lapse with an idle pool');
       this.frozen -= t.amount;
@@ -219,7 +246,41 @@ export class ForgeModel {
       if (!p.history.has(j)) p.history.set(j, []);
       p.history.get(j)!.push(head);
     }
-    p.heads.set(j, { since: t, amount: lot.amount, age: lot.age, part: lot.part });
+    p.heads.set(j, { since: t, amount: lot.amount, age: lot.age, part: lot.part, seal: this.tag(p, j) });
+  }
+
+  // ── Seals (mirror of ForgePool's Seal transitions) ───────────────────────
+  current(p: Position): SealM | undefined { return p.seals[p.seals.length - 1]; }
+  /** The running Seal: active and not paused. */
+  running(p: Position): SealM | undefined {
+    const s = this.current(p);
+    return s && s.status === SealStatus.Active && s.pausedAt === 0n ? s : undefined;
+  }
+  private tag(p: Position, j: number): number {
+    const s = this.running(p);
+    return s && has(s.cohort, j) ? p.seals.length : 0;
+  }
+  /** Rewrite at p.last every active lot in `mask` whose head tag is stale. */
+  private retag(p: Position, mask: number) {
+    for (let j = 0; j < MAX_LOTS; j++) {
+      if (!has(mask, j) || p.lots[j].amount === 0n || (p.heads.get(j)?.seal ?? 0) === this.tag(p, j)) continue;
+      this.recordHead(p, j);
+    }
+  }
+  private endSeal(p: Position, status: SealStatus, at: bigint) {
+    const s = this.current(p);
+    if (!s || s.status !== SealStatus.Active) return;
+    if (s.pausedAt !== 0n) { s.pausedSeconds += at - s.pausedAt; s.pausedAt = 0n; }
+    s.status = status; s.endedAt = at;
+  }
+  private unpause(p: Position) {
+    const s = this.current(p);
+    if (!s || s.status !== SealStatus.Active) return;
+    s.pausedSeconds += p.last - s.pausedAt; s.pausedAt = 0n;
+    this.retag(p, s.cohort);
+  }
+  private usedMask(p: Position): number {
+    return p.lots.reduce((m, l, j) => (l.amount > 0n || l.heldBy !== 0 ? (m | bit(j)) >>> 0 : m), 0);
   }
 
   /** Resumable slot measure over [t0, t1], segment for segment as ForgePool.measureSlot. */
@@ -227,7 +288,7 @@ export class ForgeModel {
     const p = this.positions[id - 1];
     if (t1 > p.last) throw new Error('model: measure before sync');
     if (p.closedAt !== 0n && p.closedAt < t1) t1 = p.closedAt;
-    const out = { s: 0n, w: 0n, next: 0n, used: 0n, done: true };
+    const out = { s: 0n, w: 0n, ss: 0n, sw: 0n, seal: 0, next: 0n, used: 0n, done: true };
     if (t1 <= t0) return out;
     const hist = p.history.get(j) ?? [], head = p.heads.get(j)!, n = hist.length;
     const seg = (k: number) => (k < n ? hist[k] : head);
@@ -248,8 +309,25 @@ export class ForgeModel {
       if (end <= t0 || r.amount === 0n) continue;
       const a = r.since > t0 ? r.since : t0, b = end < t1 ? end : t1;
       const age = min(r.age + (a - r.since), AGE_CAP);
-      out.s += r.amount * (b - a);
-      out.w += r.amount * integrateHeat(age, b - a, 0n);
+      let s = r.amount * (b - a), w = r.amount * integrateHeat(age, b - a, 0n);
+      out.s += s; out.w += w;
+      if (r.seal === 0) continue;
+      const tagEnd = sealEnd(p.seals[r.seal - 1]);
+      if (tagEnd <= a) continue;
+      if (tagEnd < b) { s = r.amount * (tagEnd - a); w = r.amount * integrateHeat(age, tagEnd - a, 0n); }
+      out.ss += s; out.sw += w; out.seal = r.seal;
+    }
+    return out;
+  }
+
+  /** Sum of measureSlot over every slot that ever held a lot (ForgePool.epochMeasure). */
+  epochMeasure(id: number, t0: bigint, t1: bigint) {
+    const p = this.positions[id - 1];
+    const out = { s: 0n, w: 0n, ss: 0n, sw: 0n };
+    for (let j = 0; j < MAX_LOTS; j++) {
+      if (!p.heads.has(j)) continue;
+      const m = this.measureSlot(id, j, t0, t1, 0n, 1n << 255n);
+      out.s += m.s; out.w += m.w; out.ss += m.ss; out.sw += m.sw;
     }
     return out;
   }
@@ -263,6 +341,7 @@ export class ForgeModel {
       plan: null, tickets: new Map(), pending: [], nextTicket: 1,
       epochS: new Map(), epochW: new Map(), historySlots: new Set(), openedAt: now, closedAt: 0n,
       heads: new Map(), history: new Map(),
+      seals: [], SS: 0n, SW: 0n, epochSS: new Map(), epochSW: new Map(),
     };
     this.positions.push(p);
     this.addLot(p, amount, now);
@@ -295,6 +374,8 @@ export class ForgeModel {
     need(p.lotCount + p.reserved + split <= MAX_LOTS, 'LotCapacity');
     p.reserved += split;
     const t: Ticket = { id: p.nextTicket++, amount: r, maturity: now + tier.seconds, status: 'pending', poolApplied: false, slices: new Map() };
+    const seal = p.pending.length === 0 && this.current(p)?.status === SealStatus.Active ? this.current(p)! : undefined;
+    if (seal) seal.pausedAt = now; // before the freeze: its heads drop the tag
     take.forEach((x, j) => {
       if (x === 0n) return;
       const lot = p.lots[j];
@@ -303,6 +384,7 @@ export class ForgeModel {
       if (lot.amount === 0n) lot.heldBy = t.id;
       this.recordHead(p, j);
     });
+    if (seal) this.retag(p, seal.cohort);
     p.plan.requested = after;
     p.tickets.set(t.id, t);
     p.pending.push(t.id);
@@ -318,6 +400,7 @@ export class ForgeModel {
     const { active, frozen } = this.custody(p);
     const balance = active + frozen;
     const w = t!.amount;
+    this.endSeal(p, SealStatus.Forfeited, now);
     for (const slot of t!.slices.keys()) {
       const lot = p.lots[slot];
       if (lot.heldBy === t!.id) { lot.heldBy = 0; p.lotCount--; } else p.reserved--;
@@ -348,6 +431,7 @@ export class ForgeModel {
     const total = active + frozen;
     need(total > 0n, 'NothingToExit');
     for (const pid of [...p.pending]) this.dropPending(p, p.tickets.get(pid)!, 'emergency');
+    this.endSeal(p, SealStatus.Forfeited, now);
     p.lots = Array.from({ length: MAX_LOTS }, emptyLot);
     p.lotCount = 0; p.reserved = 0; p.closed = true; p.ashfallForfeited = true; p.closedAt = now;
     const fee = total * EMERGENCY_FEE_PCT / 100n;
@@ -358,6 +442,21 @@ export class ForgeModel {
     return total - fee;
   }
   poke(id: number, now: bigint) { this.touch(id, now); }
+  seal(id: number, track: number, now: bigint): number {
+    const p = this.touch(id, now);
+    need(!p.closed, 'Closed');
+    need(track >= 0 && track < SEAL_TRACKS.length, 'UnknownTrack');
+    need(p.pending.length === 0, 'CoolingPending');
+    const used = this.usedMask(p);
+    need(used !== 0, 'NothingToSeal');
+    const last = this.current(p);
+    need(last?.status !== SealStatus.Active, 'SealActive');
+    if (last) need(now >= last.endedAt + SEAL_GAP, 'SealGap');
+    need(p.seals.length < 255, 'SealLimit');
+    p.seals.push({ track, status: SealStatus.Active, start: now, pausedAt: 0n, pausedSeconds: 0n, endedAt: 0n, cohort: used });
+    this.retag(p, used);
+    return p.seals.length;
+  }
 }
 
 /** Run `fn` on a copy; commit only if it does not revert (EVM atomicity). */

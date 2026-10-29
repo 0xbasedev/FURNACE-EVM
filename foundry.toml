@@ -10,10 +10,13 @@ solc = "tools/solc"
 offline = true
 evm_version = "cancun"
 optimizer = true
-# 1,000 runs: ForgePool must stay under the EIP-170 runtime limit (24,576 B) with room for
-# Seals; `pnpm forge:sizes` fails the build if any contract in contracts/src exceeds it.
-optimizer_runs = 1_000
+# 500 runs: ForgePool (with Seals) must stay under the EIP-170 runtime limit (24,576 B);
+# `pnpm forge:sizes` fails the build if any contract in contracts/src exceeds it.
+optimizer_runs = 500
 bytecode_hash = "none"
+# Differential replays snapshot the full state (lots, slices, Seals, tags) after every step;
+# the longest custody walk needs more than the default 2^30 test gas.
+gas_limit = 4_294_967_296
 # Differential tests read vectors generated from furnace.config.ts (pnpm gen); no ffi.
 ffi = false
 fs_permissions = [{ access = "read", path = "./contracts/test/fixtures" }]

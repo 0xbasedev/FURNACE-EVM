@@ -165,6 +165,40 @@ f.pools.forEach((pool, i) => {
   c('bool', `FORGE_POOL_${i}_IS_LP`, String(pool.stakeKind === 'lp'));
 });
 
+section('Seals: Conviction tracks, escrow and forfeiture (spec v5.5 §10)');
+const ct = f.convictionTracks;
+const se = cfg.execution.seals;
+const sealPolicy: [string, unknown, unknown][] = [
+  ['forge.convictionTracks.enabled', ct.enabled, true],
+  ['forge.convictionTracks.vestAtTermEnd', ct.vestAtTermEnd, true],
+  ['forge.convictionTracks.bucketCap.enabled', ct.bucketCap.enabled, true],
+  ['forge.convictionTracks.bucketCap.capToSealBonusOfHeatShare', ct.bucketCap.capToSealBonusOfHeatShare, true],
+  ['forge.convictionTracks.bucketCap.unallocatedFlowsTo', ct.bucketCap.unallocatedFlowsTo, 'heatPool'],
+  ['forge.convictionTracks.escrow.enabled', ct.escrow.enabled, true],
+  ['forge.convictionTracks.escrow.payout', ct.escrow.payout, 'capstone'],
+  ['execution.seals.membership', se.membership, 'sealedCohortsOnly'],
+  ['execution.seals.topupsJoinExistingSeal', se.topupsJoinExistingSeal, false],
+  ['execution.seals.pendingCooling', se.pendingCooling, 'pauseSealAccrualAndExtendEnd'],
+  ['execution.seals.tapBeforeMaturity', se.tapBeforeMaturity, 'forfeitUnvestedBonus'],
+];
+for (const [path, got, want] of sealPolicy) if (got !== want) throw new Error(`Seals implement ${path} = ${String(want)}, config has ${String(got)}`);
+if (ct.tracks.length !== 4) throw new Error('ForgePool._track unrolls exactly 4 Seal tracks');
+ct.tracks.forEach((t, i) => {
+  const prev = ct.tracks[i - 1];
+  if (prev && !(t.days > prev.days && t.bonus > prev.bonus)) throw new Error('Seal tracks must ascend');
+  if (ray(String(t.bonus)) > ray('0.5')) throw new Error('Seal bonus exceeds the canonical 0.5 ceiling');
+});
+const fr = ct.forfeitRouting;
+if (fr.burnPct + fr.matchReservePct + fr.sealedPotPct !== 100) throw new Error('Seal forfeit routing must sum to 100');
+c('uint256', 'SEAL_TRACK_COUNT', ct.tracks.length);
+ct.tracks.forEach((t, i) => {
+  c('uint256', `SEAL_TRACK_${i}_SECONDS`, `${t.days} days`, t.name);
+  c('uint256', `SEAL_TRACK_${i}_BONUS_RAY`, ray(String(t.bonus)), `+${t.bonus}`);
+});
+c('uint256', 'SEAL_FORFEIT_BURN_PCT', fr.burnPct);
+c('uint256', 'SEAL_FORFEIT_MATCH_RESERVE_PCT', fr.matchReservePct);
+c('uint256', 'SEAL_FORFEIT_SEALED_POT_PCT', fr.sealedPotPct);
+
 section(`Deterministic deployment registry (CREATE3). PROVISIONAL while the deployer is ${cfg.deployment.evm.deployer}`);
 lines.push('    //    Only MINED entries become constants; unmined modules are constructor/initializer inputs.');
 c('address', 'CREATEX', CREATEX_FACTORY);

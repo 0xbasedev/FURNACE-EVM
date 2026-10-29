@@ -94,6 +94,18 @@ contract SettlementHandler is Test {
         vm.warp(block.timestamp + bound(dt, 0, 2 days));
     }
 
+    function seal(uint256 seed, uint256 track) external {
+        (ForgePool pool,, uint256 id, address owner) = _pick(seed);
+        vm.prank(owner);
+        try pool.seal(id, track % 4) {} catch {}
+    }
+
+    /// Settle any position's latest Seal; reverts (not ended, nothing locked) are expected.
+    function settleSeal(uint256 seed) external {
+        (ForgePool pool, uint256 poolIdx, uint256 id,) = _pick(seed);
+        try emissions.settleSeal(poolIdx, id, pool.positionOf(id).sealCount) {} catch {}
+    }
+
     /// The keeper: finalize what has ended, open it, and page whatever is pending.
     function keep(uint256 pages) external {
         (bool ok,) = mantleAddr.call(abi.encodeWithSignature("finalizeEpoch()"));
@@ -103,7 +115,7 @@ contract SettlementHandler is Test {
         for (uint256 e; e < emissions.nextEpoch() && pages != 0; ++e) {
             for (uint256 i; i < 4 && pages != 0; ++i) {
                 ForgeEmissions.Phase ph = emissions.poolEpoch(e, i).phase;
-                if (ph == ForgeEmissions.Phase.Measuring || ph == ForgeEmissions.Phase.Crediting) {
+                if (ph == ForgeEmissions.Phase.Measuring || ph == ForgeEmissions.Phase.Escrowing || ph == ForgeEmissions.Phase.Crediting) {
                     emissions.advance(e, i);
                     --pages;
                 }
@@ -137,7 +149,7 @@ contract SettlementHandler is Test {
     }
 }
 
-/// @notice Random custody + settlement + claims across four pools and the Mantle. Every
+/// @notice Random custody + Seals + settlement + claims across four pools and the Mantle. Every
 ///         handler call must succeed (fail_on_revert): the keeper path, finalize → open →
 ///         advance, never reverts, whatever the custody actions did in between.
 /// forge-config: default.invariant.runs = 48
@@ -170,6 +182,8 @@ contract SettlementInvariantTest is SettlementFixture {
                 targets += pe.target;
                 assertLe(pe.admitted, pe.target, "admitted within the pool's share");
                 assertLe(pe.paid, pe.admitted, "credited within the admitted budget");
+                assertLe(pe.escrow, pe.bucket, "escrow within the Conviction bucket");
+                assertLe(emissions.sealedEarnerCount(e, i), emissions.earnerCount(e, i));
                 assertLe(pe.cursor, pe.positions, "cursor bounded");
                 assertLe(emissions.earnerCount(e, i), pe.cursor, "each position counted at most once");
             }
@@ -181,12 +195,15 @@ contract SettlementInvariantTest is SettlementFixture {
     /// EMBER held by ForgeEmissions backs exactly the unclaimed and pending rewards,
     /// and EMBER supply equals what the Mantle minted.
     function invariant_rewardsBacked() public view {
-        uint256 owed;
+        uint256 owed = emissions.burnLane() + emissions.matchReserve();
+        for (uint256 i; i < 4; ++i) owed += emissions.sealedPot(i);
         for (uint256 k; k < handler.ownedCount(); ++k) {
             (uint256 i, uint256 id) = handler.ownedAt(k);
-            owed += emissions.unclaimed(i, id) + emissions.claimOf(i, id).amount;
+            owed += emissions.unclaimed(i, id) + emissions.claimOf(i, id).amount + emissions.capstoneOwed(i, id);
+            uint256 seals = pools[i].positionOf(id).sealCount;
+            for (uint256 j = 1; j <= seals; ++j) owed += emissions.sealEscrow(i, id, j);
         }
-        assertEq(ember.balanceOf(address(emissions)) , owed);
+        assertEq(ember.balanceOf(address(emissions)), owed, "EMBER held backs every claim and escrow ledger");
         uint256 minted;
         for (uint256 e; e < mantle.nextEpoch(); ++e) {
             (,, uint128 m,,,) = mantle.budgets(e);

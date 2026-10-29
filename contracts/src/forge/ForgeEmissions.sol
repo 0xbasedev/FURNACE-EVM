@@ -8,6 +8,7 @@ import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/Reentrancy
 import {FurnaceParams as P} from "../generated/FurnaceParams.sol";
 import {EmissionMath} from "../libraries/EmissionMath.sol";
 import {ForgePool} from "./ForgePool.sol";
+import {Seal, SealStatus, SlotMeasure, ForgeMeasures} from "./ForgeMeasures.sol";
 
 /// @notice The Mantle surface the distributor uses.
 interface IMantleDistribution {
@@ -39,12 +40,16 @@ interface IMantleDistribution {
 ///            at most 32 lots and SEGMENTS_PER_PAGE record segments and resumes where the
 ///            last one stopped, so no position can make a page unboundedly expensive. A
 ///            monotone cursor visits every position exactly once.
-///         3. When the totals are final, the Conviction bucket is reserved and, with no
-///            Seals yet, returned whole to the Heat budget (the canonical 27/73 split).
+///         3. When the totals are final, the Conviction bucket is reserved. If any lot was
+///            sealed, `advance` pages through the sealed positions and sets each one's
+///            escrow min(⌊bucket·C_i/C⌋, ⌊L·B_i/W⌋) (ADR 0006); the unused bucket returns
+///            to the Heat budget (with no Seals, the canonical 27/73 split).
 ///         4. `advance` then credits each earning position
-///            ⌊flat·S_i/S⌋ + ⌊heat·W_i/W⌋, minting each page's sum once; the floor residue
-///            is released.
+///            ⌊flat·S_i/S⌋ + ⌊heat·W_i/W⌋ as claimable and its escrow to its Seal,
+///            minting each page's sum once; the floor residue is released.
 ///         Claims: a fee-free 24h click-start snapshot of a position's credited rewards.
+///         Escrow stays locked until its Seal ends: a completed term moves it to the
+///         position's Capstone ledger, a forfeit routes it 50/25/25.
 ///         Principal exits never wait on any of this. No owner, no pause, no upgrade.
 contract ForgeEmissions is ReentrancyGuardTransient {
     using SafeERC20 for IERC20;
@@ -54,10 +59,16 @@ contract ForgeEmissions is ReentrancyGuardTransient {
     ///         spec's ≤32 lots per page, this bounds every page however many records a
     ///         position has: a position larger than one page resumes on the next.
     uint256 public constant SEGMENTS_PER_PAGE = 256;
+    /// @notice [P] Page budget charged per lapse a position's sync must resolve before it is
+    ///         measured (a lapse rewrites up to 32 heads). A page enters such a position only
+    ///         if the budget covers it; one that does not fit waits to be the next page's
+    ///         first work, so a page pays for at most one oversized sync.
+    uint256 public constant LAPSE_UNITS = 64;
 
     enum Phase {
         None,
         Measuring,
+        Escrowing,
         Crediting,
         Done
     }
@@ -67,18 +78,28 @@ contract ForgeEmissions is ReentrancyGuardTransient {
         uint32 positions; // N: the pool's position count when the epoch opened
         uint32 cursor; // positions measured
         uint32 credited; // earners credited
+        uint32 escrowed; // sealed earners whose escrow is set
         uint128 target; // the pool's weighted share of the base
         uint128 admitted; // E = accruedPoolBudget(target, occupied, epoch)
+        uint128 bucket; // ⌊E·10%⌋
         uint128 flat; // ⌊(E − bucket)·30%⌋
-        uint128 heat; // E − bucket − flat + unused bucket
-        uint128 paid; // Σ credited payouts (all minted)
+        uint128 heat; // L = E − bucket − flat while escrowing; then L + bucket − escrow
+        uint128 escrow; // Σ capped Seal escrow
+        uint128 paid; // Σ credited payouts and escrow (all minted)
         uint256 stakeSeconds; // S = Σ S_i
         uint256 heatSeconds; // W = Σ W_i
+        uint256 candidateSeconds; // C = Σ C_i
     }
 
+    /// @dev A position's epoch measures. B = ∫sealed stake·bonus dt and
+    ///      C = ⌊∫sealed stake·Heat dt · bonus⌋, both of the one Seal (`seal`) it earned under.
     struct Measure {
         uint256 stakeSeconds;
         uint256 heatSeconds;
+        uint256 sealSeconds;
+        uint256 candidateSeconds;
+        uint128 escrow;
+        uint8 seal;
     }
 
     struct Claim {
@@ -91,8 +112,11 @@ contract ForgeEmissions is ReentrancyGuardTransient {
         uint32 id; // 0 = between positions
         uint8 slot;
         uint32 seg; // 1-based resume segment within `slot` (0 = from the start)
+        uint8 seal;
         uint256 stakeSeconds;
         uint256 heatSeconds;
+        uint256 sealedStakeSeconds;
+        uint256 sealedHeatSeconds;
     }
 
     IMantleDistribution public immutable MANTLE;
@@ -106,16 +130,30 @@ contract ForgeEmissions is ReentrancyGuardTransient {
     uint256 public nextEpoch;
     mapping(uint256 epoch => mapping(uint256 pool => PoolEpoch)) internal _epochs;
     mapping(uint256 epoch => mapping(uint256 pool => uint256[])) internal _earners;
+    mapping(uint256 epoch => mapping(uint256 pool => uint256[])) internal _sealedEarners;
     mapping(uint256 epoch => mapping(uint256 pool => mapping(uint256 id => Measure))) internal _measures;
     mapping(uint256 epoch => mapping(uint256 pool => Progress)) internal _progress;
     mapping(uint256 pool => mapping(uint256 id => uint256)) public unclaimed;
     mapping(uint256 pool => mapping(uint256 id => Claim)) internal _claims;
+    /// @notice Funded escrow of a running Seal, locked until it ends.
+    mapping(uint256 pool => mapping(uint256 id => mapping(uint256 k => uint256))) public sealEscrow;
+    /// @notice [P] Vested escrow owed to the position's Capstone (not built yet): held, never liquid.
+    mapping(uint256 pool => mapping(uint256 id => uint256)) public capstoneOwed;
+    /// @notice [P] Forfeited escrow, held per route until its consumer exists: the burn
+    ///         lane (50%), the match reserve (25%) and each pool's Sealed pot (25%, whose
+    ///         stream period the config does not define yet).
+    uint256 public burnLane;
+    uint256 public matchReserve;
+    mapping(uint256 pool => uint256) public sealedPot;
 
     event EpochOpened(uint256 indexed epoch, uint256 base, uint256 released);
     event PoolEpochOpened(uint256 indexed epoch, uint256 indexed pool, uint256 target, uint256 admitted, uint256 positions);
     event Measured(uint256 indexed epoch, uint256 indexed pool, uint256 id, uint256 stakeSeconds, uint256 heatSeconds);
     event Budgeted(uint256 indexed epoch, uint256 indexed pool, uint256 flat, uint256 heat, uint256 unusedBucket);
     event Credited(uint256 indexed epoch, uint256 indexed pool, uint256 id, uint256 amount);
+    event Escrowed(uint256 indexed epoch, uint256 indexed pool, uint256 id, uint256 seal, uint256 amount);
+    event SealVested(uint256 indexed pool, uint256 indexed id, uint256 seal, uint256 amount);
+    event SealForfeitRouted(uint256 indexed pool, uint256 indexed id, uint256 seal, uint256 burn, uint256 reserve, uint256 pot);
     event ResidueReleased(uint256 indexed epoch, uint256 indexed pool, uint256 amount);
     event ClaimRequested(uint256 indexed pool, uint256 indexed id, uint256 amount, uint256 maturesAt);
     event ClaimPaid(uint256 indexed pool, uint256 indexed id, address to, uint256 amount);
@@ -130,6 +168,8 @@ contract ForgeEmissions is ReentrancyGuardTransient {
     error ClaimPending(uint256 pool, uint256 id);
     error NothingToClaim(uint256 pool, uint256 id);
     error ClaimNotMatured(uint256 maturesAt);
+    error SealNotEnded(uint256 pool, uint256 id, uint256 seal);
+    error NothingToSettle(uint256 pool, uint256 id, uint256 seal);
 
     constructor(IMantleDistribution mantle, IERC20 ember, ForgePool[4] memory pools) {
         if (address(mantle) == address(0) || address(ember) == address(0)) revert ZeroAddress();
@@ -177,6 +217,7 @@ contract ForgeEmissions is ReentrancyGuardTransient {
     function advance(uint256 epoch, uint256 pool) external nonReentrant {
         PoolEpoch storage pe = _epochs[epoch][pool];
         if (pe.phase == Phase.Measuring) _measurePage(epoch, pool, pe);
+        else if (pe.phase == Phase.Escrowing) _escrowPage(epoch, pool, pe);
         else if (pe.phase == Phase.Crediting) _creditPage(epoch, pool, pe);
         else revert NothingToAdvance(epoch, pool);
     }
@@ -195,6 +236,9 @@ contract ForgeEmissions is ReentrancyGuardTransient {
             if (pr.id == 0) {
                 if (pe.cursor == pe.positions || slots == P.SETTLEMENT_MAX_LOTS_PER_PAGE) break;
                 uint256 next = pe.cursor + 1;
+                uint256 cost = pool.dueLapses(next) * LAPSE_UNITS;
+                if (cost <= budget) budget -= cost;
+                else if (budget != SEGMENTS_PER_PAGE) break; // too heavy: first work of the next page
                 pool.poke(next); // resolve lapses due by now: their records are back-dated
                 pr.id = uint32(next);
             }
@@ -203,7 +247,7 @@ contract ForgeEmissions is ReentrancyGuardTransient {
             while (j < 32 && mask & (1 << j) == 0) ++j;
             if (j == 32) {
                 _finishPosition(epoch, i, pe, pr);
-                pr = Progress(0, 0, 0, 0, 0);
+                pr = Progress(0, 0, 0, 0, 0, 0, 0, 0);
                 --budget;
                 continue;
             }
@@ -221,29 +265,38 @@ contract ForgeEmissions is ReentrancyGuardTransient {
         view
         returns (uint256 used)
     {
-        uint256 next;
-        bool done;
-        {
-            uint256 start = START + epoch * P.EPOCH_SECONDS;
-            uint256 s;
-            uint256 w;
-            (s, w, next, used, done) = pool.measureSlot(pr.id, j, start, start + P.EPOCH_SECONDS, pr.seg, budget);
-            pr.stakeSeconds += s;
-            pr.heatSeconds += w;
-        }
-        if (done) {
+        uint256 start = START + epoch * P.EPOCH_SECONDS;
+        SlotMeasure memory m = pool.measureSlot(pr.id, j, start, start + P.EPOCH_SECONDS, pr.seg, budget);
+        pr.stakeSeconds += m.stakeSeconds;
+        pr.heatSeconds += m.heatSeconds;
+        pr.sealedStakeSeconds += m.sealedStakeSeconds;
+        pr.sealedHeatSeconds += m.sealedHeatSeconds;
+        if (m.seal != 0) pr.seal = uint8(m.seal); // [P] at most one Seal per position-epoch
+        if (m.done) {
             pr.slot = uint8(j + 1);
             pr.seg = 0;
         } else {
             pr.slot = uint8(j);
-            pr.seg = uint32(next);
+            pr.seg = uint32(m.next);
         }
+        return m.used;
     }
 
+    /// @dev B and C are formed once per position-epoch from the unscaled sealed sums, so
+    ///      they do not depend on how records subdivide the epoch.
     function _finishPosition(uint256 epoch, uint256 i, PoolEpoch storage pe, Progress memory pr) internal {
         (uint256 id, uint256 s, uint256 w) = (pr.id, pr.stakeSeconds, pr.heatSeconds);
         if (s != 0) {
-            _measures[epoch][i][id] = Measure(s, w);
+            Measure memory m = Measure(s, w, 0, 0, 0, 0);
+            if (pr.sealedStakeSeconds != 0) {
+                uint256 bonus = ForgeMeasures.trackBonus(poolAt(i).sealOf(id, pr.seal).track);
+                m.sealSeconds = pr.sealedStakeSeconds * bonus;
+                m.candidateSeconds = Math.mulDiv(pr.sealedHeatSeconds, bonus, P.RAY);
+                m.seal = pr.seal;
+                _sealedEarners[epoch][i].push(id);
+                pe.candidateSeconds += m.candidateSeconds;
+            }
+            _measures[epoch][i][id] = m;
             _earners[epoch][i].push(id);
             pe.stakeSeconds += s;
             pe.heatSeconds += w;
@@ -252,9 +305,9 @@ contract ForgeEmissions is ReentrancyGuardTransient {
         pe.cursor += 1;
     }
 
-    /// @dev Totals are final: reserve the Conviction bucket, split the rest 30/70, and
-    ///      return the unused bucket to Heat. Seals will set escrow here; until then the
-    ///      whole bucket is unused (spec §10: "With no eligible Seals it yields 27/73").
+    /// @dev Totals are final: reserve the Conviction bucket and split the rest 30/70.
+    ///      With sealed lots, escrow pages come first; otherwise the whole bucket returns
+    ///      to Heat (spec §10: "With no eligible Seals it yields 27/73").
     function _budget(uint256 epoch, uint256 i, PoolEpoch storage pe) internal {
         uint256 e = pe.admitted;
         if (pe.stakeSeconds == 0) {
@@ -265,12 +318,38 @@ contract ForgeEmissions is ReentrancyGuardTransient {
         }
         uint256 bucket = (e * P.CONVICTION_BUCKET_PCT) / 100;
         uint256 flat = ((e - bucket) * P.SPLIT_FLAT_PCT) / 100;
-        uint256 escrow; // Σ capped Seal escrow: none until Seals exist
-        uint256 heat = e - bucket - flat + (bucket - escrow);
+        pe.bucket = uint128(bucket);
         pe.flat = uint128(flat);
-        pe.heat = uint128(heat);
+        pe.heat = uint128(e - bucket - flat); // L, the pre-return Heat budget
+        if (pe.candidateSeconds != 0) pe.phase = Phase.Escrowing;
+        else _finalHeat(epoch, i, pe);
+    }
+
+    /// @dev Each sealed position's escrow: its share of the bucket by C, capped at the
+    ///      additive worth of its bonus in the pre-return Heat budget, L·B_i/W.
+    function _escrowPage(uint256 epoch, uint256 i, PoolEpoch storage pe) internal {
+        uint256[] storage list = _sealedEarners[epoch][i];
+        uint256 k = pe.escrowed;
+        uint256 end = Math.min(list.length, k + P.SETTLEMENT_MAX_LOTS_PER_PAGE);
+        uint256 sum;
+        for (; k < end; ++k) {
+            Measure storage m = _measures[epoch][i][list[k]];
+            uint256 candidate = Math.mulDiv(pe.bucket, m.candidateSeconds, pe.candidateSeconds);
+            uint256 cap = Math.mulDiv(pe.heat, m.sealSeconds, pe.heatSeconds);
+            uint256 escrow = Math.min(candidate, cap);
+            m.escrow = uint128(escrow);
+            sum += escrow;
+        }
+        pe.escrowed = uint32(k);
+        pe.escrow += uint128(sum);
+        if (k == list.length) _finalHeat(epoch, i, pe);
+    }
+
+    function _finalHeat(uint256 epoch, uint256 i, PoolEpoch storage pe) internal {
+        uint256 unused = pe.bucket - pe.escrow;
+        pe.heat += uint128(unused);
         pe.phase = Phase.Crediting;
-        emit Budgeted(epoch, i, flat, heat, bucket - escrow);
+        emit Budgeted(epoch, i, pe.flat, pe.heat, unused);
     }
 
     function _creditPage(uint256 epoch, uint256 i, PoolEpoch storage pe) internal {
@@ -279,13 +358,7 @@ contract ForgeEmissions is ReentrancyGuardTransient {
         uint256 end = Math.min(earners.length, k + P.SETTLEMENT_MAX_LOTS_PER_PAGE);
         uint256 sum;
         for (; k < end; ++k) {
-            uint256 id = earners[k];
-            Measure storage m = _measures[epoch][i][id];
-            uint256 amount = Math.mulDiv(pe.flat, m.stakeSeconds, pe.stakeSeconds)
-                + Math.mulDiv(pe.heat, m.heatSeconds, pe.heatSeconds);
-            unclaimed[i][id] += amount;
-            sum += amount;
-            emit Credited(epoch, i, id, amount);
+            sum += _credit(epoch, i, pe, earners[k]);
         }
         pe.credited = uint32(k);
         pe.paid += uint128(sum);
@@ -298,6 +371,50 @@ contract ForgeEmissions is ReentrancyGuardTransient {
                 emit ResidueReleased(epoch, i, residue);
             }
         }
+    }
+
+    /// @dev Ordinary reward becomes claimable; escrow goes to its Seal as it stands now:
+    ///      locked while it runs, to the Capstone ledger once completed, routed if forfeited.
+    function _credit(uint256 epoch, uint256 i, PoolEpoch storage pe, uint256 id) internal returns (uint256) {
+        Measure storage m = _measures[epoch][i][id];
+        uint256 amount = Math.mulDiv(pe.flat, m.stakeSeconds, pe.stakeSeconds)
+            + Math.mulDiv(pe.heat, m.heatSeconds, pe.heatSeconds);
+        unclaimed[i][id] += amount;
+        emit Credited(epoch, i, id, amount);
+        uint256 escrow = m.escrow;
+        if (escrow != 0) {
+            emit Escrowed(epoch, i, id, m.seal, escrow);
+            SealStatus status = sealStatus(i, id, m.seal);
+            if (status == SealStatus.Active) sealEscrow[i][id][m.seal] += escrow;
+            else _release(i, id, m.seal, status, escrow);
+        }
+        return amount + escrow;
+    }
+
+    /// @notice Release a Seal's escrow once it has ended: to the position's Capstone ledger
+    ///         if the term completed, routed 50/25/25 if it was forfeited. Anyone may call.
+    function settleSeal(uint256 pool, uint256 id, uint256 k) external nonReentrant returns (uint256 amount) {
+        SealStatus status = sealStatus(pool, id, k);
+        if (status != SealStatus.Completed && status != SealStatus.Forfeited) revert SealNotEnded(pool, id, k);
+        amount = sealEscrow[pool][id][k];
+        if (amount == 0) revert NothingToSettle(pool, id, k);
+        sealEscrow[pool][id][k] = 0;
+        _release(pool, id, k, status, amount);
+    }
+
+    function _release(uint256 pool, uint256 id, uint256 k, SealStatus status, uint256 amount) internal {
+        if (status == SealStatus.Completed) {
+            capstoneOwed[pool][id] += amount;
+            emit SealVested(pool, id, k, amount);
+            return;
+        }
+        uint256 burn = (amount * P.SEAL_FORFEIT_BURN_PCT) / 100;
+        uint256 reserve = (amount * P.SEAL_FORFEIT_MATCH_RESERVE_PCT) / 100;
+        uint256 pot = amount - burn - reserve; // [P] the floor dust joins the Sealed pot
+        burnLane += burn;
+        matchReserve += reserve;
+        sealedPot[pool] += pot;
+        emit SealForfeitRouted(pool, id, k, burn, reserve, pot);
     }
 
     // ── claims ────────────────────────────────────────────────────────────
@@ -367,8 +484,26 @@ contract ForgeEmissions is ReentrancyGuardTransient {
         return _earners[epoch][pool][k];
     }
 
+    function sealedEarnerCount(uint256 epoch, uint256 pool) external view returns (uint256) {
+        return _sealedEarners[epoch][pool].length;
+    }
+
+    function sealedEarnerAt(uint256 epoch, uint256 pool, uint256 k) external view returns (uint256) {
+        return _sealedEarners[epoch][pool][k];
+    }
+
     function progressOf(uint256 epoch, uint256 pool) external view returns (Progress memory) {
         return _progress[epoch][pool];
+    }
+
+    /// @notice A Seal's status as of now, without a pool sync: a running Seal past its due
+    ///         time has completed (back-dated), whatever happens next.
+    function sealStatus(uint256 pool, uint256 id, uint256 k) public view returns (SealStatus) {
+        Seal memory s = poolAt(pool).sealOf(id, k);
+        if (s.status == SealStatus.Active && s.pausedAt == 0 && ForgeMeasures.sealEnd(s) <= block.timestamp) {
+            return SealStatus.Completed;
+        }
+        return s.status;
     }
 
     function claimOf(uint256 pool, uint256 id) external view returns (Claim memory) {

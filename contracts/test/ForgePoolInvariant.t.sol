@@ -4,7 +4,7 @@ pragma solidity 0.8.28;
 import {Test} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ForgePool} from "../src/forge/ForgePool.sol";
-import {Lot} from "../src/forge/ForgeMeasures.sol";
+import {Lot, Seal, SealStatus} from "../src/forge/ForgeMeasures.sol";
 import {FurnaceParams as P} from "../src/generated/FurnaceParams.sol";
 import {MockERC20} from "./utils/MockERC20.sol";
 
@@ -103,6 +103,14 @@ contract ForgeHandler is Test {
         _after();
     }
 
+    function seal(uint256 seed, uint256 track) external {
+        if (ids.length == 0) return;
+        uint256 id = ids[seed % ids.length];
+        vm.prank(pool.positionOf(id).owner);
+        try pool.seal(id, track % 5) {} catch {} // track 4 is unknown
+        _after();
+    }
+
     function poke(uint256 seed) external {
         if (ids.length == 0) return;
         pool.poke(ids[seed % ids.length]);
@@ -122,8 +130,9 @@ contract ForgeHandler is Test {
 
     function _after() internal {
         for (uint256 i; i < ids.length; ++i) {
-            (uint256 s, uint256 w) = pool.epochMeasure(ids[i], 0, pool.positionOf(ids[i]).lastCheckpoint);
-            if (s < lastS[ids[i]] || w < lastW[ids[i]]) monotoneBroken = true;
+            (uint256 s, uint256 w, uint256 ss, uint256 sw) =
+                pool.epochMeasure(ids[i], 0, pool.positionOf(ids[i]).lastCheckpoint);
+            if (s < lastS[ids[i]] || w < lastW[ids[i]] || ss > s || sw > w) monotoneBroken = true;
             (lastS[ids[i]], lastW[ids[i]]) = (s, w);
         }
         uint256 occ = pool.occupiedSecondsAt(block.timestamp);
@@ -206,6 +215,29 @@ contract ForgePoolInvariantTest is Test {
             uint32[] memory pend = pool.pendingTickets(id);
             for (uint256 k; k < pend.length; ++k) {
                 for (uint256 j; j < 32; ++j) assertLe(pool.sliceOf(id, pend[k], j).age, P.HEAT_AGE_CAP);
+            }
+        }
+    }
+
+    /// Seals: a running Seal has no pending ticket and a paused one has one; tags name
+    ///        only the latest Seal and only its cohort's slots; the cohort is real history.
+    function invariant_sealStateConsistent() public view {
+        for (uint256 i; i < handler.idCount(); ++i) {
+            uint256 id = handler.ids(i);
+            ForgePool.Position memory p = pool.positionOf(id);
+            Seal memory s = pool.sealOf(id, p.sealCount);
+            if (s.status == SealStatus.Active) {
+                assertEq(s.pausedAt != 0, p.pendingCount != 0, "paused exactly while cooling is pending");
+                assertEq(p.closedAt, 0, "a closed position has no running Seal");
+            } else {
+                assertEq(s.pausedAt, 0);
+            }
+            assertEq(s.cohortMask & ~p.historyMask, 0, "the cohort is made of real slots");
+            for (uint256 j; j < 32; ++j) {
+                uint256 tag = pool.lotOf(id, j).seal;
+                if (tag == 0) continue;
+                assertEq(tag, p.sealCount, "only the latest Seal tags heads");
+                assertTrue(s.cohortMask & (1 << j) != 0, "only cohort slots are tagged");
             }
         }
     }
