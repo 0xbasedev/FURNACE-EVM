@@ -34,7 +34,7 @@ export function HeatPanel({ ageDays, playing, onPlay }: { ageDays: number; playi
       <header>
         <span className="eyebrow">The fire</span>
         <h2 id="heat-h">Heat</h2>
-        <p className="lede">Each lot's Heat grows with its age, from 1.0× to the 3.0× core cap at {HEAT_CAP_DAYS} days, with +0.1× at every Relic. Heat weights 73% of the daily rewards.</p>
+        <p className="lede">Each lot's Heat grows with its age, from 1.0× to the 3.0× core cap at {HEAT_CAP_DAYS} days, with +0.1× at every Relic. Heat weights 63% of each day's rewards, plus whatever the 10% Seal bucket leaves unused (73% with no Seals).</p>
       </header>
       <div className="heat-readout">
         <span className="heat-big" style={{ color: heatColor(heatColorStop(heat)) }}>
