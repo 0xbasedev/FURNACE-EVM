@@ -138,7 +138,7 @@ Every call is its own transaction, so storage starts cold, as it does for a real
   - slot masks are consistent and ages are bounded;
   - measures and occupancy are monotone;
   - emergency exit succeeds, and pays exactly, for every open position at every step.
-- **Mutation checks** (each one fails the suite):
+- **Mutation checks** (each one fails the suite; re-verified on the code with the `ForgeMeasures` split and Seals):
   - cancel refunds quota;
   - the haircut basis excludes frozen slices;
   - pending slices skip the haircut;
