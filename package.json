@@ -17,7 +17,10 @@
     "test:sol": "node tools/forge.mjs test",
     "forge:sizes": "node tools/forge.mjs build --sizes --skip test --skip script",
     "gas": "node tools/forge.mjs test --isolate --match-test test_gas -vv",
-    "check": "pnpm typecheck && pnpm canonical:sums && pnpm config:verify-hash && pnpm verify:create3 && pnpm gen:check && pnpm forge:gate && pnpm forge:sizes && pnpm test:sol",
+    "sim:dev": "pnpm --filter @furnace/forge-sim dev",
+    "sim:build": "pnpm --filter @furnace/forge-sim build",
+    "sim:test": "pnpm --filter @furnace/forge-sim typecheck && pnpm --filter @furnace/forge-sim test",
+    "check": "pnpm typecheck && pnpm canonical:sums && pnpm config:verify-hash && pnpm verify:create3 && pnpm gen:check && pnpm sim:test && pnpm sim:build && pnpm forge:gate && pnpm forge:sizes && pnpm test:sol",
     "check:all": "pnpm check && pnpm canonical:test",
     "forge:gate": "node scripts/check-forge-gate.mjs"
   },
