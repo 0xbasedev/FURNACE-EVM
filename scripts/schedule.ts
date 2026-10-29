@@ -19,11 +19,20 @@ export const FLOOR = BigInt(cfg.emissions.base.floorPerDay) * WAD;
 function factor(r: bigint): bigint {
   // Largest x in [0, 1e18] with x^H · 2^r ≤ 10^(18H).
   const bound = 10n ** (18n * HALF_LIFE);
+  const ok = (x: bigint) => x ** HALF_LIFE * (1n << r) <= bound;
+  // Bracket the answer around the float estimate (widening until the bracket is proven),
+  // then binary-search inside it: the same exact result in far fewer big powers.
+  const est = BigInt(Math.floor(1e18 * 2 ** (-Number(r) / Number(HALF_LIFE))));
   let lo = 0n;
   let hi = WAD;
+  for (let span = 1n << 12n; span < WAD; span <<= 8n) {
+    const a = est > span ? est - span : 0n;
+    const b = est + span < WAD ? est + span : WAD;
+    if (ok(a) && (b === WAD || !ok(b))) { lo = a; hi = b; break; }
+  }
   while (lo < hi) {
     const mid = (lo + hi + 1n) / 2n;
-    if (mid ** HALF_LIFE * (1n << r) <= bound) lo = mid;
+    if (ok(mid)) lo = mid;
     else hi = mid - 1n;
   }
   return lo;

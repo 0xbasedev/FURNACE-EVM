@@ -20,6 +20,7 @@ EVM workspace for **FURNACE Protocol**, a loyalty-staking protocol built on EMBE
 | `contracts/src/forge/ForgeMeasures.sol` | External library: exact slot and position measures (S, W, and their sealed parts) read from the pool's records by DELEGATECALL. It keeps ForgePool under the EIP-170 size limit. |
 | `contracts/test/` | Exact differential tests against BigInt vectors, fuzz properties, and invariants. |
 | `scripts/` | Independent checks: canonical checksums, config hash, CREATE3, and `gen`. `forge-model.ts` and `settlement-model.ts` are the exact BigInt references, and `forge-scenarios.ts` and `settlement-scenarios.ts` produce the differential scenarios. |
+| `apps/forge-sim/` | **Forge simulator** (Vite, React, GSAP): Heat, exit tiers and age haircuts, Seal projections and a day-by-day settlement run, computed by importing the exact models above (see *Simulator*). |
 | `tools/solc`, `tools/forge.mjs` | The solc-js shim, and a forge launcher that propagates forge's exit status (see *Toolchain*). |
 | `docs/` | ADRs, revision log, and the original v5.3.1 sources (`docs/sources/`, historical). |
 
@@ -28,13 +29,25 @@ EVM workspace for **FURNACE Protocol**, a loyalty-staking protocol built on EMBE
 ```sh
 git submodule update --init   # lib/forge-std
 pnpm install
-pnpm check          # typecheck, canonical checksums, config hash, CREATE3, gen freshness, forge exit gate, contract size gate, forge tests
+pnpm check          # typecheck, canonical checksums, config hash, CREATE3, gen freshness, simulator tests + build, forge exit gate, contract size gate, forge tests
 pnpm canonical:test # the canonical package's own tests + economics gate (pinned TypeScript 5.8.3)
 pnpm check:all      # both (CI runs both)
 pnpm gen            # regenerate FurnaceParams.sol, ScheduleTable.sol, oracle vectors, Forge + settlement scenarios
 pnpm gas            # gas report: every call its own transaction (forge test --isolate)
 pnpm config:hash
+pnpm sim:dev        # the Forge simulator on localhost (sim:test, sim:build for its checks and static build)
 ```
+
+## Simulator
+
+`apps/forge-sim` is a static, single-page simulator for one Forge position. It has no chain connection and adds no math of its own: it imports `canonical/accounting.ts` (Heat, `cooledAge`, `settleBaseEpoch`), `scripts/schedule.ts` (emissions) and `scripts/settlement-model.ts` (the contract mirror) through path aliases, and runs the BigInt work in a Web Worker.
+
+- **Heat**: the canonical curve with Relic milestones, and a "let it age" playback.
+- **Leaving, priced**: the cumulative-plan tier timer, the 1% fee, the exact age haircut, and emergency exit behind a press-and-hold.
+- **Seals**: escrow per track from the canonical settlement formula under the assumptions you set, whether the cap or the candidate binds, and what leaving early forfeits.
+- **Day book**: up to 120 daily settlements of `SettlementModel` with your events (seal, withdraw, cancel, deposit, claim, emergency exit). Actions the contract rules reject are shown as rejected.
+
+The engine tests (`apps/forge-sim/test`) check each projection against direct calls to the models. Every figure is a projection for unaudited, undeployed contracts under the assumptions on screen; it is not an APR. Not modelled yet: Ashfall, Quote yield, Capstone Heat, Relic perks.
 
 ## Verified (current head)
 
