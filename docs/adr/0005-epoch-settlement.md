@@ -53,7 +53,7 @@ The custody PR stored one *cumulative* S/W per position. A position touched afte
 - An owner can pile records into one slot within an epoch, for example by requesting 1 wei and cancelling each second; the slice merges back each time.
 - That costs the attacker about **179k gas per record** (each call its own transaction).
 - Before this change, a page measured a whole position at once. 1,200 records made one **20.9M-gas** page, and roughly 3,000 would exceed a block and freeze that pool-epoch for everyone.
-- Now the same epoch settles in 5 pages, the heaviest 5.3M gas (`SettlementGrief.t.sol`, isolated).
+- Now the same epoch settles in 5 pages, the heaviest 5.4M gas (`SettlementGrief.t.sol`, isolated).
 - The keeper spends about 21k gas per spammed segment against the attacker's 179k, so the spam costs its sender several times what it costs settlement.
 
 **5. Budget.**
@@ -89,17 +89,18 @@ The custody PR stored one *cumulative* S/W per position. A position touched afte
 | Keepers | Permissionless, with no bounty | No bounty source is defined yet. Users can page their own epochs |
 | `N` | Fixed at `openEpoch` | Positions opened after the epoch ended measure zero |
 | Claim timer | Fixed 24h | Relic perks (20h/16h/12h) arrive with Relics |
-| Segment budget per page | 256 | About 5.3M gas worst case per page (isolated), with headroom under a block |
+| Segment budget per page | 256 | About 5.4M gas worst case per page (isolated), with headroom under a block |
 | Charge per due lapse | 64 units | A lapse rewrites up to 32 heads; one oversized sync per page at most |
 
 ## Not in scope (later PRs)
 
-**Before any deployment, `ForgeEmissions` itself must gain Ashfall distribution**, plus the Seal escrow consumers listed in ADR 0006. The Mantle's `DISTRIBUTOR` is immutable, and only it can call `mintAshfall` or `rollAshfall`. So none of these can be bolted on later as a separate contract. Today any Ashfall budget simply stays reserved in the Mantle. It is zero until burn registrars exist.
+**Ashfall distribution and the Seal escrow consumers are now built into `ForgeEmissions` (ADR 0007).** They had to be: the Mantle's `DISTRIBUTOR` is immutable, and only it can call `mintAshfall` or `rollAshfall`, so none of this could be bolted on later as a separate contract.
 
 - **Seals** are built (ADR 0006).
 - **Compound and Stoke.**
 - **Casting and matching.** With no funded match reserve the spec keeps rewards liquid ("No prefunded quote means no match"), so paying liquid now conforms.
-- **Ashfall distribution** (Heat²), **Quote yield**, **Relic perks**, **Deeds**.
+- **Ashfall distribution** (Heat²): built, ADR 0007.
+- **Quote yield**, **Relic perks**, **Deeds**.
 
 ## Gas (`pnpm gas`: forge `--isolate`, optimizer 500 runs, solc-js 0.8.28)
 
@@ -107,15 +108,16 @@ Every call is its own transaction, so storage starts cold, as it does for a real
 
 | Path | Gas |
 |---|---:|
-| `openEpoch` (4 pools) | 341,963 |
-| Measure page: 1 position with 32 lots | 770,575 |
-| Measure page: 32 positions with 1 lot each | 3,782,601 |
-| Heaviest page of a record-spammed epoch (1,200 records in one slot) | 5,324,785 |
-| Heaviest page of 32 positions with 8 due lapses each (32 pages) | 1,490,044 |
-| Credit page: 1 earner | 205,833 |
-| Credit page: 32 earners, one mint | 1,287,007 |
-| `requestClaim` | 63,462 |
+| `openEpoch` (4 pools) | 344,291 |
+| Measure page: 1 position with 32 lots | 831,843 |
+| Measure page: 32 positions with 1 lot each | 3,925,366 |
+| Heaviest page of a record-spammed epoch (1,200 records in one slot) | 5,360,350 |
+| Heaviest page of 32 positions with 8 due lapses each (32 pages) | 1,515,311 |
+| Credit page: 1 earner | 211,351 |
+| Credit page: 32 earners, one mint | 1,369,840 |
+| `requestClaim` | 63,430 |
 
+- Re-measured on the Ashfall code (ADR 0007): a measure call now also returns the Ashfall weight, and each earner has one more slot. Pages with an Ashfall budget: see ADR 0007.
 - **Correction:** earlier versions of this table were measured inside one test transaction, where slots written by earlier pages are warm. They understated real costs by roughly 20–40%. For example, the record-spam page read 4.7M instead of 5.3M, and the attacker's cost per record read 121k instead of 179k.
 - Every `measureSlot` call pays a DELEGATECALL into `ForgeMeasures` (ADR 0004 §3).
 - Escrow pages and sealed credit pages: see ADR 0006.

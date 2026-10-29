@@ -76,10 +76,10 @@ The Mantle's `DISTRIBUTOR` is immutable (ADR 0005), so Seal escrow had to be bui
 
 | Topic | Default here | Why |
 |---|---|---|
-| Vested escrow | Held in `capstoneOwed`, never liquid | Capstone is not built. The spec pays escrow into Capstone so the bonus never sells |
-| Burn share (50%) | Held in `burnLane`; nothing is burned | A burn is irreversible, and Seal forfeits are not among the config's Ashfall sources, so `burnRegistered` would wrongly credit Ashfall. Which burn lane receives it is undecided |
-| Match reserve share (25%) | Held in `matchReserve` | Casting and matching are not built |
-| Sealed pot share (25%) | Held in `sealedPot[pool]` (it also receives the floor dust) | The config defines no stream period. This repo does not invent one |
+| Vested escrow | Held in `capstoneOwed`, never liquid, until the Capstone pulls it (ADR 0007) | The spec pays escrow into Capstone so the bonus never sells |
+| Burn share (50%) | Burned through the Mantle's `burnForfeited`: recognized, with no Ashfall credit (ADR 0007) | Seal forfeits are not among the config's Ashfall sources, so `burnRegistered` would wrongly credit Ashfall |
+| Match reserve share (25%) | Held in `matchReserve` until the match reserve pulls it (ADR 0007) | Casting and matching are not built |
+| Sealed pot share (25%) | Held in `sealedPot[pool]` (it also receives the floor dust) until the Sealed-pot stream pulls it (ADR 0007) | The config defines no stream period. This repo does not invent one: the stream contract decides it |
 | Partial withdrawal | Forfeits the whole Seal | The spec: "A Tap during an active Seal forfeits its unvested bonus." A normal withdrawal is no milder |
 | New Seal while cooling | Not allowed | Simplest cohort definition: every used slot is an active lot |
 | Reseal gap | One epoch after the previous Seal ended | One Seal per position-epoch |
@@ -88,13 +88,11 @@ The Mantle's `DISTRIBUTOR` is immutable (ADR 0005), so Seal escrow had to be bui
 
 ## Before any deployment
 
-`ForgeEmissions` is immutable, and the Mantle's `DISTRIBUTOR` is fixed at deploy time. Like Ashfall (ADR 0005), each of these must be inside `ForgeEmissions`, or wired into it, before deployment. None can be added later:
-- **Capstone handoff:** moving `capstoneOwed` into each position's Capstone.
-- **Forfeit consumers:**
-  - the burn lane (and whether it registers its burns);
-  - the match reserve (Casting);
-  - the Sealed pot's stream to running Seals, once the config defines its period.
-- **Keystone and Seal Scar** need Deeds and Relics. Today a position cannot change owner, so whole-term ownership holds trivially.
+`ForgeEmissions` is immutable, and the Mantle's `DISTRIBUTOR` is fixed at deploy time, so each of these had to be inside `ForgeEmissions`, or wired into it, before deployment. ADR 0007 builds them:
+- **Capstone handoff:** the Capstone pulls `capstoneOwed` (`takeCapstone`).
+- **Forfeit consumers:** `burnForfeits` burns the burn lane with no Ashfall credit; the match reserve and the Sealed-pot stream pull their ledgers. The consumer contracts themselves are not built yet.
+
+Still open: **Keystone and Seal Scar** need Deeds and Relics. Today a position cannot change owner, so whole-term ownership holds trivially.
 
 ## Settlement fix found here: due lapses cost page budget
 
@@ -114,15 +112,15 @@ Measured with `pnpm gas` (`forge test --isolate`: every call is its own transact
 
 | Path | Gas |
 |---|---:|
-| `seal`, 32 lots (tags every lot) | 1,161,313 |
-| `requestCooling` 100% + pause, 32 lots, a day after sealing | 2,134,134 |
-| `cancelCooling` + resume retag, 32 lots | 1,409,392 |
-| Escrow page, 32 sealed earners | 467,302 |
-| Credit page, 32 sealed earners (ordinary + escrow, one mint) | 2,271,698 |
-| `settleSeal` (forfeit routing) | 100,952 |
-| Heaviest measure page, 32 positions × 8 due lapses (32 pages) | 1,490,044 |
+| `seal`, 32 lots (tags every lot) | 1,178,921 |
+| `requestCooling` 100% + pause, 32 lots, a day after sealing | 2,151,735 |
+| `cancelCooling` + resume retag, 32 lots | 1,427,123 |
+| Escrow page, 32 sealed earners | 467,686 |
+| Credit page, 32 sealed earners (ordinary + escrow, one mint) | 2,354,531 |
+| `settleSeal` (forfeit routing) | 100,919 |
+| Heaviest measure page, 32 positions × 8 due lapses (32 pages) | 1,515,311 |
 
-- **The pause is nearly free:** it rides on the freeze's own head writes. The same 100% request without a Seal costs 2,098,958 gas (ADR 0004), so the pause adds about 1.7%.
+- **The pause is nearly free:** it rides on the freeze's own head writes. The same 100% request without a Seal costs 2,116,530 gas (ADR 0004), so the pause adds about 1.7%.
 - **The resume retag and `seal` itself** each write up to one head per cohort lot: about 1.2–1.4M gas on a 32-lot position.
 
 ## Verification
