@@ -35,7 +35,9 @@ This ADR covers custody: deposits, lots, cooling plans, execution, cancel and la
 - Emergency exit sets `closedAt` and clears the slot masks. Measures stop there, and no per-slot records are written.
 - Records are never deleted, even after exit.
 - **Code size.** The measure path (segment scan, binary search, `integrateHeat`) lives in the external library `ForgeMeasures`. The pool reaches it by DELEGATECALL with pointers into its own storage. Without the split, ForgePool's runtime code was 25,382 bytes, over the EIP-170 limit of 24,576, so it could not have been deployed.
-  - The library and optimizer runs of 1,000 (down from 10,000) bring it to 20,290 bytes, leaving room for Seals.
+  - The library and optimizer runs of 1,000 (down from 10,000) brought it to 20,290 bytes.
+  - With Seals (ADR 0006), which add the Seal state, tags and transitions, it is 23,534 bytes at optimizer runs of 500. Whole-position measures also moved into the library.
+  - Taps, Deeds or the Capstone Heat bonus will need a structural split of ForgePool, for example a separate transfer module. Lowering optimizer runs further buys little (about 200 bytes at 200 runs).
   - `pnpm forge:sizes`, part of `pnpm check`, fails the build if any contract in `contracts/src` exceeds the limit.
   - The library is a separate deploy artifact, linked into ForgePool.
 - The custody differential still replays all 16 scenarios to the same state hashes as the earlier cumulative-S/W version. S/W are now read through `epochMeasure(id, 0, lastCheckpoint)`, and lots are extrapolated to the checkpoint.
@@ -56,7 +58,7 @@ This ADR covers custody: deposits, lots, cooling plans, execution, cancel and la
 **6. Freeze, execute, cancel and lapse.**
 - **[P] Freeze basis:** a request freezes `floor(a_j·r/A)` of each active lot in slot order. The floor dust goes one unit at a time to the first lots with room. A later deposit is not part of an earlier slice.
   - A frozen slice keeps its own `{amount, age, participated}` and neither earns nor ages.
-  - `coolingPausedSeconds` advances while any ticket is pending. This is the hook Seals need to extend their terms.
+  - `coolingPausedSeconds` advances while any ticket is pending. Seals keep their own pause (`Seal.pausedAt` and `pausedSeconds`, ADR 0006), because their measures need the pause's exact start and end.
 - **Execute:** allowed only in `[maturity, maturity+24h)`. It pays out in kind minus the 1% fee and resets Streak.
   - **[P] Haircut basis:** every surviving lot and every other pending slice gets `cooledAge(age, w, balance)`. Here `balance` is the full custody principal: active plus all frozen, including this ticket.
 - **Cancel or lapse** resumes the frozen state, adjusted by any haircut that happened in between. A slice that emptied its lot goes back into that lot's slot (`heldBy`). Any other slice takes its own slot, unless the parent's state is identical, in which case sharing storage is exact. Averaging two ages is never used (spec §4).
@@ -123,7 +125,7 @@ Measured with checkpoint records; the earlier cumulative-S/W figures (at 10,000 
 ## Verification
 
 - **Differential:**
-  - 16 scenarios (10 scripted edge cases, 6 seeded random walks; 793 actions, 218 of them expected to revert) run through `scripts/forge-model.ts`.
+  - 21 scenarios (15 scripted edge cases, 5 of them for Seals, and 6 seeded random walks; 838 actions, 287 of them expected to revert) run through `scripts/forge-model.ts`. The state hash also covers every head's Seal tag and the Seal state (ADR 0006).
   - After every action the Solidity state hash must equal the model's: every lot, slice, ticket, plan, measure, fee, occupancy entry, queue size and token balance. Reverts must match too.
   - The scripted cases cover tiers, overlapping tickets, a haircut between freeze and cancel, a late touch after a lapse, a lapse while the pool holds only frozen principal, capped merges, the 16/17-lot capacity edge, the 32-lot cap and emergency exit with pending tickets.
   - Unit tests add the capacity rule on 17 capped lots and the worst-case emergency exit, which must resolve 8 lapses inside the exit.
@@ -153,7 +155,6 @@ Measured with checkpoint records; the earlier cumulative-S/W figures (at 10,000 
   - the authenticated Flow LP deposit-fee exemption;
   - Taps (youngest-first, no haircut, quota);
   - Deeds (transfer with an 80% age carry and a Streak reset);
-  - Seals (pause and extend, using `coolingPausedSeconds`);
   - Capstone and Pyre ordinary bonuses (`integrateHeat` already takes the bonus);
   - founder phantom age.
 - Matching the model proves the port is consistent with this ADR's readings. It does not make any [P] rule canonical.

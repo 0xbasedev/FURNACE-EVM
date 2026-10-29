@@ -45,23 +45,26 @@ The custody PR stored one *cumulative* S/W per position. A position touched afte
   - lapses due by the epoch end were resolved on entry;
   - anything written later starts after the epoch.
 - Earners (`S_i > 0`) are stored and added to the totals. Each position is counted exactly once.
+- **Due lapses cost budget.** Entering a position syncs it, and the sync resolves every lapse due by now. A page therefore charges `LAPSE_UNITS` = 64 **[P]** per due lapse (`pool.dueLapses`) before entering the position.
+  - A sync that does not fit waits to be the next page's first work, so a page pays for at most one oversized sync.
+  - Without this charge, 32 positions with 8 due lapses each could have put about 1M gas each into one page (found while building Seals; ADR 0006).
 
 **Why resumable: record spam.**
 - An owner can pile records into one slot within an epoch, for example by requesting 1 wei and cancelling each second; the slice merges back each time.
-- That costs the attacker about **121k gas per record**.
+- That costs the attacker about **179k gas per record** (each call its own transaction).
 - Before this change, a page measured a whole position at once. 1,200 records made one **20.9M-gas** page, and roughly 3,000 would exceed a block and freeze that pool-epoch for everyone.
-- Now the same epoch settles in 5 pages, the heaviest 4.7M gas (`SettlementGrief.t.sol`).
-- The keeper spends about 18k gas per spammed segment against the attacker's 121k, so the spam costs its sender several times what it costs settlement.
+- Now the same epoch settles in 5 pages, the heaviest 5.3M gas (`SettlementGrief.t.sol`, isolated).
+- The keeper spends about 21k gas per spammed segment against the attacker's 179k, so the spam costs its sender several times what it costs settlement.
 
 **5. Budget.**
-- When the cursor reaches `N`: `bucket = ⌊E·10/100⌋`, `flat = ⌊(E−bucket)·30/100⌋`, `heat = E − bucket − flat + unusedBucket`.
-- With no Seals, escrow is 0 and the whole bucket returns to Heat. That is the canonical 27/73 split (spec §10: "With no eligible Seals it yields 27/73").
-- The escrow term is already in place for Seals.
+- When the cursor reaches `N`: `bucket = ⌊E·10/100⌋`, `flat = ⌊(E−bucket)·30/100⌋`, `L = E − bucket − flat`.
+- If any lot was sealed (`C > 0`), escrow pages set each sealed position's capped escrow first (ADR 0006). Then `heat = L + bucket − Σescrow`.
+- With no Seals the whole bucket returns to Heat. That is the canonical 27/73 split (spec §10: "With no eligible Seals it yields 27/73").
 - If `S == 0`, `E` is released.
 
 **6. Credit pages, with one mint per page.**
-- Each earner gets `⌊flat·S_i/S⌋ + ⌊heat·W_i/W⌋` added to `unclaimed[pool][id]`.
-- The page's sum is minted once, with `mintBase(e, this, sum)`.
+- Each earner gets `⌊flat·S_i/S⌋ + ⌊heat·W_i/W⌋` added to `unclaimed[pool][id]`. Its escrow, if any, goes to its Seal (ADR 0006).
+- The page's sum, escrow included, is minted once, with `mintBase(e, this, sum)`.
 - When the last earner is credited, the floor residue `E − paid` is released, tagged with its epoch and pool (`ResidueReleased`).
 - Every base wei of a fully settled epoch is therefore minted or released. The invariant suite checks this.
 - Claims stay O(1) however long a holder is away.
@@ -86,13 +89,14 @@ The custody PR stored one *cumulative* S/W per position. A position touched afte
 | Keepers | Permissionless, with no bounty | No bounty source is defined yet. Users can page their own epochs |
 | `N` | Fixed at `openEpoch` | Positions opened after the epoch ended measure zero |
 | Claim timer | Fixed 24h | Relic perks (20h/16h/12h) arrive with Relics |
-| Segment budget per page | 256 | About 4.7M gas worst case per page, with headroom under a block |
+| Segment budget per page | 256 | About 5.3M gas worst case per page (isolated), with headroom under a block |
+| Charge per due lapse | 64 units | A lapse rewrites up to 32 heads; one oversized sync per page at most |
 
 ## Not in scope (later PRs)
 
-**Before any deployment, `ForgeEmissions` itself must gain Ashfall distribution and Seals.** The Mantle's `DISTRIBUTOR` is immutable, and only it can call `mintAshfall` or `rollAshfall`. So neither can be bolted on later as a separate contract. Today any Ashfall budget simply stays reserved in the Mantle. It is zero until burn registrars exist.
+**Before any deployment, `ForgeEmissions` itself must gain Ashfall distribution**, plus the Seal escrow consumers listed in ADR 0006. The Mantle's `DISTRIBUTOR` is immutable, and only it can call `mintAshfall` or `rollAshfall`. So none of these can be bolted on later as a separate contract. Today any Ashfall budget simply stays reserved in the Mantle. It is zero until burn registrars exist.
 
-- **Seals:** escrow caps, membership, pause and extend, forfeiture.
+- **Seals** are built (ADR 0006).
 - **Compound and Stoke.**
 - **Casting and matching.** With no funded match reserve the spec keeps rewards liquid ("No prefunded quote means no match"), so paying liquid now conforms.
 - **Ashfall distribution** (Heat²), **Quote yield**, **Relic perks**, **Deeds**.
@@ -117,7 +121,7 @@ The custody PR stored one *cumulative* S/W per position. A position touched afte
 ## Verification
 
 - **Differential:**
-  - 11 scenarios (8 scripted, 3 seeded random walks) replay custody actions in four pools, Mantle finalization, epoch opening, measure and credit pages, and claims.
+  - 17 scenarios (14 scripted, 3 seeded random walks) replay custody and Seal actions in four pools, Mantle finalization, epoch opening, measure, escrow and credit pages, `settleSeal`, and claims.
   - After every action, a keccak of the settlement state must equal `SettlementModel`'s, and reverts must match. The state covers the pools' occupancy, every Mantle budget, every pool-epoch, every measure, every credit and claim, and EMBER balances.
   - The model mirrors the contract's records and page loop, segment for segment, so page progress is compared too.
   - When each position finishes, its record-based sum must equal the model's own epoch-split accrual. Each budget and payout is asserted equal to canonical `settleBaseEpoch` at generation time.
@@ -129,12 +133,14 @@ The custody PR stored one *cumulative* S/W per position. A position touched afte
     - a keeper five epochs late;
     - claim snapshots;
     - pages split by lot count;
-    - record spam that resumes across pages.
+    - record spam that resumes across pages;
+    - due lapses that split a page (`lapseBudget`);
+    - the Seal cases listed in ADR 0006.
 - **Invariants** (48 runs × 120 calls, `fail_on_revert` on): a random keeper finalizes, opens and pages between random custody and claim actions.
   - `minted + released ≤ base`, and `= base` once all pools are done;
   - `admitted ≤ target` and `paid ≤ admitted`;
   - each position counted at most once;
-  - EMBER held equals unclaimed plus pending;
+  - EMBER held equals unclaimed plus pending plus every Seal escrow and forfeit ledger;
   - EMBER supply equals the Mantle's minted total;
   - emergency exit always works.
 - **Mutation checks:** all 13 fail the suite.
