@@ -50,6 +50,54 @@ library FurnaceParams {
     uint256 internal constant MILESTONE_4_BUMP_RAY = 100000000000000000000000000;
     uint256 internal constant DEED_HEAT_CARRY_PCT = 80;
 
+    // ── Forge custody: fees, cooling plans, emergency exit (spec v5.5 §4, §11) ──
+    uint256 internal constant FORGE_DEPOSIT_FEE_PCT = 1;
+    uint256 internal constant FORGE_WITHDRAW_FEE_PCT = 1;
+    uint256 internal constant EMERGENCY_EXIT_FEE_PCT = 8;
+    uint256 internal constant MIN_STAKE_LP = 100000000000000; // 0.0001 LP
+    uint256 internal constant WITHDRAW_TIER_COUNT = 5;
+    uint256 internal constant WITHDRAW_TIER_0_MAX_PCT = 10;
+    uint256 internal constant WITHDRAW_TIER_0_SECONDS = 21600;
+    uint256 internal constant WITHDRAW_TIER_1_MAX_PCT = 25;
+    uint256 internal constant WITHDRAW_TIER_1_SECONDS = 43200;
+    uint256 internal constant WITHDRAW_TIER_2_MAX_PCT = 50;
+    uint256 internal constant WITHDRAW_TIER_2_SECONDS = 86400;
+    uint256 internal constant WITHDRAW_TIER_3_MAX_PCT = 75;
+    uint256 internal constant WITHDRAW_TIER_3_SECONDS = 172800;
+    uint256 internal constant WITHDRAW_TIER_4_MAX_PCT = 100;
+    uint256 internal constant WITHDRAW_TIER_4_SECONDS = 259200;
+    uint256 internal constant WITHDRAW_EXECUTION_WINDOW = 86400;
+    uint256 internal constant COOLING_PLAN_HORIZON = 259200;
+    uint256 internal constant ASHFALL_MIN_PARTICIPATION = 30 days; // actual participation, stored saturating here
+
+    // ── Base epoch settlement: pools, pages, claims (spec v5.5 §4, §10, §11) ──
+    uint256 internal constant SETTLEMENT_MAX_LOTS_PER_PAGE = 32;
+    uint256 internal constant CLAIM_SECONDS = 86400;
+    uint256 internal constant FORGE_POOL_COUNT = 4;
+    uint256 internal constant FORGE_ALLOC_POINTS_TOTAL = 2000;
+    uint256 internal constant FORGE_POOL_0_ALLOC_POINTS = 1000; // ember-usdc-lp
+    bool internal constant FORGE_POOL_0_IS_LP = true;
+    uint256 internal constant FORGE_POOL_1_ALLOC_POINTS = 400; // ember-weth-lp
+    bool internal constant FORGE_POOL_1_IS_LP = true;
+    uint256 internal constant FORGE_POOL_2_ALLOC_POINTS = 400; // ember-single
+    bool internal constant FORGE_POOL_2_IS_LP = false;
+    uint256 internal constant FORGE_POOL_3_ALLOC_POINTS = 200; // usdc-single
+    bool internal constant FORGE_POOL_3_IS_LP = false;
+
+    // ── Seals: Conviction tracks, escrow and forfeiture (spec v5.5 §10) ──
+    uint256 internal constant SEAL_TRACK_COUNT = 4;
+    uint256 internal constant SEAL_TRACK_0_SECONDS = 30 days; // Ember
+    uint256 internal constant SEAL_TRACK_0_BONUS_RAY = 150000000000000000000000000; // +0.15
+    uint256 internal constant SEAL_TRACK_1_SECONDS = 90 days; // Forge
+    uint256 internal constant SEAL_TRACK_1_BONUS_RAY = 250000000000000000000000000; // +0.25
+    uint256 internal constant SEAL_TRACK_2_SECONDS = 180 days; // Kiln
+    uint256 internal constant SEAL_TRACK_2_BONUS_RAY = 350000000000000000000000000; // +0.35
+    uint256 internal constant SEAL_TRACK_3_SECONDS = 365 days; // Eternal
+    uint256 internal constant SEAL_TRACK_3_BONUS_RAY = 500000000000000000000000000; // +0.5
+    uint256 internal constant SEAL_FORFEIT_BURN_PCT = 50;
+    uint256 internal constant SEAL_FORFEIT_MATCH_RESERVE_PCT = 25;
+    uint256 internal constant SEAL_FORFEIT_SEALED_POT_PCT = 25;
+
     // ── Deterministic deployment registry (CREATE3). PROVISIONAL while the deployer is 0x1111111111111111111111111111111111111111 ──
     //    Only MINED entries become constants; unmined modules are constructor/initializer inputs.
     address internal constant CREATEX = 0xba5Ed099633D3B313e4D5F7bdc1305d3c28ba5Ed;
