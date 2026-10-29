@@ -101,19 +101,24 @@ The custody PR stored one *cumulative* S/W per position. A position touched afte
 - **Casting and matching.** With no funded match reserve the spec keeps rewards liquid ("No prefunded quote means no match"), so paying liquid now conforms.
 - **Ashfall distribution** (Heat²), **Quote yield**, **Relic perks**, **Deeds**.
 
-## Gas (forge, optimizer 1,000 runs, solc-js 0.8.28)
+## Gas (`pnpm gas`: forge `--isolate`, optimizer 500 runs, solc-js 0.8.28)
+
+Every call is its own transaction, so storage starts cold, as it does for a real keeper.
 
 | Path | Gas |
 |---|---:|
-| `openEpoch` (4 pools) | 238,259 |
-| Measure page: 1 position with 32 lots | 582,930 |
-| Measure page: 32 positions with 1 lot each | 3,054,876 |
-| Heaviest page of a record-spammed epoch (1,200 records in one slot) | 4,702,133 |
-| Credit page: 1 earner | 124,875 |
-| Credit page: 32 earners, one mint | 948,151 |
-| `requestClaim` | 35,279 |
+| `openEpoch` (4 pools) | 341,963 |
+| Measure page: 1 position with 32 lots | 770,575 |
+| Measure page: 32 positions with 1 lot each | 3,782,601 |
+| Heaviest page of a record-spammed epoch (1,200 records in one slot) | 5,324,785 |
+| Heaviest page of 32 positions with 8 due lapses each (32 pages) | 1,490,044 |
+| Credit page: 1 earner | 205,833 |
+| Credit page: 32 earners, one mint | 1,287,007 |
+| `requestClaim` | 63,462 |
 
-- Every `measureSlot` call now pays a DELEGATECALL into `ForgeMeasures` (ADR 0004 §3). That adds about 6% to a page that measures 32 lots of one position, and about 1% to other pages.
+- **Correction:** earlier versions of this table were measured inside one test transaction, where slots written by earlier pages are warm. They understated real costs by roughly 20–40%. For example, the record-spam page read 4.7M instead of 5.3M, and the attacker's cost per record read 121k instead of 179k.
+- Every `measureSlot` call pays a DELEGATECALL into `ForgeMeasures` (ADR 0004 §3).
+- Escrow pages and sealed credit pages: see ADR 0006.
 
 - Total work grows with population, as the spec says. Settling an epoch takes about ⌈slots/32⌉ measure pages plus ⌈earners/32⌉ credit pages per pool, plus one page per 256 extra record segments.
 - **The cursor walks every position id ever opened.** That includes closed and emptied positions and dust positions in the single-asset pools, so per-epoch work grows with the pool's *history*, not only its live stake. Each such position costs a `poke` and a mask read: cheap, but unbounded over time. Pruning closed positions, or indexing live ones, is a follow-up.
@@ -143,7 +148,7 @@ The custody PR stored one *cumulative* S/W per position. A position touched afte
   - EMBER held equals unclaimed plus pending plus every Seal escrow and forfeit ledger;
   - EMBER supply equals the Mantle's minted total;
   - emergency exit always works.
-- **Mutation checks:** all 13 fail the suite.
+- **Mutation checks:** all 13 fail the suite, re-verified on the escrow-phase code ("the unused bucket is kept" now targets `_finalHeat`). ADR 0006 adds 15 Seal mutations.
   - a finished position is counted again;
   - a resumed slot restarts from its first segment;
   - progress is not kept between pages;

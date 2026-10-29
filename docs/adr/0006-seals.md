@@ -112,7 +112,18 @@ The Mantle's `DISTRIBUTOR` is immutable (ADR 0005), so Seal escrow had to be bui
 
 Measured with `pnpm gas` (`forge test --isolate`: every call is its own transaction, so slots start cold). Optimizer runs 500, solc-js 0.8.28.
 
-GAS_TABLE
+| Path | Gas |
+|---|---:|
+| `seal`, 32 lots (tags every lot) | 1,161,313 |
+| `requestCooling` 100% + pause, 32 lots, a day after sealing | 2,134,134 |
+| `cancelCooling` + resume retag, 32 lots | 1,409,392 |
+| Escrow page, 32 sealed earners | 467,302 |
+| Credit page, 32 sealed earners (ordinary + escrow, one mint) | 2,271,698 |
+| `settleSeal` (forfeit routing) | 100,952 |
+| Heaviest measure page, 32 positions × 8 due lapses (32 pages) | 1,490,044 |
+
+- **The pause is nearly free:** it rides on the freeze's own head writes. The same 100% request without a Seal costs 2,098,958 gas (ADR 0004), so the pause adds about 1.7%.
+- **The resume retag and `seal` itself** each write up to one head per cohort lot: about 1.2–1.4M gas on a 32-lot position.
 
 ## Verification
 
@@ -144,11 +155,26 @@ GAS_TABLE
     - sealed earners ≤ earners;
     - every settled epoch's base is minted or released.
 - **Unit tests** (`Seals.t.sol`): cap and candidate binding, pause extension and back-dated completion, top-ups, forfeit routing, vesting with late credits, emergency exit, guards, the 27/73 path, near-uint96 stakes.
-- **Mutations:** MUTATIONS
+- **Mutations:** each of these 15 planted Seal bugs fails the suite. The 13 settlement mutations of ADR 0005 were re-run on this code and still fail it.
+  - a top-up joins the Seal;
+  - a cooling request does not pause it;
+  - the pause does not extend the term;
+  - a lapse's unpause is not back-dated;
+  - completion is not back-dated;
+  - tagged segments are not clipped at the Seal's end;
+  - C is formed from stake instead of Heat;
+  - the cap uses the post-return Heat budget;
+  - running escrow becomes claimable;
+  - a forfeit vests like a completion;
+  - there is no gap between Seals;
+  - an executed withdrawal does not forfeit;
+  - an emergency exit does not forfeit;
+  - a returning cohort slice leaves the cohort;
+  - due lapses cost the page nothing.
 
 ## Consequences and limits
 
 - **Size:** ForgePool is 23,534 bytes (optimizer runs 500), about 1 KB under EIP-170.
   - Taps, Deeds or the Capstone Heat bonus will need a structural split, for example a separate module for transfers. Lowering optimizer runs further buys little.
-- **Retag gas:** the transitions that retag pay for up to 32 head writes. The seal itself, the first request and the last resolution each cost about 1.2–1.4M gas on a 32-lot position.
+- **Retag gas:** `seal` and the last resolution each pay for up to 32 head writes, about 1.2–1.4M gas on a 32-lot position. The first request barely pays for its pause, which reuses the freeze's writes.
 - **Not audited or deployed.** Matching the models proves consistency with this ADR, not canonical conformance of any [P] rule.

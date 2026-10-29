@@ -100,24 +100,25 @@ This ADR covers custody: deposits, lots, cooling plans, execution, cancel and la
 | Participation storage | Saturates at the 30-day Ashfall threshold | The only consumer v5.5 defines; it makes capped cohorts mergeable |
 | Emergency exit | Closes the position | Simplest state; measures remain readable |
 
-## Gas (forge, optimizer 1,000 runs, solc-js 0.8.28)
+## Gas (`pnpm gas`: forge `--isolate`, optimizer 500 runs, solc-js 0.8.28)
 
-Measured with checkpoint records; the earlier cumulative-S/W figures (at 10,000 runs) are in brackets.
+Every call is its own transaction, so storage starts cold, as it does for a real user.
 
 | Path | Gas |
 |---|---:|
-| `requestCooling`, 16 lot splits | 1,007,224 (730,423) |
-| `requestCooling` 100%, 32 lots | 1,842,891 (1,048,053) |
-| `executeWithdrawal`, 16 lots | 526,333 (238,507) |
-| `executeWithdrawal`, 4 lots + 6 pending haircut | 271,027 (193,584) |
-| `executeWithdrawal`, 32 lots | 94,996 (97,305) |
-| `cancelCooling`, 4 slices to reserved slots | 129,049 (119,693) |
-| `poke`, resolving 5 lapses | 630,896 (868,056) |
-| `poke`, 32 lots | 2,659 (400,637) |
-| `emergencyExit`, all lots frozen | 48,419 (60,514) |
-| `emergencyExit`, resolving 8 unprocessed lapses first (worst case) | 932,472 (1,125,364) |
+| `requestCooling`, 16 lot splits | 1,152,268 |
+| `requestCooling` 100%, 32 lots | 2,098,958 |
+| `executeWithdrawal`, 16 lots | 684,609 |
+| `executeWithdrawal`, 4 lots + 6 pending haircut | 530,768 |
+| `executeWithdrawal`, 32 lots | 304,943 |
+| `cancelCooling`, 4 slices to reserved slots | 246,089 |
+| `poke`, resolving 5 lapses | 802,704 |
+| `poke`, 32 lots | 35,082 |
+| `emergencyExit`, all lots frozen | 157,427 |
+| `emergencyExit`, resolving 8 unprocessed lapses first (worst case) | 1,104,388 |
 
-- Lowering optimizer runs from 10,000 to 1,000 (for code size) costs under 1% on these paths.
+- **Correction:** earlier versions of this table were measured inside one test transaction, where slots touched earlier are warm. They understated real costs by roughly 20–40%, and more for small calls; a 32-lot `poke` read 2.6k instead of 35k. The figures above replace them.
+- Seal transitions on a 32-lot position: see ADR 0006.
 - Records make syncs and exits cheaper. Changes cost more, because each changed lot writes a fresh history slot (about 22k) as well as its fresh slice storage.
 - The record count lives in the head, so no array-length slot is written.
 - Packing slices, or storing a slice as a fraction of its lot until a haircut forces materialization, are possible optimizations. Both need the same differential evidence before they replace this version.

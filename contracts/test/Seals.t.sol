@@ -244,6 +244,7 @@ contract SealsTest is SettlementFixture {
         uint256 g = gasleft();
         _seal(0, alice, a, 3);
         emit log_named_uint("seal (32 lots)", g - gasleft());
+        skip(1 days); // a later pause pushes every tagged head into history
         g = gasleft();
         vm.prank(alice);
         uint32 t = pools[0].requestCooling(a, 32 * 99e16); // 100%: no splits, the pause frees every tag
@@ -261,14 +262,18 @@ contract SealsTest is SettlementFixture {
             _seal(1, who, id, k % 4);
         }
         skip(1 days);
-        mantle.finalizeEpoch();
-        emissions.openEpoch();
-        while (emissions.poolEpoch(0, 1).phase == ForgeEmissions.Phase.Measuring) emissions.advance(0, 1);
+        uint256 e = (block.timestamp - start) / P.EPOCH_SECONDS - 1; // the last full epoch
+        for (uint256 k; k <= e; ++k) {
+            mantle.finalizeEpoch();
+            emissions.openEpoch();
+        }
+        while (emissions.poolEpoch(e, 1).phase == ForgeEmissions.Phase.Measuring) emissions.advance(e, 1);
+        assertEq(uint256(emissions.poolEpoch(e, 1).phase), uint256(ForgeEmissions.Phase.Escrowing));
         g = gasleft();
-        emissions.advance(0, 1);
+        emissions.advance(e, 1);
         emit log_named_uint("escrow page (32 sealed earners)", g - gasleft());
         g = gasleft();
-        emissions.advance(0, 1);
+        emissions.advance(e, 1);
         emit log_named_uint("credit page (32 sealed earners)", g - gasleft());
         vm.prank(_user(2));
         pools[1].emergencyExit(1);

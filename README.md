@@ -73,7 +73,7 @@ pnpm config:hash
     - payouts never exceed the admitted budget;
     - EMBER held equals unclaimed and pending rewards plus every Seal escrow and forfeit ledger, and supply equals what the Mantle minted;
     - exits never depend on settlement.
-  - **Settlement and Seal mutations:** MUTATION_COUNT planted bugs, each caught; see ADR 0005 and ADR 0006.
+  - **Settlement and Seal mutations:** 28 planted bugs, each caught; see ADR 0005 and ADR 0006.
   - **CI gate:** `pnpm forge:gate` proves that a failing test fails the build. The upstream npm wrapper did not propagate forge's exit status.
   - **Size gate:** `pnpm forge:sizes` fails the build if any contract exceeds the EIP-170 runtime limit (24,576 bytes). ForgePool had been 806 bytes over. The measure path now lives in the external library `ForgeMeasures`, and optimizer runs are 500. With Seals, ForgePool is 23,534 bytes.
 
