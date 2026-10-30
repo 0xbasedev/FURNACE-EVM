@@ -103,7 +103,7 @@ The engine tests (`apps/forge-sim/test`) check each projection against direct ca
 
 Foundry's installer, GitHub releases and the solc binary host are blocked in the cloud dev environment, so both compilers come from npm:
 - `@foundry-rs/forge` (pinned) provides the `forge` binary. Its npm `bin.mjs` (1.7.1) drops the exit status, so failing tests would exit 0. The scripts therefore run forge through `tools/forge.mjs`, which launches the same platform binary and forwards its status.
-- `tools/solc` wraps solc-js 0.8.28 (npm `solc`, pinned).
+- `tools/solc` wraps solc-js 0.8.28 (npm `solc`, pinned). It hands solc the input on the wasm heap: solc-js's own `compile` copies it onto the wasm stack (4 bytes reserved per character), which overflowed ("memory access out of bounds") once a clean build compiled every test file at once (≈1.3 MB of input). Its output is byte-identical to `solc.compile`.
 
 EVM target: `cancun`.
 
