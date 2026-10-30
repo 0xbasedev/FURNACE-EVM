@@ -11,7 +11,9 @@ import {ForgeEmissions} from "./ForgeEmissions.sol";
 
 /// @notice [P] The protected valuation checkpoint (spec §6): EMBER-wei per stake-token-wei of
 ///         `pool`'s stake, RAY-scaled, so 6- and 18-decimal stakes need no other scaling.
-///         Not built; its address is a deployment input (ADR 0009).
+///         `pool` is ForgeEmissions' index (0 ember-usdc-lp, 1 ember-weth-lp, 2 ember-single,
+///         3 usdc-single). It must revert when its checkpoint is stale: Boost treats any value
+///         it returns as current. Not built; its address is a deployment input (ADR 0009).
 interface IValuation {
     function emberPerStake(uint256 pool) external view returns (uint256);
 }
@@ -99,6 +101,7 @@ contract Boost is ReentrancyGuardTransient {
     error NotPending(uint256 pool, uint256 id);
     error NotMatured(uint256 maturity);
     error RaiseTooSoon(uint256 readyAt);
+    error BelowMinimum(uint256 amount);
 
     /// @dev Deployed after the pools, the Mantle and ForgeEmissions, at the address each of
     ///      them was given; the constructor checks every wire.
@@ -130,6 +133,7 @@ contract Boost is ReentrancyGuardTransient {
         if (amount == 0) revert ZeroAmount();
         EMBER.safeTransferFrom(msg.sender, address(this), amount);
         uint256 fee = (amount * P.CAPSTONE_DEPOSIT_FEE_PCT) / 100;
+        if (fee == 0) revert BelowMinimum(amount); // every raise by deposit pays a burned fee
         feesToBurn += fee;
         Account storage a = _accounts[pool][id];
         _settle(pool, id, a);

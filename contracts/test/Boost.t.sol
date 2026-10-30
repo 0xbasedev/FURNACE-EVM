@@ -349,6 +349,53 @@ contract BoostTest is BoostFixture {
         boost.refresh(4, id);
     }
 
+    /// End to end through the real settlement: a 30-day Seal on the EMBER pool vests, its escrow
+    /// is settled into the Capstone ledger and claimed into the Capstone, and the next day's W
+    /// beats an identical unboosted position by exactly stake · time · bonus.
+    function test_vestedEscrowRaisesTheNextDaysHeat() public {
+        uint256 id = _open(alice, 2, 1000e18);
+        uint256 control = _open(bob, 2, 1000e18);
+        vm.prank(alice);
+        pools[2].seal(id, 0);
+        for (uint256 e; e < 31; ++e) {
+            skip(1 days);
+            mantle.finalizeEpoch();
+            emissions.openEpoch();
+            for (uint256 i; i < 4; ++i) {
+                while (emissions.poolEpoch(e, i).phase != ForgeEmissions.Phase.Done) emissions.advance(e, i);
+            }
+        }
+        uint256 late = emissions.capstoneOwed(2, id); // escrow paged after the term ended goes straight here
+        uint256 escrow = emissions.settleSeal(2, id, 1) + late;
+        assertGt(escrow, late);
+        assertEq(emissions.capstoneOwed(2, id), escrow);
+        vm.prank(bob); // anyone moves it
+        assertEq(boost.claimEscrow(2, id), escrow);
+        assertEq(boost.accountOf(2, id).capstone, escrow);
+        uint256 units = _bonus(2, id);
+        assertEq(units, boost.capstoneUnits(escrow, 990e18, P.RAY));
+        assertGt(units, 0);
+
+        uint256 t0 = block.timestamp;
+        skip(1 days);
+        pools[2].poke(id);
+        pools[2].poke(control);
+        (uint256 s, uint256 w,,,) = pools[2].epochMeasure(id, t0, block.timestamp);
+        (uint256 s2, uint256 w2,,,) = pools[2].epochMeasure(control, t0, block.timestamp);
+        assertEq(s, s2);
+        assertEq(w - w2, s * units * P.ORDINARY_BONUS_UNIT_RAY);
+    }
+
+    function test_dustDepositsPayAFeeOrRevert() public {
+        uint256 id = _open(alice, 2, 1000e18);
+        vm.startPrank(alice);
+        vm.expectRevert(abi.encodeWithSelector(Boost.BelowMinimum.selector, 99));
+        boost.deposit(2, id, 99); // its 1% fee would round to zero
+        boost.deposit(2, id, 100);
+        vm.stopPrank();
+        assertEq(boost.feesToBurn(), 1);
+    }
+
     function test_gas_boost() public {
         valuation.set(0, P.RAY);
         pyre.set(alice, 250e18);
