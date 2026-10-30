@@ -288,6 +288,7 @@ scripted.push(
     A(Kind.Deposit, at(20n, 1n), 1, 500n * E),
     A(Kind.Boost, at(30n), 1, 0n),
     A(Kind.Deposit, at(31n), 1, 10n * E), // no bonus: no rewrite
+    A(Kind.Boost, at(60n), 1, 30_000n), // the segment clipped at the Seal's end carries a bonus
     A(Kind.Poke, at(100n), 1), // the Seal completes, back-dated
     A(Kind.Open, at(100n), 2, 10n * E),
     A(Kind.Request, at(101n), 2, net(10n * E)), // 100%: position 2 empties
