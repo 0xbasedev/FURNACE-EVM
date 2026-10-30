@@ -392,6 +392,13 @@ contract ForgePool is ReentrancyGuardTransient {
         return (lot.amount, age, participated, lot.heldBy);
     }
 
+    /// @notice A position's custody principal, active plus frozen (zero once closed). Lapses
+    ///         move principal between the two, so it needs no sync.
+    function custodyOf(uint256 id) external view returns (uint256) {
+        Position storage p = _positions[id];
+        return _activeOf(id, p) + _frozenOf(id, p);
+    }
+
     function historyLength(uint256 id, uint256 slot) external view returns (uint256) {
         return _lots[id][slot].records;
     }

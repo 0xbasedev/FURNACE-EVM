@@ -83,6 +83,19 @@ library FurnaceParams {
     uint256 internal constant ASHFALL_MIN_PARTICIPATION = 30 days; // actual participation, stored saturating here
     uint256 internal constant ASHFALL_MIN_STREAK = 30 days; // flame: the position's active Streak
 
+    // ── Capstone and Pyre: the ordinary Heat bonus (spec v5.5 §6, §8; ADR 0009) ──
+    uint256 internal constant CAPSTONE_MAX_BONUS_UNITS = 50000; // +0.5 at and above ratioForMax
+    uint256 internal constant CAPSTONE_RATIO_FOR_MAX_RAY = 500000000000000000000000000; // Capstone value ÷ stake value
+    uint256 internal constant CAPSTONE_DEPOSIT_FEE_PCT = 1; // burned (Protocol category)
+    uint256 internal constant CAPSTONE_WITHDRAW_FEE_PCT = 1; // burned (Protocol category)
+    uint256 internal constant PYRE_TIER_0_BURN = 250000000000000000000; // cinder: 250 EMBER burned
+    uint256 internal constant PYRE_TIER_0_UNITS = 5000;
+    uint256 internal constant PYRE_TIER_1_BURN = 1250000000000000000000; // wildfire: 1250 EMBER burned
+    uint256 internal constant PYRE_TIER_1_UNITS = 5000;
+    uint256 internal constant PYRE_TIER_2_BURN = 6250000000000000000000; // conflagration: 6250 EMBER burned
+    uint256 internal constant PYRE_TIER_2_UNITS = 5000;
+    uint256 internal constant PYRE_MAX_BOOST_UNITS = 15000;
+
     // ── Base epoch settlement: pools, pages, claims (spec v5.5 §4, §10, §11) ──
     uint256 internal constant SETTLEMENT_MAX_LOTS_PER_PAGE = 32;
     uint256 internal constant CLAIM_SECONDS = 86400;

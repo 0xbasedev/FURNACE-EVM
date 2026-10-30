@@ -20,6 +20,7 @@ import {
 import { canonicalize, keccakHex } from './canonical';
 import { forgeVectors } from './forge-scenarios';
 import { settlementVectors } from './settlement-scenarios';
+import { capstoneUnits, pyreUnits, checkAgainstCanonical, PYRE_TIERS, RATIO_FOR_MAX } from './boost-model';
 import { keccak_256 } from '@noble/hashes/sha3.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
 
@@ -175,6 +176,37 @@ const minRelic = f.relics.find((r) => r.key === ash.minRelic);
 if (!minRelic) throw new Error(`Ashfall minRelic ${ash.minRelic} is not a Relic`);
 c('uint256', 'ASHFALL_MIN_STREAK', `${minRelic.days} days`, `${minRelic.key}: the position's active Streak`);
 
+section('Capstone and Pyre: the ordinary Heat bonus (spec v5.5 §6, §8; ADR 0009)');
+// Boost implements exactly these policies; fail generation if the config selects another.
+const capCfg = f.capstone, pyreCfg = f.pyre;
+const boostPolicy: [string, unknown, unknown][] = [
+  ['forge.capstone.enabled', capCfg.enabled, true],
+  ['forge.capstone.earnsEmissions', capCfg.earnsEmissions, false],
+  ['forge.capstone.cooldown', capCfg.cooldown, 'sameAsWithdraw'],
+  ['forge.capstone.affectsStreak', capCfg.affectsStreak, false],
+  ['forge.capstone.affectsHeatAge', capCfg.affectsHeatAge, false],
+  ['forge.pyre.enabled', pyreCfg.enabled, true],
+  ['forge.pyre.soulbound', pyreCfg.soulbound, true],
+];
+for (const [path, got, want] of boostPolicy) if (got !== want) throw new Error(`Boost implements ${path} = ${String(want)}, config has ${String(got)}`);
+const units = (x: number) => {
+  const r = ray(String(x));
+  if (r % BONUS_UNIT !== 0n) throw new Error(`${x} is not a whole number of bonus units`);
+  return r / BONUS_UNIT;
+};
+c('uint256', 'CAPSTONE_MAX_BONUS_UNITS', units(capCfg.maxBonus), `+${capCfg.maxBonus} at and above ratioForMax`);
+c('uint256', 'CAPSTONE_RATIO_FOR_MAX_RAY', ray(String(capCfg.ratioForMax)), 'Capstone value ÷ stake value');
+c('uint256', 'CAPSTONE_DEPOSIT_FEE_PCT', capCfg.depositFeePct, 'burned (Protocol category)');
+c('uint256', 'CAPSTONE_WITHDRAW_FEE_PCT', capCfg.withdrawFeePct, 'burned (Protocol category)');
+if (pyreCfg.tiers.length !== 3) throw new Error('Boost._pyreUnits unrolls exactly 3 Pyre tiers');
+pyreCfg.tiers.forEach((t, i) => {
+  if (i > 0 && !(parseUnits(t.burnEmber, 18) > parseUnits(pyreCfg.tiers[i - 1].burnEmber, 18))) throw new Error('Pyre tiers must ascend');
+  c('uint256', `PYRE_TIER_${i}_BURN`, parseUnits(t.burnEmber, 18), `${t.key}: ${t.burnEmber} EMBER burned`);
+  c('uint256', `PYRE_TIER_${i}_UNITS`, units(t.heatBoost));
+});
+c('uint256', 'PYRE_MAX_BOOST_UNITS', units(pyreCfg.maxBoost));
+if (units(capCfg.maxBonus) + units(pyreCfg.maxBoost) !== ray('0.65') / BONUS_UNIT) throw new Error('Capstone + Pyre maxima must fill the ordinary bonus ceiling');
+
 section('Base epoch settlement: pools, pages, claims (spec v5.5 §4, §10, §11)');
 const st = cfg.execution.settlement;
 const settlementPolicy: [string, unknown, unknown][] = [
@@ -323,6 +355,29 @@ for (const d of emissionDays) {
   if (Math.abs(exact - float) / float > 1e-12) throw new Error(`schedule diverges from float oracle at day ${d}`);
 }
 const heatDays = [0, 0.5, 1, 6.999, 7, 7.001, 15, 30, 60, 90, 135, 180, 250, 364.9, 365, 400, 730];
+// Boost's bonus formula (ADR 0009): 18- and 6-decimal stakes, EMBER-staked (rate 1), the edges
+// around the maximum, zero custody and a zero rate; checked against canonical floats at real sizes.
+const boostCases: { capstone: bigint; custody: bigint; rate: bigint }[] = [
+  { capstone: 0n, custody: 10n ** 21n, rate: RAY },
+  { capstone: 10n ** 18n, custody: 0n, rate: RAY },
+  { capstone: 10n ** 18n, custody: 10n ** 21n, rate: 0n },
+  { capstone: 10n ** 18n, custody: 1n, rate: 1n },
+];
+for (const [custody, rate] of [[10n ** 21n, RAY], [1000n * 10n ** 6n, 2n * 10n ** 12n * RAY], [37n * 10n ** 18n, 41n * RAY / 3n]] as [bigint, bigint][]) {
+  const value = (custody * rate + RAY - 1n) / RAY;
+  const forMax = (value * RATIO_FOR_MAX + RAY - 1n) / RAY;
+  for (const capstone of [1n, forMax / 3n, forMax - 1n, forMax, forMax + 1n, 4n * forMax]) boostCases.push({ capstone, custody, rate });
+}
+for (let i = 0; i < 24; i++) {
+  const six = i % 3 === 0;
+  const custody = six ? rnd(10n ** 13n) + 1n : rnd(10n ** 27n) + 1n;
+  const rate = six ? rnd(10n ** 40n) + 1n : rnd(10n ** 30n) + 1n;
+  boostCases.push({ capstone: rnd((custody * rate) / RAY + 2n), custody, rate });
+}
+const pyreBurns = [0n, ...PYRE_TIERS.flatMap((t) => [t.burn - 1n, t.burn, t.burn + 1n]), 10n ** 30n];
+for (const c of boostCases) if ((c.custody * c.rate) / RAY >= 10n ** 12n) checkAgainstCanonical(c.capstone, c.custody, c.rate, 0n);
+// Floats cannot hold a wei below a threshold: compare whole-EMBER burns; the wei edges are exact-tested.
+for (const b of [...pyreBurns.filter((x) => x % 10n ** 18n === 0n), ...PYRE_TIERS.flatMap((t) => [t.burn - 10n ** 18n, t.burn + 10n ** 18n])]) checkAgainstCanonical(0n, 0n, 0n, b);
 
 const vectors = {
   version: cfg.version,
@@ -341,6 +396,8 @@ const vectors = {
   poolBudget: { target: S(budgets.map((x) => x.target)), occupied: S(budgets.map((x) => x.occ)), out: S(budgets.map((x) => x.out)) },
   // Float display helper (no integer reference exists): compared within 1e-12 relative.
   lotHeat: { ageSeconds: heatDays.map((d) => String(Math.round(d * 86_400))), ray: heatDays.map((d) => fixed(heatMultiplier(Math.round(d * 86_400) / 86_400), 27)) },
+  capstoneUnits: { capstone: S(boostCases.map((c) => c.capstone)), custody: S(boostCases.map((c) => c.custody)), rate: S(boostCases.map((c) => c.rate)), out: S(boostCases.map((c) => capstoneUnits(c.capstone, c.custody, c.rate))) },
+  pyreUnits: { burned: S(pyreBurns), out: S(pyreBurns.map(pyreUnits)) },
   // Exact integer schedule (scripts/schedule.ts): every day 0..1700 plus far-out days.
   emission: { day: emissionDays.map(String), wad: emissionDays.map((d) => emissionPerDay(BigInt(d)).toString()) },
 };
