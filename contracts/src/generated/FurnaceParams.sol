@@ -48,6 +48,16 @@ library FurnaceParams {
     uint256 internal constant MILESTONE_3_BUMP_RAY = 100000000000000000000000000;
     uint256 internal constant MILESTONE_4_SECONDS = 365 days; // eternal
     uint256 internal constant MILESTONE_4_BUMP_RAY = 100000000000000000000000000;
+    uint256 internal constant MILESTONE_0_T3 = 83755699540266822696484694381157;
+    uint256 internal constant MILESTONE_0_T5 = 50655447081953374366833943161723833958;
+    uint256 internal constant MILESTONE_1_T3 = 743103304088970664482159451989277;
+    uint256 internal constant MILESTONE_1_T5 = 1926123764198611962337757299556208313991;
+    uint256 internal constant MILESTONE_2_T3 = 3861278033863207906971261293371145;
+    uint256 internal constant MILESTONE_2_T5 = 30025297991320304684608527817254031267248;
+    uint256 internal constant MILESTONE_3_T3 = 10921343527165335182690948611206568;
+    uint256 internal constant MILESTONE_3_T5 = 169848734534475292761209632801484550398636;
+    uint256 internal constant MILESTONE_4_T3 = 31536000000000000000000000000000000;
+    uint256 internal constant MILESTONE_4_T5 = 994519296000000000000000000000000000000000;
     uint256 internal constant DEED_HEAT_CARRY_PCT = 80;
 
     // ── Forge custody: fees, cooling plans, emergency exit (spec v5.5 §4, §11) ──
@@ -69,6 +79,7 @@ library FurnaceParams {
     uint256 internal constant WITHDRAW_EXECUTION_WINDOW = 86400;
     uint256 internal constant COOLING_PLAN_HORIZON = 259200;
     uint256 internal constant ASHFALL_MIN_PARTICIPATION = 30 days; // actual participation, stored saturating here
+    uint256 internal constant ASHFALL_MIN_STREAK = 30 days; // flame: the position's active Streak
 
     // ── Base epoch settlement: pools, pages, claims (spec v5.5 §4, §10, §11) ──
     uint256 internal constant SETTLEMENT_MAX_LOTS_PER_PAGE = 32;

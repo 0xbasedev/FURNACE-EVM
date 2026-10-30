@@ -27,6 +27,9 @@ interface IMantleDistribution {
         );
     function mintBase(uint256 epoch, address to, uint256 amount) external;
     function releaseBase(uint256 epoch, uint256 amount) external;
+    function mintAshfall(uint256 epoch, address to, uint256 amount) external;
+    function rollAshfall(uint256 epoch, uint256 amount) external;
+    function burnForfeited(uint256 amount) external;
 }
 
 /// @title ForgeEmissions
@@ -47,9 +50,18 @@ interface IMantleDistribution {
 ///         4. `advance` then credits each earning position
 ///            ⌊flat·S_i/S⌋ + ⌊heat·W_i/W⌋ as claimable and its escrow to its Seal,
 ///            minting each page's sum once; the floor residue is released.
+///         Ashfall (ADR 0007): the Mantle's epoch Ashfall budget is split by the same pool
+///         weights. When a pool's share is nonzero, the measure pages also read each
+///         position's Ashfall weight Q_i (stake·Heat² over time when its lot's actual
+///         participation and its Streak are both ≥ 30 days), and the credit pages add
+///         ⌊share·Q_i/Q⌋ to its claimable rewards (one `mintAshfall` per page). A pool
+///         nobody was eligible in, the floor residue, and the shares of positions that left
+///         by emergency exit before being credited roll back to the Mantle's queue.
 ///         Claims: a fee-free 24h click-start snapshot of a position's credited rewards.
 ///         Escrow stays locked until its Seal ends: a completed term moves it to the
-///         position's Capstone ledger, a forfeit routes it 50/25/25.
+///         position's Capstone ledger, a forfeit routes it 50/25/25. Each ledger has one
+///         consumer fixed at deployment: the Capstone, the match reserve and the Sealed-pot
+///         stream pull theirs; the burn lane is burned through the Mantle.
 ///         Principal exits never wait on any of this. No owner, no pause, no upgrade.
 contract ForgeEmissions is ReentrancyGuardTransient {
     using SafeERC20 for IERC20;
@@ -64,6 +76,9 @@ contract ForgeEmissions is ReentrancyGuardTransient {
     ///         if the budget covers it; one that does not fit waits to be the next page's
     ///         first work, so a page pays for at most one oversized sync.
     uint256 public constant LAPSE_UNITS = 64;
+    /// @notice [P] Page budget charged per record segment while a pool-epoch also measures
+    ///         Ashfall: the Heat² integral roughly doubles a segment's cost (ADR 0007).
+    uint256 public constant ASHFALL_SEGMENT_UNITS = 2;
 
     enum Phase {
         None,
@@ -89,6 +104,9 @@ contract ForgeEmissions is ReentrancyGuardTransient {
         uint256 stakeSeconds; // S = Σ S_i
         uint256 heatSeconds; // W = Σ W_i
         uint256 candidateSeconds; // C = Σ C_i
+        uint128 ashfall; // the pool's share of the epoch's Ashfall budget
+        uint128 ashfallPaid; // Σ credited Ashfall (all minted); the rest rolls back
+        uint256 ashfallWeight; // Q = Σ Q_i
     }
 
     /// @dev A position's epoch measures. B = ∫sealed stake·bonus dt and
@@ -100,6 +118,7 @@ contract ForgeEmissions is ReentrancyGuardTransient {
         uint256 candidateSeconds;
         uint128 escrow;
         uint8 seal;
+        uint256 ashfallWeight; // Q_i = ⌊∫eligible stake·Heat² dt / RAY⌋
     }
 
     struct Claim {
@@ -117,6 +136,8 @@ contract ForgeEmissions is ReentrancyGuardTransient {
         uint256 heatSeconds;
         uint256 sealedStakeSeconds;
         uint256 sealedHeatSeconds;
+        uint256 ashfallQuotient; // the Ashfall weight so far, exactly: quotient·RAY + remainder
+        uint256 ashfallRemainder;
     }
 
     IMantleDistribution public immutable MANTLE;
@@ -126,6 +147,11 @@ contract ForgeEmissions is ReentrancyGuardTransient {
     ForgePool internal immutable POOL_1;
     ForgePool internal immutable POOL_2;
     ForgePool internal immutable POOL_3;
+    /// @notice The consumers of the held Seal ledgers, fixed at deployment (ADR 0007). Each
+    ///         pulls its own ledger; until it exists the EMBER stays here.
+    address public immutable CAPSTONE;
+    address public immutable MATCH_RESERVE;
+    address public immutable SEALED_POT;
 
     uint256 public nextEpoch;
     mapping(uint256 epoch => mapping(uint256 pool => PoolEpoch)) internal _epochs;
@@ -137,11 +163,13 @@ contract ForgeEmissions is ReentrancyGuardTransient {
     mapping(uint256 pool => mapping(uint256 id => Claim)) internal _claims;
     /// @notice Funded escrow of a running Seal, locked until it ends.
     mapping(uint256 pool => mapping(uint256 id => mapping(uint256 k => uint256))) public sealEscrow;
-    /// @notice [P] Vested escrow owed to the position's Capstone (not built yet): held, never liquid.
+    /// @notice Vested escrow owed to the position's Capstone: held, never liquid, until
+    ///         CAPSTONE pulls it.
     mapping(uint256 pool => mapping(uint256 id => uint256)) public capstoneOwed;
-    /// @notice [P] Forfeited escrow, held per route until its consumer exists: the burn
-    ///         lane (50%), the match reserve (25%) and each pool's Sealed pot (25%, whose
-    ///         stream period the config does not define yet).
+    /// @notice Forfeited escrow by route: the burn lane (50%, burned by `burnForfeits`), the
+    ///         match reserve (25%) and each pool's Sealed pot (25%), pulled by their consumers.
+    ///         [P] The Sealed-pot stream period is not in the config: its streaming contract
+    ///         decides it, not this one.
     uint256 public burnLane;
     uint256 public matchReserve;
     mapping(uint256 pool => uint256) public sealedPot;
@@ -155,6 +183,10 @@ contract ForgeEmissions is ReentrancyGuardTransient {
     event SealVested(uint256 indexed pool, uint256 indexed id, uint256 seal, uint256 amount);
     event SealForfeitRouted(uint256 indexed pool, uint256 indexed id, uint256 seal, uint256 burn, uint256 reserve, uint256 pot);
     event ResidueReleased(uint256 indexed epoch, uint256 indexed pool, uint256 amount);
+    event AshfallCredited(uint256 indexed epoch, uint256 indexed pool, uint256 id, uint256 amount);
+    event AshfallRolled(uint256 indexed epoch, uint256 indexed pool, uint256 amount);
+    event ForfeitsBurned(uint256 amount);
+    event LedgerTaken(address indexed consumer, uint256 indexed pool, uint256 id, uint256 amount);
     event ClaimRequested(uint256 indexed pool, uint256 indexed id, uint256 amount, uint256 maturesAt);
     event ClaimPaid(uint256 indexed pool, uint256 indexed id, address to, uint256 amount);
 
@@ -170,9 +202,18 @@ contract ForgeEmissions is ReentrancyGuardTransient {
     error ClaimNotMatured(uint256 maturesAt);
     error SealNotEnded(uint256 pool, uint256 id, uint256 seal);
     error NothingToSettle(uint256 pool, uint256 id, uint256 seal);
+    error NotConsumer(address caller);
 
-    constructor(IMantleDistribution mantle, IERC20 ember, ForgePool[4] memory pools) {
+    constructor(
+        IMantleDistribution mantle,
+        IERC20 ember,
+        ForgePool[4] memory pools,
+        address capstone,
+        address matchReserve_,
+        address sealedPot_
+    ) {
         if (address(mantle) == address(0) || address(ember) == address(0)) revert ZeroAddress();
+        if (capstone == address(0) || matchReserve_ == address(0) || sealedPot_ == address(0)) revert ZeroAddress();
         bool[4] memory isLp = [P.FORGE_POOL_0_IS_LP, P.FORGE_POOL_1_IS_LP, P.FORGE_POOL_2_IS_LP, P.FORGE_POOL_3_IS_LP];
         for (uint256 i; i < POOL_COUNT; ++i) {
             if (address(pools[i]) == address(0)) revert ZeroAddress();
@@ -182,19 +223,22 @@ contract ForgeEmissions is ReentrancyGuardTransient {
         EMBER = ember;
         START = mantle.START();
         (POOL_0, POOL_1, POOL_2, POOL_3) = (pools[0], pools[1], pools[2], pools[3]);
+        (CAPSTONE, MATCH_RESERVE, SEALED_POT) = (capstone, matchReserve_, sealedPot_);
     }
 
     // ── settlement ────────────────────────────────────────────────────────
 
     /// @notice Open the next epoch once the Mantle has finalized it: split the global
     ///         base by pool weight, admit each share for its pool's occupied time, and
-    ///         release the rest.
+    ///         release the rest. The epoch's Ashfall is split by the same weights [P]; the
+    ///         split's floor residue, and the share of a pool with nothing admitted, roll back.
     function openEpoch() external nonReentrant returns (uint256 epoch) {
         epoch = nextEpoch;
         if (MANTLE.nextEpoch() <= epoch) revert EpochNotFinalized(epoch);
-        (uint128 base,,,,,) = MANTLE.budgets(epoch);
+        (uint128 base, uint128 ashfall,,,,) = MANTLE.budgets(epoch);
         (uint256 start, uint256 end) = epochBounds(epoch);
         uint256 released = base;
+        uint256 rolled = ashfall;
         for (uint256 i; i < POOL_COUNT; ++i) {
             ForgePool pool = poolAt(i);
             uint256 target = Math.mulDiv(base, allocPoints(i), P.FORGE_ALLOC_POINTS_TOTAL);
@@ -206,10 +250,18 @@ contract ForgeEmissions is ReentrancyGuardTransient {
             pe.admitted = uint128(admitted);
             pe.positions = uint32(pool.positionCount());
             pe.phase = admitted == 0 ? Phase.Done : Phase.Measuring;
+            if (admitted != 0) {
+                pe.ashfall = uint128(Math.mulDiv(ashfall, allocPoints(i), P.FORGE_ALLOC_POINTS_TOTAL));
+                rolled -= pe.ashfall;
+            }
             emit PoolEpochOpened(epoch, i, target, admitted, pe.positions);
         }
         nextEpoch = epoch + 1;
         if (released != 0) MANTLE.releaseBase(epoch, released);
+        if (rolled != 0) {
+            MANTLE.rollAshfall(epoch, rolled);
+            emit AshfallRolled(epoch, POOL_COUNT, rolled);
+        }
         emit EpochOpened(epoch, base, released);
     }
 
@@ -231,6 +283,7 @@ contract ForgeEmissions is ReentrancyGuardTransient {
         Progress memory pr = _progress[epoch][i]; // worked in memory, stored once per page
         bool wasStored = pr.id != 0;
         uint256 budget = SEGMENTS_PER_PAGE;
+        uint256 unit = pe.ashfall != 0 ? ASHFALL_SEGMENT_UNITS : 1;
         uint256 slots;
         while (budget != 0) {
             if (pr.id == 0) {
@@ -247,30 +300,33 @@ contract ForgeEmissions is ReentrancyGuardTransient {
             while (j < 32 && mask & (1 << j) == 0) ++j;
             if (j == 32) {
                 _finishPosition(epoch, i, pe, pr);
-                pr = Progress(0, 0, 0, 0, 0, 0, 0, 0);
+                pr = Progress(0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
                 --budget;
                 continue;
             }
-            if (slots == P.SETTLEMENT_MAX_LOTS_PER_PAGE) break;
+            if (slots == P.SETTLEMENT_MAX_LOTS_PER_PAGE || budget < unit) break;
             ++slots;
-            budget -= _measureSlot(epoch, pool, pr, j, budget);
+            budget -= _measureSlot(epoch, pool, pr, j, budget / unit, unit != 1) * unit;
         }
         if (pr.id != 0) _progress[epoch][i] = pr;
         else if (wasStored) delete _progress[epoch][i];
         if (pr.id == 0 && pe.cursor == pe.positions) _budget(epoch, i, pe);
     }
 
-    function _measureSlot(uint256 epoch, ForgePool pool, Progress memory pr, uint256 j, uint256 budget)
+    function _measureSlot(uint256 epoch, ForgePool pool, Progress memory pr, uint256 j, uint256 maxSegs, bool ashfall)
         internal
         view
         returns (uint256 used)
     {
         uint256 start = START + epoch * P.EPOCH_SECONDS;
-        SlotMeasure memory m = pool.measureSlot(pr.id, j, start, start + P.EPOCH_SECONDS, pr.seg, budget);
+        SlotMeasure memory m = pool.measureSlot(pr.id, j, start, start + P.EPOCH_SECONDS, pr.seg, maxSegs, ashfall);
         pr.stakeSeconds += m.stakeSeconds;
         pr.heatSeconds += m.heatSeconds;
         pr.sealedStakeSeconds += m.sealedStakeSeconds;
         pr.sealedHeatSeconds += m.sealedHeatSeconds;
+        uint256 r = pr.ashfallRemainder + m.ashfallRemainder;
+        (pr.ashfallQuotient, pr.ashfallRemainder) =
+            r >= P.RAY ? (pr.ashfallQuotient + m.ashfallQuotient + 1, r - P.RAY) : (pr.ashfallQuotient + m.ashfallQuotient, r);
         if (m.seal != 0) pr.seal = uint8(m.seal); // [P] at most one Seal per position-epoch
         if (m.done) {
             pr.slot = uint8(j + 1);
@@ -282,12 +338,13 @@ contract ForgeEmissions is ReentrancyGuardTransient {
         return m.used;
     }
 
-    /// @dev B and C are formed once per position-epoch from the unscaled sealed sums, so
-    ///      they do not depend on how records subdivide the epoch.
+    /// @dev B, C and Q are formed once per position-epoch from the unscaled sums, so they
+    ///      do not depend on how records subdivide the epoch.
     function _finishPosition(uint256 epoch, uint256 i, PoolEpoch storage pe, Progress memory pr) internal {
         (uint256 id, uint256 s, uint256 w) = (pr.id, pr.stakeSeconds, pr.heatSeconds);
         if (s != 0) {
-            Measure memory m = Measure(s, w, 0, 0, 0, 0);
+            Measure memory m = Measure(s, w, 0, 0, 0, 0, pr.ashfallQuotient);
+            pe.ashfallWeight += pr.ashfallQuotient;
             if (pr.sealedStakeSeconds != 0) {
                 uint256 bonus = ForgeMeasures.trackBonus(poolAt(i).sealOf(id, pr.seal).track);
                 m.sealSeconds = pr.sealedStakeSeconds * bonus;
@@ -310,6 +367,7 @@ contract ForgeEmissions is ReentrancyGuardTransient {
     ///      to Heat (spec §10: "With no eligible Seals it yields 27/73").
     function _budget(uint256 epoch, uint256 i, PoolEpoch storage pe) internal {
         uint256 e = pe.admitted;
+        if (pe.ashfallWeight == 0) _rollAshfall(epoch, i, pe); // nobody was eligible: carry it forward
         if (pe.stakeSeconds == 0) {
             pe.phase = Phase.Done;
             MANTLE.releaseBase(epoch, e);
@@ -357,12 +415,17 @@ contract ForgeEmissions is ReentrancyGuardTransient {
         uint256 k = pe.credited;
         uint256 end = Math.min(earners.length, k + P.SETTLEMENT_MAX_LOTS_PER_PAGE);
         uint256 sum;
+        uint256 ashSum;
         for (; k < end; ++k) {
-            sum += _credit(epoch, i, pe, earners[k]);
+            uint256 id = earners[k];
+            sum += _credit(epoch, i, pe, id);
+            ashSum += _creditAshfall(epoch, i, pe, id);
         }
         pe.credited = uint32(k);
         pe.paid += uint128(sum);
+        pe.ashfallPaid += uint128(ashSum);
         if (sum != 0) MANTLE.mintBase(epoch, address(this), sum);
+        if (ashSum != 0) MANTLE.mintAshfall(epoch, address(this), ashSum);
         if (k == earners.length) {
             pe.phase = Phase.Done;
             uint256 residue = pe.admitted - pe.paid;
@@ -370,7 +433,30 @@ contract ForgeEmissions is ReentrancyGuardTransient {
                 MANTLE.releaseBase(epoch, residue);
                 emit ResidueReleased(epoch, i, residue);
             }
+            _rollAshfall(epoch, i, pe);
         }
+    }
+
+    /// @dev ⌊share·Q_i/Q⌋ becomes claimable, unless the position left by emergency exit
+    ///      before this credit: its pending Ashfall is forfeited and rolls back to the
+    ///      Mantle's queue for everyone who stayed (config `forfeitsAshfall`).
+    function _creditAshfall(uint256 epoch, uint256 i, PoolEpoch storage pe, uint256 id) internal returns (uint256 amount) {
+        uint256 q = _measures[epoch][i][id].ashfallWeight;
+        if (q == 0) return 0;
+        if (poolAt(i).positionOf(id).ashfallForfeited) return 0;
+        amount = Math.mulDiv(pe.ashfall, q, pe.ashfallWeight);
+        unclaimed[i][id] += amount;
+        emit AshfallCredited(epoch, i, id, amount);
+    }
+
+    /// @dev Whatever of the pool's Ashfall share was not credited goes back to the Mantle's
+    ///      queue (never re-issued twice: the Mantle re-reserves it for a later epoch).
+    function _rollAshfall(uint256 epoch, uint256 i, PoolEpoch storage pe) internal {
+        uint256 rest = pe.ashfall - pe.ashfallPaid;
+        if (rest == 0) return;
+        pe.ashfall = pe.ashfallPaid;
+        MANTLE.rollAshfall(epoch, rest);
+        emit AshfallRolled(epoch, i, rest);
     }
 
     /// @dev Ordinary reward becomes claimable; escrow goes to its Seal as it stands now:
@@ -415,6 +501,49 @@ contract ForgeEmissions is ReentrancyGuardTransient {
         matchReserve += reserve;
         sealedPot[pool] += pot;
         emit SealForfeitRouted(pool, id, k, burn, reserve, pot);
+    }
+
+    // ── ledger consumers (ADR 0007) ───────────────────────────────────────
+
+    /// @notice Burn the burn lane through the Mantle: a recognized burn with no Ashfall
+    ///         credit (Seal forfeits are not a configured Ashfall source). Anyone may call.
+    function burnForfeits() external nonReentrant returns (uint256 amount) {
+        amount = burnLane;
+        if (amount == 0) return 0;
+        burnLane = 0;
+        EMBER.forceApprove(address(MANTLE), amount);
+        MANTLE.burnForfeited(amount);
+        emit ForfeitsBurned(amount);
+    }
+
+    /// @notice The Capstone pulls a position's vested escrow.
+    function takeCapstone(uint256 pool, uint256 id) external nonReentrant returns (uint256 amount) {
+        if (msg.sender != CAPSTONE) revert NotConsumer(msg.sender);
+        amount = capstoneOwed[pool][id];
+        capstoneOwed[pool][id] = 0;
+        _hand(pool, id, amount);
+    }
+
+    /// @notice The match reserve pulls its share of forfeited escrow.
+    function takeMatchReserve() external nonReentrant returns (uint256 amount) {
+        if (msg.sender != MATCH_RESERVE) revert NotConsumer(msg.sender);
+        amount = matchReserve;
+        matchReserve = 0;
+        _hand(POOL_COUNT, 0, amount);
+    }
+
+    /// @notice The Sealed-pot stream pulls a pool's pot.
+    function takeSealedPot(uint256 pool) external nonReentrant returns (uint256 amount) {
+        if (msg.sender != SEALED_POT) revert NotConsumer(msg.sender);
+        poolAt(pool);
+        amount = sealedPot[pool];
+        sealedPot[pool] = 0;
+        _hand(pool, 0, amount);
+    }
+
+    function _hand(uint256 pool, uint256 id, uint256 amount) internal {
+        emit LedgerTaken(msg.sender, pool, id, amount);
+        if (amount != 0) EMBER.safeTransfer(msg.sender, amount);
     }
 
     // ── claims ────────────────────────────────────────────────────────────

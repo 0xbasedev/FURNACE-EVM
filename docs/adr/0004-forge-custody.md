@@ -34,6 +34,7 @@ This ADR covers custody: deposits, lots, cooling plans, execution, cancel and la
 - `epochMeasure(id, t0, t1)` binary-searches each used slot's records and sums `a·len` and `a·HeatMath.integrateHeat(age, len, 0)` per segment. It is exact over any interval, however late settlement runs, and it requires the position to be synced past `t1`.
 - Emergency exit sets `closedAt` and clears the slot masks. Measures stop there, and no per-slot records are written.
 - Records are never deleted, even after exit.
+- Each superseded record also keeps the position's Streak start while it was current, and the same measure pass reads the Ashfall weight (ADR 0007).
 - **Code size.** The measure path (segment scan, binary search, `integrateHeat`) lives in the external library `ForgeMeasures`. The pool reaches it by DELEGATECALL with pointers into its own storage. Without the split, ForgePool's runtime code was 25,382 bytes, over the EIP-170 limit of 24,576, so it could not have been deployed.
   - The library and optimizer runs of 1,000 (down from 10,000) brought it to 20,290 bytes.
   - With Seals (ADR 0006), which add the Seal state, tags and transitions, it is 23,534 bytes at optimizer runs of 500. Whole-position measures also moved into the library.
@@ -106,10 +107,10 @@ Every call is its own transaction, so storage starts cold, as it does for a real
 
 | Path | Gas |
 |---|---:|
-| `requestCooling`, 16 lot splits | 1,152,268 |
-| `requestCooling` 100%, 32 lots | 2,098,958 |
-| `executeWithdrawal`, 16 lots | 684,609 |
-| `executeWithdrawal`, 4 lots + 6 pending haircut | 530,768 |
+| `requestCooling`, 16 lot splits | 1,161,031 |
+| `requestCooling` 100%, 32 lots | 2,116,530 |
+| `executeWithdrawal`, 16 lots | 693,386 |
+| `executeWithdrawal`, 4 lots + 6 pending haircut | 532,958 |
 | `executeWithdrawal`, 32 lots | 304,943 |
 | `cancelCooling`, 4 slices to reserved slots | 246,089 |
 | `poke`, resolving 5 lapses | 802,704 |
@@ -118,6 +119,7 @@ Every call is its own transaction, so storage starts cold, as it does for a real
 | `emergencyExit`, resolving 8 unprocessed lapses first (worst case) | 1,104,388 |
 
 - **Correction:** earlier versions of this table were measured inside one test transaction, where slots touched earlier are warm. They understated real costs by roughly 20–40%, and more for small calls; a 32-lot `poke` read 2.6k instead of 35k. The figures above replace them.
+- Re-measured on the Ashfall code (ADR 0007), whose records also carry the Streak anchor.
 - Seal transitions on a 32-lot position: see ADR 0006.
 - Records make syncs and exits cheaper. Changes cost more, because each changed lot writes a fresh history slot (about 22k) as well as its fresh slice storage.
 - The record count lives in the head, so no array-length slot is written.

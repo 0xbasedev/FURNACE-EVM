@@ -120,7 +120,7 @@ contract SealsTest is SettlementFixture {
         assertEq(pools[0].sealOf(a, 1).cohortMask, 1);
         skip(1 days);
         pools[0].poke(a);
-        (uint256 s,, uint256 ss,) = pools[0].epochMeasure(a, t0, t0 + 1 days);
+        (uint256 s,, uint256 ss,,) = pools[0].epochMeasure(a, t0, t0 + 1 days);
         assertEq(ss, 99e18 * 1 days, "only the cohort's stake-seconds are sealed");
         assertGt(s, ss);
     }
@@ -151,6 +151,54 @@ contract SealsTest is SettlementFixture {
         emissions.settleSeal(0, a, 1);
     }
 
+    /// Each held ledger has one consumer: the burn lane burns through the Mantle (no Ashfall
+    /// credit), and only the fixed consumer can pull the match reserve, a Sealed pot or a Capstone.
+    function test_forfeitLedgersReachOnlyTheirConsumers() public {
+        uint256 a = _open(0, alice, 600e18);
+        _seal(0, alice, a, 2);
+        skip(1 days);
+        _settle(0);
+        vm.prank(alice);
+        uint32 t = pools[0].requestCooling(a, 6e18);
+        skip(6 hours);
+        vm.prank(alice);
+        pools[0].executeWithdrawal(a, t);
+        emissions.settleSeal(0, a, 1);
+        (uint256 burn, uint256 reserve, uint256 pot) = (emissions.burnLane(), emissions.matchReserve(), emissions.sealedPot(0));
+        assertGt(burn, 0);
+
+        uint256 supply = ember.totalSupply();
+        uint256 epoch = mantle.epochAt(block.timestamp);
+        assertEq(emissions.burnForfeits(), burn);
+        assertEq(emissions.burnLane(), 0);
+        assertEq(ember.totalSupply(), supply - burn, "the burn lane is destroyed");
+        assertEq(mantle.accounted(), ember.totalSupply(), "and recognized by the Mantle");
+        assertEq(mantle.creditsOf(epoch), 0, "with no Ashfall credit");
+        assertEq(emissions.burnForfeits(), 0, "nothing left");
+
+        vm.expectRevert(abi.encodeWithSelector(ForgeEmissions.NotConsumer.selector, alice));
+        vm.prank(alice);
+        emissions.takeMatchReserve();
+        vm.expectRevert(abi.encodeWithSelector(ForgeEmissions.NotConsumer.selector, capstone));
+        vm.prank(capstone);
+        emissions.takeSealedPot(0);
+        vm.expectRevert(abi.encodeWithSelector(ForgeEmissions.NotConsumer.selector, matchReserveSink));
+        vm.prank(matchReserveSink);
+        emissions.takeCapstone(0, a);
+        vm.expectRevert(abi.encodeWithSelector(ForgeEmissions.UnknownPool.selector, 4));
+        vm.prank(sealedPotStream);
+        emissions.takeSealedPot(4);
+
+        vm.prank(matchReserveSink);
+        assertEq(emissions.takeMatchReserve(), reserve);
+        vm.prank(sealedPotStream);
+        assertEq(emissions.takeSealedPot(0), pot);
+        assertEq(ember.balanceOf(matchReserveSink), reserve);
+        assertEq(ember.balanceOf(sealedPotStream), pot);
+        assertEq(emissions.matchReserve() + emissions.sealedPot(0), 0);
+        assertEq(ember.balanceOf(address(emissions)), emissions.unclaimed(0, a), "EMBER held backs every ledger");
+    }
+
     function test_completedTermVestsToTheCapstoneLedgerAndLateCreditsFollow() public {
         uint256 a = _open(2, alice, 500e18);
         _seal(2, alice, a, 0);
@@ -165,6 +213,11 @@ contract SealsTest is SettlementFixture {
         assertEq(emissions.sealEscrow(2, a, 1), 0);
         uint256 held = ember.balanceOf(address(emissions));
         assertEq(held, emissions.unclaimed(2, a) + emissions.capstoneOwed(2, a), "EMBER held backs every ledger");
+        uint256 owed = emissions.capstoneOwed(2, a);
+        vm.prank(capstone);
+        assertEq(emissions.takeCapstone(2, a), owed, "the Capstone pulls the vested escrow");
+        assertEq(ember.balanceOf(capstone), owed);
+        assertEq(emissions.capstoneOwed(2, a), 0);
     }
 
     function test_emergencyExitForfeitsAndAlwaysWorks() public {

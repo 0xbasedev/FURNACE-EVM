@@ -374,23 +374,27 @@ contract ForgePool is ReentrancyGuardTransient {
     ///         Requires the position synced past t1, so every lapse due by t1 has its
     ///         back-dated record. Measures stop at an emergency exit.
     ///         Also returns their Seal-tagged parts, clipped at each Seal's end and not yet
-    ///         scaled by its bonus: Ss = ∫sealed stake dt and Ws = ∫sealed stake·Heat dt.
+    ///         scaled by its bonus: Ss = ∫sealed stake dt and Ws = ∫sealed stake·Heat dt,
+    ///         and the Ashfall weight Q = ⌊∫eligible stake·Heat² dt / RAY⌋ (ADR 0007).
     function epochMeasure(uint256 id, uint256 t0, uint256 t1)
         external
         view
-        returns (uint256 s, uint256 w, uint256 ss, uint256 sw)
+        returns (uint256 s, uint256 w, uint256 ss, uint256 sw, uint256 q)
     {
         t1 = _measurable(id, t0, t1);
-        SlotMeasure memory m =
-            ForgeMeasures.positionMeasure(_history[id], _lots[id], _seals[id], _positions[id].historyMask, t0, t1);
-        return (m.stakeSeconds, m.heatSeconds, m.sealedStakeSeconds, m.sealedHeatSeconds);
+        Position storage p = _positions[id];
+        SlotMeasure memory m = ForgeMeasures.positionMeasure(
+            _history[id], _lots[id], _seals[id], p.streakStart, p.historyMask, t0, t1
+        );
+        return (m.stakeSeconds, m.heatSeconds, m.sealedStakeSeconds, m.sealedHeatSeconds, m.ashfallQuotient);
     }
 
     /// @notice One slot's measures over [t0, t1], resumable: examines at most `maxSegs`
     ///         record segments starting at `from` (0 = the first that can overlap t0).
     ///         Returns the resume point `next` when not `done`. Settlement pages use this
-    ///         so a slot with any number of records settles over bounded calls.
-    function measureSlot(uint256 id, uint256 slot, uint256 t0, uint256 t1, uint256 from, uint256 maxSegs)
+    ///         so a slot with any number of records settles over bounded calls. The
+    ///         Ashfall weight is measured only if `ashfall`.
+    function measureSlot(uint256 id, uint256 slot, uint256 t0, uint256 t1, uint256 from, uint256 maxSegs, bool ashfall)
         external
         view
         returns (SlotMeasure memory m)
@@ -400,7 +404,9 @@ contract ForgePool is ReentrancyGuardTransient {
             m.done = true;
             return m;
         }
-        return ForgeMeasures.slotMeasure(_history[id][slot], _lots[id][slot], _seals[id], t0, t1, from, maxSegs);
+        return ForgeMeasures.slotMeasure(
+            _history[id][slot], _lots[id][slot], _seals[id], _positions[id].streakStart, ashfall, t0, t1, from, maxSegs
+        );
     }
 
     /// @notice Pending tickets whose lapse is due by now: the lapses a sync would resolve.
@@ -678,7 +684,8 @@ contract ForgePool is ReentrancyGuardTransient {
         next.records = head.records;
         next.seal = _tag(id, p, slot);
         if (p.historyMask & bit != 0 && head.since != next.since) {
-            _history[id][slot][head.records] = Record(head.since, head.amount, head.age, head.participated, head.seal);
+            _history[id][slot][head.records] =
+                Record(head.since, head.amount, head.age, head.participated, head.seal, p.streakStart);
             next.records = head.records + 1;
         }
         _lots[id][slot] = next;

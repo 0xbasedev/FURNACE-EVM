@@ -3,7 +3,7 @@
 // keccak of the full raw state, plus a few readable probes, after every step.
 import { keccak_256 } from '@noble/hashes/sha3.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
-import { DAY } from '../canonical/accounting';
+import { DAY, RAY } from '../canonical/accounting';
 import { ForgeModel, run, MAX_LOTS, MAX_PENDING, MIN_STAKE_LP, TIERS, WINDOW, HORIZON, SealStatus } from './forge-model';
 
 export const T0 = 1_700_000_000n;
@@ -22,12 +22,13 @@ function words(s: Sim, positions: number, now: bigint): bigint[] {
   const out: bigint[] = [];
   for (let id = 1; id <= positions; id++) {
     const p = m.positions[id - 1];
-    if (!p) { out.push(...Array(24 + 5 * MAX_LOTS).fill(0n)); continue; }
+    if (!p) { out.push(...Array(25 + 5 * MAX_LOTS).fill(0n)); continue; }
     out.push(p.S, p.W, BigInt(p.lotCount), BigInt(p.reserved), BigInt(p.pending.length), p.paused, p.streakStart, p.last,
       p.closed ? 1n : 0n, p.ashfallForfeited ? 1n : 0n, p.plan?.start ?? 0n, p.plan?.reference ?? 0n, p.plan?.requested ?? 0n, BigInt(p.nextTicket - 1));
     const seal = p.seals[p.seals.length - 1];
     out.push(p.SS, p.SW, BigInt(p.seals.length), BigInt(seal?.track ?? 0), BigInt(seal?.status ?? SealStatus.None),
       seal?.start ?? 0n, seal?.pausedAt ?? 0n, seal?.pausedSeconds ?? 0n, seal?.endedAt ?? 0n, BigInt(seal?.cohort ?? 0));
+    out.push(p.Q / RAY); // Ashfall weight, accrued independently; the contract's comes from records
     p.lots.forEach((l, j) => out.push(l.amount, l.age, l.part, BigInt(l.heldBy), BigInt(p.heads.get(j)?.seal ?? 0)));
     for (const tid of p.pending) {
       const t = p.tickets.get(tid)!;
@@ -92,7 +93,8 @@ function record(sc: Scenario) {
     const m = sim.model, p1 = m.positions[0];
     probe.push(...[p1?.S ?? 0n, p1?.W ?? 0n, m.active, m.frozen, m.occupiedAt(a.time), p1?.SS ?? 0n].map(String));
   }
-  return { lp: sc.lp, positions: sc.positions, steps: sc.actions.length, reverts, actions: flat, hash, probe };
+  const ashfall = sim.model.positions.filter((p) => p.Q > 0n).length;
+  return { lp: sc.lp, positions: sc.positions, steps: sc.actions.length, reverts, ashfall, actions: flat, hash, probe };
 }
 
 // ── scripted scenarios ───────────────────────────────────────────────────
@@ -160,6 +162,21 @@ const scripted: Scenario[] = [
     A(Kind.Request, at(800n), 1, 200n * E),
     A(Kind.Cancel, at(800n, 1n), 1, 2n), // young lot differs → own slot; capped merges
     A(Kind.Poke, at(801n), 1),
+  ] },
+  { name: 'ashfallStreakReset', lp: true, positions: 2, actions: [
+    // The Ashfall weight around a Streak reset (ADR 0007). Position 1 is eligible from day 30.
+    // Its execute at day 40 + 6h resets the Streak: the records pushed then keep the old
+    // anchor (eligible up to the reset), and the head written at the reset carries the new
+    // one, so a record pushed at day 45 (within 30 days of the reset) is not eligible.
+    // Eligibility returns at day 70 + 6h. Position 2 is the unreset control.
+    A(Kind.Open, at(0n), 1, 1000n * E),
+    A(Kind.Open, at(0n), 2, 1000n * E),
+    A(Kind.Request, at(40n), 1, net(1000n * E) / 10n),
+    A(Kind.Execute, at(40n, 6n), 1, 1n),
+    A(Kind.Request, at(45n), 1, 10n * E),
+    A(Kind.Cancel, at(45n, 1n), 1, 2n),
+    A(Kind.Poke, at(75n), 1),
+    A(Kind.Poke, at(75n), 2),
   ] },
   { name: 'emergencyWithPending', lp: false, positions: 3, actions: [
     A(Kind.Open, at(0n), 1, 777n * E),
@@ -309,6 +326,8 @@ export function forgeVectors() {
   const all = [...scripted, ...random];
   const scenarios: Record<string, ReturnType<typeof record>> = {};
   for (const sc of all) scenarios[sc.name] = record(sc);
+  // The Ashfall weight comparison must not be vacuous: most scenarios reach both 30-day minimums.
+  if (Object.values(scenarios).filter((x) => x.ashfall > 0).length < 12) throw new Error('too few scenarios with an Ashfall weight');
   return {
     maxPendingTickets: MAX_PENDING, maxLots: MAX_LOTS, tiers: TIERS.map((t) => [String(t.maxPct), String(t.seconds)]),
     fund: String(FUND), names: all.map((s) => s.name), scenarios,

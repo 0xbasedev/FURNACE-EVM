@@ -213,6 +213,24 @@ contract MantleTest is MantleFixture {
         assertEq(ember.balanceOf(alice), 300e18);
     }
 
+    /// Forfeited Seal escrow is burned by the distributor: recognized (the ledger shrinks),
+    /// but with no Ashfall credit, since Seal forfeits are not a configured Ashfall source.
+    function test_forfeitBurns_recognizedWithoutCredit() public {
+        _fund(distributor, 100e18);
+        uint256 acc = mantle.accounted();
+        uint256 epoch = mantle.epochAt(block.timestamp);
+        uint256 credits = mantle.creditsOf(epoch);
+        vm.expectRevert(Mantle.NotDistributor.selector);
+        mantle.burnForfeited(1);
+        vm.startPrank(distributor);
+        ember.approve(address(mantle), 100e18);
+        mantle.burnForfeited(100e18);
+        vm.stopPrank();
+        assertEq(mantle.accounted(), acc - 100e18, "a recognized burn reopens headroom");
+        assertEq(ember.totalSupply(), mantle.accounted());
+        assertEq(mantle.creditsOf(epoch), credits, "no Ashfall credit");
+    }
+
     function test_unregisteredBurnsAreNotRecognized() public {
         _fund(alice, 100e18);
         uint256 acc = mantle.accounted();

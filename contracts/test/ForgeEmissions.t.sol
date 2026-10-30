@@ -20,6 +20,11 @@ abstract contract SettlementFixture is Test {
     Mantle mantle;
     ForgeEmissions emissions;
     address feeRouter = makeAddr("feeRouter");
+    address capstone = makeAddr("capstone");
+    address matchReserveSink = makeAddr("matchReserve");
+    address sealedPotStream = makeAddr("sealedPot");
+    /// A Protocol-category burn registrar (a Vent burn lane stand-in): its burns fund Ashfall.
+    address registrar = makeAddr("registrar");
     uint256 start;
 
     function _deploySettlement(uint256 start_) internal {
@@ -33,17 +38,20 @@ abstract contract SettlementFixture is Test {
         address mantleAt = vm.computeCreateAddress(address(this), nonce + 1);
         address emissionsAt = vm.computeCreateAddress(address(this), nonce + 2);
         ember = new EmberToken(mantleAt);
+        address[] memory registrars = new address[](1);
+        Mantle.BurnCategory[] memory categories = new Mantle.BurnCategory[](1);
+        (registrars[0], categories[0]) = (registrar, Mantle.BurnCategory.Protocol);
         mantle = new Mantle(
-            IEmberMintBurn(address(ember)),
-            emissionsAt,
-            makeAddr("kindling"),
-            makeAddr("treasury"),
-            start,
-            new address[](0),
-            new Mantle.BurnCategory[](0)
+            IEmberMintBurn(address(ember)), emissionsAt, makeAddr("kindling"), makeAddr("treasury"), start, registrars, categories
         );
-        emissions = new ForgeEmissions(IMantleDistribution(address(mantle)), IERC20(address(ember)), pools);
+        emissions = _newEmissions(pools);
         require(address(mantle) == mantleAt && address(emissions) == emissionsAt, "prediction");
+    }
+
+    function _newEmissions(ForgePool[4] memory ps) internal returns (ForgeEmissions) {
+        return new ForgeEmissions(
+            IMantleDistribution(address(mantle)), IERC20(address(ember)), ps, capstone, matchReserveSink, sealedPotStream
+        );
     }
 
     function _user(uint256 pos) internal pure returns (address) {
@@ -78,7 +86,12 @@ contract ForgeEmissionsDifferentialTest is SettlementFixture {
         RequestClaim,
         ExecuteClaim,
         Seal,
-        SettleSeal
+        SettleSeal,
+        Burn,
+        BurnForfeits,
+        TakeCapstone,
+        TakeMatchReserve,
+        TakeSealedPot
     }
 
     string json;
@@ -101,12 +114,13 @@ contract ForgeEmissionsDifferentialTest is SettlementFixture {
     function test_settle_sealVestLate() public { _replay("sealVestLate"); }
     function test_settle_sealForfeitRouted() public { _replay("sealForfeitRouted"); }
     function test_settle_sealPausedInEpoch() public { _replay("sealPausedInEpoch"); }
+    function test_settle_ashfallHeatSquared() public { _replay("ashfallHeatSquared"); }
     function test_settle_random0() public { _replay("random0"); }
     function test_settle_random1() public { _replay("random1"); }
     function test_settle_random2() public { _replay("random2"); }
 
     function test_everySettlementScenarioIsReplayed() public view {
-        assertEq(vm.parseJsonStringArray(json, ".names").length, 17, "add a test_settle_* for each new scenario");
+        assertEq(vm.parseJsonStringArray(json, ".names").length, 18, "add a test_settle_* for each new scenario");
     }
 
     function _uints(string memory key) internal view returns (uint256[] memory out) {
@@ -140,7 +154,7 @@ contract ForgeEmissionsDifferentialTest is SettlementFixture {
     }
 
     function _act(K kind, uint256 poolIdx, uint256 pos, uint256 arg) internal {
-        ForgePool pool = pools[poolIdx];
+        ForgePool pool = poolIdx < 4 ? pools[poolIdx] : ForgePool(address(0));
         if (kind == K.Finalize) {
             mantle.finalizeEpoch();
         } else if (kind == K.OpenEpoch) {
@@ -149,6 +163,19 @@ contract ForgeEmissionsDifferentialTest is SettlementFixture {
             emissions.advance(arg, poolIdx);
         } else if (kind == K.SettleSeal) {
             emissions.settleSeal(poolIdx, pos, arg);
+        } else if (kind == K.Burn) {
+            this.burnVia(_user(pos), arg); // one external call, so an expected revert covers all of it
+        } else if (kind == K.BurnForfeits) {
+            emissions.burnForfeits();
+        } else if (kind == K.TakeCapstone) {
+            vm.prank(capstone);
+            emissions.takeCapstone(poolIdx, pos);
+        } else if (kind == K.TakeMatchReserve) {
+            vm.prank(matchReserveSink);
+            emissions.takeMatchReserve();
+        } else if (kind == K.TakeSealedPot) {
+            vm.prank(sealedPotStream);
+            emissions.takeSealedPot(poolIdx);
         } else {
             vm.prank(_user(pos));
             if (kind == K.Open) assertEq(pool.open(arg), pos, "position id");
@@ -162,6 +189,17 @@ contract ForgeEmissionsDifferentialTest is SettlementFixture {
             else if (kind == K.Seal) pool.seal(pos, arg);
             else emissions.executeClaim(poolIdx, pos);
         }
+    }
+
+    /// @dev A user hands claimed EMBER to the Protocol registrar, which burns it (50% Ashfall credit).
+    function burnVia(address user, uint256 amount) external {
+        require(msg.sender == address(this));
+        vm.prank(user);
+        ember.transfer(registrar, amount);
+        vm.startPrank(registrar);
+        ember.approve(address(mantle), amount);
+        mantle.burnRegistered(amount);
+        vm.stopPrank();
     }
 
     /// @dev Word layout mirrored by scripts/settlement-scenarios.ts::words; external so
@@ -179,12 +217,15 @@ contract ForgeEmissionsDifferentialTest is SettlementFixture {
             n += 4;
         }
         uint256 finalized = mantle.nextEpoch();
-        w[n++] = finalized;
+        (w[n], w[n + 1], w[n + 2]) = (finalized, mantle.queuedAshfall(), mantle.accounted());
+        n += 3;
         for (uint256 e; e < finalized; ++e) {
-            (uint128 b,, uint128 minted,, uint128 released,) = mantle.budgets(e);
+            (uint128 b, uint128 a, uint128 minted, uint128 aMinted, uint128 released, uint128 rolled) = mantle.budgets(e);
             (w[n], w[n + 1], w[n + 2]) = (b, minted, released);
-            n += 3;
+            (w[n + 3], w[n + 4], w[n + 5]) = (a, aMinted, rolled);
+            n += 6;
         }
+        for (uint256 e; e <= mantle.epochAt(block.timestamp); ++e) w[n++] = mantle.creditsOf(e);
         uint256 opened = emissions.nextEpoch();
         (w[n], w[n + 1]) = (opened, ember.balanceOf(address(emissions)));
         n += 2;
@@ -200,6 +241,13 @@ contract ForgeEmissionsDifferentialTest is SettlementFixture {
         n += 2;
         for (uint256 i; i < 4; ++i) w[n++] = emissions.sealedPot(i);
         for (uint256 id = 1; id <= positions; ++id) w[n++] = ember.balanceOf(_user(id));
+        (w[n], w[n + 1], w[n + 2], w[n + 3]) = (
+            ember.balanceOf(capstone),
+            ember.balanceOf(matchReserveSink),
+            ember.balanceOf(sealedPotStream),
+            ember.balanceOf(registrar)
+        );
+        n += 4;
         assembly ("memory-safe") {
             mstore(w, n)
         }
@@ -221,12 +269,13 @@ contract ForgeEmissionsDifferentialTest is SettlementFixture {
         (w[n], w[n + 1], w[n + 2], w[n + 3]) = (pr.id, pr.slot, pr.seg, pr.seal);
         (w[n + 4], w[n + 5], w[n + 6], w[n + 7]) =
             (pr.stakeSeconds, pr.heatSeconds, pr.sealedStakeSeconds, pr.sealedHeatSeconds);
-        return n + 8;
+        (w[n + 8], w[n + 9]) = (pr.ashfallQuotient, pr.ashfallRemainder);
+        return n + 10;
     }
 
     function _pushPoolEpoch(uint256[] memory w, uint256 n, uint256 e, uint256 i) internal view returns (uint256) {
         ForgeEmissions.PoolEpoch memory pe = emissions.poolEpoch(e, i);
-        uint256[17] memory head = [
+        uint256[20] memory head = [
             uint256(pe.phase),
             pe.positions,
             pe.cursor,
@@ -243,9 +292,12 @@ contract ForgeEmissionsDifferentialTest is SettlementFixture {
             pe.heatSeconds,
             pe.candidateSeconds,
             emissions.earnerCount(e, i),
-            emissions.sealedEarnerCount(e, i)
+            emissions.sealedEarnerCount(e, i),
+            pe.ashfall,
+            pe.ashfallPaid,
+            pe.ashfallWeight
         ];
-        for (uint256 k; k < 17; ++k) w[n++] = head[k];
+        for (uint256 k; k < 20; ++k) w[n++] = head[k];
         n = _pushProgress(w, n, e, i);
         for (uint256 k; k < head[15]; ++k) n = _pushMeasure(w, n, e, i, emissions.earnerAt(e, i, k));
         return n;
@@ -258,8 +310,8 @@ contract ForgeEmissionsDifferentialTest is SettlementFixture {
     {
         ForgeEmissions.Measure memory m = emissions.measureOf(e, i, id);
         (w[n], w[n + 1], w[n + 2], w[n + 3]) = (id, m.stakeSeconds, m.heatSeconds, m.sealSeconds);
-        (w[n + 4], w[n + 5], w[n + 6]) = (m.candidateSeconds, m.escrow, m.seal);
-        return n + 7;
+        (w[n + 4], w[n + 5], w[n + 6], w[n + 7]) = (m.candidateSeconds, m.escrow, m.seal, m.ashfallWeight);
+        return n + 8;
     }
 }
 
@@ -290,7 +342,16 @@ contract ForgeEmissionsTest is SettlementFixture {
     function test_constructorChecksPoolKinds() public {
         ForgePool[4] memory swapped = [pools[2], pools[1], pools[0], pools[3]];
         vm.expectRevert(abi.encodeWithSelector(ForgeEmissions.PoolMismatch.selector, 0));
-        new ForgeEmissions(IMantleDistribution(address(mantle)), IERC20(address(ember)), swapped);
+        _newEmissions(swapped);
+    }
+
+    function test_constructorRejectsZeroConsumers() public {
+        vm.expectRevert(ForgeEmissions.ZeroAddress.selector);
+        new ForgeEmissions(IMantleDistribution(address(mantle)), IERC20(address(ember)), pools, address(0), matchReserveSink, sealedPotStream);
+        vm.expectRevert(ForgeEmissions.ZeroAddress.selector);
+        new ForgeEmissions(IMantleDistribution(address(mantle)), IERC20(address(ember)), pools, capstone, address(0), sealedPotStream);
+        vm.expectRevert(ForgeEmissions.ZeroAddress.selector);
+        new ForgeEmissions(IMantleDistribution(address(mantle)), IERC20(address(ember)), pools, capstone, matchReserveSink, address(0));
     }
 
     function test_soleStakerEarnsTheWholeAdmittedBudget() public {
@@ -379,6 +440,56 @@ contract ForgeEmissionsTest is SettlementFixture {
         emissions.advance(0, 0);
         emit log_named_uint("credit page (32 earners, one mint)", g - gasleft());
         assertEq(uint256(emissions.poolEpoch(0, 0).phase), uint256(ForgeEmissions.Phase.Done));
+    }
+
+    /// Ashfall page gas, its costliest case: below the age cap (live Heat² roots on every
+    /// segment) and past the 30-day minimums. Pool 0: 32 one-lot positions; pool 2: one
+    /// position with 32 lots. Epoch 32 carries an Ashfall budget from a burn in epoch 31.
+    function test_gas_ashfallPages() public {
+        for (uint256 k = 1; k <= 32; ++k) {
+            address u = _user(100 + k);
+            _fund(u);
+            vm.prank(u);
+            pools[0].open(1e18 * k);
+        }
+        vm.startPrank(bob);
+        uint256 id = pools[2].open(1e18);
+        for (uint256 i = 1; i < 32; ++i) {
+            skip(30 minutes);
+            pools[2].deposit(id, 1e18);
+        }
+        vm.stopPrank();
+        vm.prank(alice);
+        pools[1].open(100e18);
+        vm.warp(start + 1 days + 1);
+        _settle(0);
+        vm.prank(alice);
+        emissions.requestClaim(1, 1);
+        skip(1 days);
+        vm.prank(alice);
+        uint256 amount = emissions.executeClaim(1, 1);
+        vm.warp(start + 31 days + 1);
+        vm.prank(alice);
+        ember.transfer(registrar, amount);
+        vm.startPrank(registrar);
+        ember.approve(address(mantle), amount);
+        mantle.burnRegistered(amount);
+        vm.stopPrank();
+        vm.warp(start + 33 days + 1);
+        for (uint256 e = 1; e <= 32; ++e) mantle.finalizeEpoch();
+        for (uint256 e = 1; e <= 32; ++e) emissions.openEpoch();
+        assertGt(emissions.poolEpoch(32, 0).ashfall, 0, "epoch 32 carries Ashfall");
+        uint256 g = gasleft();
+        emissions.advance(32, 0);
+        emit log_named_uint("Ashfall measure page (32 positions x 1 lot)", g - gasleft());
+        g = gasleft();
+        emissions.advance(32, 0);
+        emit log_named_uint("Ashfall credit page (32 earners, two mints)", g - gasleft());
+        g = gasleft();
+        emissions.advance(32, 2);
+        emit log_named_uint("Ashfall measure page (1 position, 32 lots)", g - gasleft());
+        assertEq(uint256(emissions.poolEpoch(32, 0).phase), uint256(ForgeEmissions.Phase.Done));
+        assertGt(emissions.poolEpoch(32, 0).ashfallPaid, 0, "Ashfall credited");
     }
 
     /// Settlement page gas: one 32-lot position, then a credit page.

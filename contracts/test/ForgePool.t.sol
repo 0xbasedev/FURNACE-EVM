@@ -67,6 +67,7 @@ contract ForgePoolDifferentialTest is ForgeFixture {
     function test_scenario_lapseLateTouch() public { _replay("lapseLateTouch"); }
     function test_scenario_lapseIdlePool() public { _replay("lapseIdlePool"); }
     function test_scenario_cappedMerge() public { _replay("cappedMerge"); }
+    function test_scenario_ashfallStreakReset() public { _replay("ashfallStreakReset"); }
     function test_scenario_emergencyWithPending() public { _replay("emergencyWithPending"); }
     function test_scenario_capacity16() public { _replay("capacity16"); }
     function test_scenario_capacity17() public { _replay("capacity17"); }
@@ -85,7 +86,7 @@ contract ForgePoolDifferentialTest is ForgeFixture {
 
     /// Every generated scenario has a test above; a new one fails this until added.
     function test_everyScenarioIsReplayed() public view {
-        assertEq(vm.parseJsonStringArray(forgeJson, ".names").length, 21, "add a test_scenario_* for each new scenario");
+        assertEq(vm.parseJsonStringArray(forgeJson, ".names").length, 22, "add a test_scenario_* for each new scenario");
     }
 
     function test_provisionalConstantsMatchModel() public {
@@ -120,7 +121,7 @@ contract ForgePoolDifferentialTest is ForgeFixture {
     }
 
     function _probe(uint256[] memory probe, uint256 i, uint256 time, string memory where) internal view {
-        (uint256 s1, uint256 w1, uint256 ss1,) = pool.epochMeasure(1, 0, pool.positionOf(1).lastCheckpoint);
+        (uint256 s1, uint256 w1, uint256 ss1,,) = pool.epochMeasure(1, 0, pool.positionOf(1).lastCheckpoint);
         assertEq(s1, probe[6 * i], string.concat(where, ": S(1)"));
         assertEq(w1, probe[6 * i + 1], string.concat(where, ": W(1)"));
         assertEq(pool.activePrincipal(), probe[6 * i + 2], string.concat(where, ": active"));
@@ -152,10 +153,11 @@ contract ForgePoolDifferentialTest is ForgeFixture {
         uint256[] memory w = new uint256[](4_000);
         uint256 n;
         for (uint256 id = 1; id <= positions; ++id) {
-            uint256[4] memory m;
-            (m[0], m[1], m[2], m[3]) = pool.epochMeasure(id, 0, pool.positionOf(id).lastCheckpoint);
+            uint256[5] memory m;
+            (m[0], m[1], m[2], m[3], m[4]) = pool.epochMeasure(id, 0, pool.positionOf(id).lastCheckpoint);
             n = _pushHead(w, n, id, m[0], m[1]);
             n = _pushSeal(w, n, id, m[2], m[3]);
+            w[n++] = m[4]; // Ashfall weight from records; the model accrues it independently
             for (uint256 j; j < 32; ++j) {
                 n = _pushLot(w, n, id, j);
             }
@@ -290,14 +292,14 @@ contract ForgePoolTest is ForgeFixture {
         uint256 t0 = block.timestamp;
         skip(200 days);
         pool.poke(id);
-        (uint256 s, uint256 w,,) = pool.epochMeasure(id, t0, block.timestamp);
+        (uint256 s, uint256 w,,,) = pool.epochMeasure(id, t0, block.timestamp);
         assertEq(s, net * 200 days);
         assertEq(w, net * HeatMath.integrateHeat(0, 200 days, 0));
         // Any subdivision telescopes: two halves equal the whole interval.
         skip(200 days);
         pool.poke(id);
-        (, uint256 wa,,) = pool.epochMeasure(id, t0, t0 + 123 days);
-        (, uint256 wb,,) = pool.epochMeasure(id, t0 + 123 days, block.timestamp);
+        (, uint256 wa,,,) = pool.epochMeasure(id, t0, t0 + 123 days);
+        (, uint256 wb,,,) = pool.epochMeasure(id, t0 + 123 days, block.timestamp);
         assertEq(wa + wb, net * HeatMath.integrateHeat(0, 400 days, 0));
         assertEq(pool.historyLength(id, 0), 0, "pure aging writes no records");
     }
@@ -311,7 +313,7 @@ contract ForgePoolTest is ForgeFixture {
         uint256 frozenAt = block.timestamp;
         skip(1 days);
         pool.poke(id);
-        (uint256 s1, uint256 w1,,) = pool.epochMeasure(id, frozenAt, block.timestamp);
+        (uint256 s1, uint256 w1,,,) = pool.epochMeasure(id, frozenAt, block.timestamp);
         assertEq(s1, 0, "no stake-seconds while frozen");
         assertEq(w1, 0, "no heat-seconds while frozen");
         vm.prank(alice);
@@ -404,10 +406,10 @@ contract ForgePoolTest is ForgeFixture {
         pool.cancelCooling(id, t); // resumes into a reserved slot (ages differ by a day)
         skip(5 days);
         pool.poke(id);
-        (uint256 s, uint256 w,,) = pool.epochMeasure(id, t0, t0 + 10 days);
+        (uint256 s, uint256 w,,,) = pool.epochMeasure(id, t0, t0 + 10 days);
         assertEq(s, 99e18 * 10 days, "first ten days unchanged by later records");
         assertEq(w, 99e18 * HeatMath.integrateHeat(0, 10 days, 0));
-        (uint256 sFrozen,,,) = pool.epochMeasure(id, t0 + 10 days, t0 + 11 days);
+        (uint256 sFrozen,,,,) = pool.epochMeasure(id, t0 + 10 days, t0 + 11 days);
         assertEq(sFrozen, 66e18 * 1 days, "only the unfrozen remainder earns");
     }
 
@@ -420,7 +422,7 @@ contract ForgePoolTest is ForgeFixture {
         uint256 closedAt = block.timestamp;
         skip(4 days);
         pool.poke(id);
-        (uint256 s,,,) = pool.epochMeasure(id, closedAt - 3 days, block.timestamp);
+        (uint256 s,,,,) = pool.epochMeasure(id, closedAt - 3 days, block.timestamp);
         assertEq(s, 99e18 * 3 days);
         assertEq(pool.historyLength(id, 0), 0, "exit writes no per-slot records");
         (uint256 amount,,,) = pool.lotAt(id, 0);

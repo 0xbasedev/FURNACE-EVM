@@ -34,6 +34,36 @@ contract HeatMathTest is OracleVectors {
         for (uint256 i; i < a.length; ++i) assertEq(HeatMath.integrateHeat(a[i], t[i], b[i]), want[i], "integrateHeat");
     }
 
+    function test_squaredHeatPrimitive_exact() public view {
+        uint256[] memory ages = _uints(".squaredPrimitive.ageSeconds");
+        uint256[] memory b = _uints(".squaredPrimitive.bonusRay");
+        uint256[] memory want = _uints(".squaredPrimitive.ray");
+        for (uint256 i; i < ages.length; ++i) assertEq(HeatMath.squaredHeatPrimitive(ages[i], b[i]), want[i], "squaredHeatPrimitive");
+    }
+
+    function test_integrateSquaredHeat_exact() public view {
+        uint256[] memory a = _uints(".integrateSquared.ageSeconds");
+        uint256[] memory t = _uints(".integrateSquared.activeSeconds");
+        uint256[] memory b = _uints(".integrateSquared.bonusRay");
+        uint256[] memory want = _uints(".integrateSquared.ray");
+        for (uint256 i; i < a.length; ++i) assertEq(HeatMath.integrateSquaredHeat(a[i], t[i], b[i]), want[i], "integrateSquaredHeat");
+    }
+
+    /// Heat² anchors: 1.0x² before any age, 3.0x² at the cap, and ∫H² ≥ (∫H)²/T (Cauchy–Schwarz).
+    function test_squaredHeat_anchors() public pure {
+        assertEq(HeatMath.squaredHeatPrimitive(0, 0), 0);
+        assertEq(HeatMath.integrateSquaredHeat(365 days, 1 days, 0), 9 * RAY * RAY * 1 days, "3.0x squared at the cap");
+        uint256 h2 = HeatMath.integrateSquaredHeat(10 days, 1 days, 0);
+        uint256 h = HeatMath.integrateHeat(10 days, 1 days, 0);
+        assertGe(h2, (h * h) / 1 days, "Cauchy-Schwarz");
+    }
+
+    function testFuzz_squaredHeat_monotone(uint256 age, uint256 dt) public pure {
+        age = bound(age, 0, 2 * 365 days);
+        dt = bound(dt, 1, 30 days);
+        assertGt(HeatMath.squaredHeatPrimitive(age + dt, 0), HeatMath.squaredHeatPrimitive(age, 0));
+    }
+
     function test_cooledAge_exact() public view {
         uint256[] memory a = _uints(".cool.ageSeconds");
         uint256[] memory w = _uints(".cool.withdrawn");

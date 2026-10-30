@@ -1,12 +1,12 @@
 // Exact BigInt reference of ForgePool custody (docs/adr/0004-forge-custody.md) and
 // Seals (docs/adr/0006-seals.md). One pool: positions of ≤32 lots, cooling plans with
 // frozen slices, lazy lapses, in-kind exits, cumulative S/W measures (and their sealed
-// parts, accrued independently of the records) and the pool occupancy log.
-// Built on canonical/accounting.ts (integrateHeat, cooledAge). Rules marked [P] in
+// parts and the Ashfall weight, accrued independently of the records) and the pool
+// occupancy log. Built on canonical/accounting.ts (integrateHeat, integrateSquaredHeat, cooledAge). Rules marked [P] in
 // ADR 0004 are this repo's provisional readings: matching this model proves the
 // Solidity port is internally consistent, NOT that a [P] rule is canonical.
 import cfg from '../canonical/furnace.config';
-import { AGE_CAP, DAY, integrateHeat, cooledAge, parseUnits, ray } from '../canonical/accounting';
+import { AGE_CAP, DAY, RAY, integrateHeat, integrateSquaredHeat, cooledAge, parseUnits, ray } from '../canonical/accounting';
 
 export const MAX_LOTS = cfg.forge.heat.maxLotsPerPosition;
 export const MAX_PENDING = 8; // [P] not in the canonical config
@@ -14,6 +14,19 @@ export const TIERS = cfg.cooldowns.withdraw.tiers.map((t) => ({ maxPct: BigInt(t
 export const WINDOW = BigInt(cfg.cooldowns.withdraw.executionWindowSeconds);
 export const HORIZON = BigInt(cfg.execution.withdrawals.planHorizonSeconds);
 export const PART_CAP = BigInt(cfg.execution.ashfall.minimumParticipationDays) * DAY;
+/** Ashfall needs the position's active Streak to reach the `minRelic` Relic (ADR 0007). */
+export const MIN_STREAK = BigInt(cfg.forge.relics.find((r) => r.key === cfg.emissions.ashfall.minRelic)!.days) * DAY;
+/**
+ * Ashfall weight of a lot over [a, b] (stake·∫Heat² dt over eligible time, RAY²-seconds, unrounded):
+ * eligible once its actual participation (`part` at a, growing 1:1) and its position's Streak (from
+ * `streak`) both reach their minimums. Ordinary Heat only: no Seal coefficient.
+ */
+export function ashfallWeight(amount: bigint, age: bigint, part: bigint, streak: bigint, a: bigint, b: bigint): bigint {
+  let e = streak + MIN_STREAK;
+  if (part < PART_CAP && a + (PART_CAP - part) > e) e = a + (PART_CAP - part);
+  if (e < a) e = a;
+  return e < b ? amount * integrateSquaredHeat(age + (e - a), b - e, 0n) : 0n;
+}
 export const DEPOSIT_FEE_PCT = BigInt(cfg.forge.fees.depositPct);
 export const WITHDRAW_FEE_PCT = BigInt(cfg.forge.fees.withdrawPct);
 export const EMERGENCY_FEE_PCT = BigInt(cfg.forge.emergencyExit.feePct);
@@ -47,8 +60,10 @@ export interface Position {
   heads: Map<number, Rec>; history: Map<number, Rec[]>;
   /** Seals (index k-1) and the sealed parts of S/W, accrued from the Seal state itself. */
   seals: SealM[]; SS: bigint; SW: bigint; epochSS: Map<bigint, bigint>; epochSW: Map<bigint, bigint>;
+  /** Ashfall weight (unrounded), accrued from lot participation and the Streak itself. */
+  Q: bigint; epochQ: Map<bigint, bigint>;
 }
-export interface Rec { since: bigint; amount: bigint; age: bigint; part: bigint; seal: number }
+export interface Rec { since: bigint; amount: bigint; age: bigint; part: bigint; seal: number; streak: bigint }
 const UINT96_MAX = (1n << 96n) - 1n;
 export interface Occ { time: bigint; cum: bigint; on: boolean }
 
@@ -133,13 +148,15 @@ export class ForgeModel {
       p.lots.forEach((lot, j) => {
         if (lot.amount === 0n) return;
         const s = lot.amount * d, w = lot.amount * integrateHeat(lot.age, d, 0n);
+        const q = ashfallWeight(lot.amount, lot.age, lot.part, p.streakStart, a, b);
         const sealed = seal !== undefined && has(seal.cohort, j);
-        p.S += s; p.W += w;
+        p.S += s; p.W += w; p.Q += q;
         if (sealed) { p.SS += s; p.SW += w; }
         if (epochs && a >= this.epochStart!) {
           const e = this.epochOf(a);
           p.epochS.set(e, (p.epochS.get(e) ?? 0n) + s);
           p.epochW.set(e, (p.epochW.get(e) ?? 0n) + w);
+          p.epochQ.set(e, (p.epochQ.get(e) ?? 0n) + q);
           if (sealed) {
             p.epochSS.set(e, (p.epochSS.get(e) ?? 0n) + s);
             p.epochSW.set(e, (p.epochSW.get(e) ?? 0n) + w);
@@ -244,9 +261,9 @@ export class ForgeModel {
     const head = p.heads.get(j);
     if (head && head.since !== t) {
       if (!p.history.has(j)) p.history.set(j, []);
-      p.history.get(j)!.push(head);
+      p.history.get(j)!.push({ ...head, streak: p.streakStart });
     }
-    p.heads.set(j, { since: t, amount: lot.amount, age: lot.age, part: lot.part, seal: this.tag(p, j) });
+    p.heads.set(j, { since: t, amount: lot.amount, age: lot.age, part: lot.part, seal: this.tag(p, j), streak: 0n });
   }
 
   // ── Seals (mirror of ForgePool's Seal transitions) ───────────────────────
@@ -284,11 +301,11 @@ export class ForgeModel {
   }
 
   /** Resumable slot measure over [t0, t1], segment for segment as ForgePool.measureSlot. */
-  measureSlot(id: number, j: number, t0: bigint, t1: bigint, from: bigint, maxSegs: bigint) {
+  measureSlot(id: number, j: number, t0: bigint, t1: bigint, from: bigint, maxSegs: bigint, ashfall = true) {
     const p = this.positions[id - 1];
     if (t1 > p.last) throw new Error('model: measure before sync');
     if (p.closedAt !== 0n && p.closedAt < t1) t1 = p.closedAt;
-    const out = { s: 0n, w: 0n, ss: 0n, sw: 0n, seal: 0, next: 0n, used: 0n, done: true };
+    const out = { s: 0n, w: 0n, ss: 0n, sw: 0n, q: 0n, seal: 0, next: 0n, used: 0n, done: true };
     if (t1 <= t0) return out;
     const hist = p.history.get(j) ?? [], head = p.heads.get(j)!, n = hist.length;
     const seg = (k: number) => (k < n ? hist[k] : head);
@@ -311,6 +328,7 @@ export class ForgeModel {
       const age = min(r.age + (a - r.since), AGE_CAP);
       let s = r.amount * (b - a), w = r.amount * integrateHeat(age, b - a, 0n);
       out.s += s; out.w += w;
+      if (ashfall) out.q += ashfallWeight(r.amount, r.age + (a - r.since), r.part + (a - r.since), i < n ? r.streak : p.streakStart, a, b);
       if (r.seal === 0) continue;
       const tagEnd = sealEnd(p.seals[r.seal - 1]);
       if (tagEnd <= a) continue;
@@ -323,11 +341,11 @@ export class ForgeModel {
   /** Sum of measureSlot over every slot that ever held a lot (ForgePool.epochMeasure). */
   epochMeasure(id: number, t0: bigint, t1: bigint) {
     const p = this.positions[id - 1];
-    const out = { s: 0n, w: 0n, ss: 0n, sw: 0n };
+    const out = { s: 0n, w: 0n, ss: 0n, sw: 0n, q: 0n };
     for (let j = 0; j < MAX_LOTS; j++) {
       if (!p.heads.has(j)) continue;
       const m = this.measureSlot(id, j, t0, t1, 0n, 1n << 255n);
-      out.s += m.s; out.w += m.w; out.ss += m.ss; out.sw += m.sw;
+      out.s += m.s; out.w += m.w; out.ss += m.ss; out.sw += m.sw; out.q += m.q;
     }
     return out;
   }
@@ -341,7 +359,7 @@ export class ForgeModel {
       plan: null, tickets: new Map(), pending: [], nextTicket: 1,
       epochS: new Map(), epochW: new Map(), historySlots: new Set(), openedAt: now, closedAt: 0n,
       heads: new Map(), history: new Map(),
-      seals: [], SS: 0n, SW: 0n, epochSS: new Map(), epochSW: new Map(),
+      seals: [], SS: 0n, SW: 0n, epochSS: new Map(), epochSW: new Map(), Q: 0n, epochQ: new Map(),
     };
     this.positions.push(p);
     this.addLot(p, amount, now);
