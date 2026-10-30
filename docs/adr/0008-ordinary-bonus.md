@@ -72,12 +72,12 @@ Status: accepted for this repository. Not audited, not deployed. Rules marked **
 **4. [P] BOOST cannot exhaust a record counter.**
 - **The risk:**
   - `Lot.records` is a `uint24`.
-  - A cooling request, an execution, a cancel and a lapse each write a head, and that write is a checked `+1`.
+  - A cooling request, an execution, a cancel and a lapse each write a head, and that write is a checked `+1`. (The emergency exit writes no heads, so even a full counter never blocks it.)
   - Until now only an owner could grow its own records. A Boost with a permissionless refresh could push records onto someone else's position.
 - **The limit:**
   - `setOrdinaryBonus` reverts with `RecordLimit(id, slot)` once an active slot holds `BOOST_RECORD_LIMIT` = 2²³ records. That leaves the other half of the counter for the owner's own actions.
   - The dilution rewrite in a deposit has no limit, because it is the owner's own action.
-  - Same-instant rewrites overwrite, so the counter grows by at most one record per slot per second.
+  - Same-instant rewrites overwrite, so a BOOST rewrite adds at most one record per active slot per second. (A single sync can add more, because each lapse it resolves is back-dated to its own deadline.)
 - **Requirement on Boost:** rate-limit or quantize refreshes. For example, owner-triggered changes, plus at most one checkpointed refresh per position per epoch. That keeps ADR 0005's record-spam argument: the sender pays more per record than settlement does.
 
 **5. Size.**
