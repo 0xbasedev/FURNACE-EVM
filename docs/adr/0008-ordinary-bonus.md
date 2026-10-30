@@ -99,13 +99,11 @@ Status: accepted for this repository. Not audited, not deployed. Rules marked **
 
 ## Still required before any deployment
 
-These are **not built**:
-- **The Boost contract,** at a mined address passed to all four pools. It needs:
-  - Capstone deposits and withdrawals: fees of 1%, burned; the same cooling timer as withdrawals; no effect on Streak or age;
-  - the protected valuation checkpoint;
-  - Pyre's burn-to-mint badges;
-  - the refresh policy in decision 4;
-  - the custody denominator in decision 3.
+- ~~**The Boost contract.**~~ Built in [ADR 0009](0009-capstone-boost.md): Capstone deposits and withdrawals, the custody denominator (decision 3) and the refresh policy (decision 4). These are still **not built**:
+  - the protected valuation checkpoint Boost reads;
+  - the Relics ledger of Pyre burns;
+  - Boost's mined address, passed to all four pools.
+These are **not built** either:
 - **Deed transfers.**
   - ForgePool has no owner transfer.
   - A Deed sale needs several changes inside this immutable pool, before deployment: an owner change; the buyer's 80% of capped age; a Streak reset for the new owner; and the seller's Pyre left behind, which is a bonus change.

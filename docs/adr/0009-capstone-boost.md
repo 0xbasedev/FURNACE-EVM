@@ -21,6 +21,7 @@ Status: accepted for this repository. Not audited, not deployed. Rules marked **
 
 **1. [P] One contract, three fixed roles.**
 - `Boost` is every pool's `BOOST`, ForgeEmissions' `CAPSTONE` consumer, and a Protocol-category burn registrar. That means one mined address, and vested Seal escrow lands where the bonus is computed.
+- **Not a canonical module.** `CONTRACTS.md`'s module map has no Capstone row: Capstone falls within Forge's scope, and Pyre history within Relics'. Boost is this repo's Forge-side contract; the pool stays as small as EIP-170 requires.
 - Boost is deployed after the pools, the Mantle and ForgeEmissions, at the address each of them was given. Its constructor checks every wire and reverts `Miswired` otherwise:
   - ForgeEmissions' `CAPSTONE`;
   - every pool's `BOOST`;
@@ -29,6 +30,7 @@ Status: accepted for this repository. Not audited, not deployed. Rules marked **
 **2. The Capstone ledger, per position `(pool, id)`.**
 - **Deposit (owner, open position only).**
   - 1% is booked as a fee and the rest counts toward the bonus.
+  - A deposit whose fee would round to zero (under 100 wei) reverts `BelowMinimum`. So every deposit pays a burned fee.
   - The bonus is then raised if the price sources answer. The deposit stands either way, and `BonusUnavailable` is emitted otherwise.
 - **Escrow.** Anyone may move a position's vested Seal escrow (`takeCapstone`) into its Capstone, **with no fee** [P]: it was minted for that position. The bonus is then raised as for a deposit.
 - **Withdrawal** (cooldown `sameAsWithdraw`) mirrors ForgePool's cooling plan:
@@ -53,6 +55,8 @@ Status: accepted for this repository. Not audited, not deployed. Rules marked **
 **4. [P] The price sources are interfaces, not inventions.**
 - Nothing in the canonical package defines the "protected valuation checkpoint" for Capstone. The protected TWAP it does define (30 minutes, 2% band) is Vent's.
 - **Valuation.** Boost takes an immutable `IValuation.emberPerStake(pool)`: EMBER-wei per stake-token-wei, RAY-scaled, so a 6-decimal stake needs no other conversion.
+  - `pool` is ForgeEmissions' index: 0 ember-usdc-lp, 1 ember-weth-lp, 2 ember-single, 3 usdc-single.
+  - **It must revert when its checkpoint is stale.** Boost treats any value it returns as current, and a revert only skips or blocks a raise.
 - **Pyre.** Boost takes an immutable `IPyreLedger.pyreBurned(wallet)`. The Relics contract that records Pyre burns is not built.
 - **The EMBER-staked pool** (`ember-single`) never reads the valuation, because its rate is exactly 1.
 - **Overflow.** Custody stays below 2¹⁰⁶, so a rate below 2¹⁶⁰ cannot overflow the units. A larger rate counts as unavailable. (A realistic 6-decimal rate is about 1e39, which a 2¹²⁸ guard had wrongly rejected. The 6-decimal test caught it.)
@@ -71,7 +75,7 @@ Status: accepted for this repository. Not audited, not deployed. Rules marked **
 - Lowering is open to anyone at any time.
 - Raising is open to the owner and, separately, to anyone else, each at most once per epoch. Neither side can use up the other's allowance.
 - An unchanged value writes nothing.
-- **Deposit and escrow raises are not rationed.** Each deposit costs a 1% burned fee, and escrow arrives only when a Seal vests.
+- **Deposit and escrow raises are not rationed.** Each deposit pays a nonzero 1% burned fee, and escrow arrives only when a Seal vests.
 - **Record growth from Boost is therefore bounded** by:
   - the valuation's cadence (lowering);
   - two raises per epoch;
@@ -101,7 +105,10 @@ These are **not built**:
 - **Deed transfers** (ADR 0008).
   - The Capstone is keyed by position, so it follows a Deed once the pool can change owners.
   - Pyre does not transfer, so a sale needs a bonus refresh.
-- **Stoke and compounding into Capstone** (spec §6, `DECISIONS.md`). Boost has no reward-claim path yet.
+- **Stoke and compounding into Capstone** (spec §6, `DECISIONS.md`).
+  - The config's compound cooldown is 0 seconds, and the spec keeps voluntary compounding "immediately available into Capstone".
+  - So compounding must bypass the 24-hour claim. That needs a pull path from ForgeEmissions to Boost.
+  - ForgeEmissions is immutable, so this is a structural change before deployment. Boost has no reward-claim path yet.
 
 ## Gas (`pnpm gas`: forge `--isolate`, optimizer 500 runs, solc-js 0.8.28)
 
@@ -122,12 +129,17 @@ Raising or lowering a bonus costs about one record per active lot (ADR 0008). Ex
   - one wei either side of the maximum;
   - zero custody and a zero rate;
   - every tier edge.
-- **Unit tests (18).**
+- **Unit tests (20).**
   - **Wiring and stakes:** the constructor's wire checks; EMBER-pool, 6-decimal and LP bonuses; Pyre.
   - **No price on withdrawals:** they request, cancel and execute while the valuation reverts, and a deposit stands while it is down.
   - **Limits:** an absurd rate counts as unavailable; splitting against the cumulative timer; lapse.
   - **Refresh:** separate raise allowances, with lowering open; dilution followed by a refresh.
-  - **Ledgers and owners:** fees burned through the Mantle; escrow without fee; owner checks; a closed position's withdrawal.
+  - **Ledgers and owners:** fees burned through the Mantle, and dust deposits that would pay none; escrow without fee; owner checks; a closed position's withdrawal.
+  - **End to end, through the real settlement:**
+    - a 30-day Seal on the EMBER pool vests;
+    - `settleSeal` credits its escrow, and Boost claims it into the Capstone;
+    - the next day's W beats an identical unboosted position by exactly stake · time · bonus.
+  - **Scope.** The custody and settlement differentials still drive `setOrdinaryBonus` from a stand-in `BOOST` address. Boost itself is tested here, against the real pools, ForgeEmissions and the Mantle.
 - **Invariants:** random deposits, withdrawals, refreshes, top-ups, valuation moves and outages, and Pyre burns. They check that:
   - Capstone EMBER is fully backed (balance = Capstone + pending + booked fees);
   - a matured withdrawal inside its window always pays, and a cancel always succeeds, whatever the valuation does;
@@ -135,7 +147,7 @@ Raising or lowering a bonus costs about one record per active lot (ADR 0008). Ex
   - bonuses stay within the ceiling.
 
   A fixed-sequence probe shows the handler really reaches requests and executions.
-- **Mutations:** 20 planted bugs in Boost, each run in its own worktree against every suite. **All 20 are caught.** They cover:
+- **Mutations:** 21 planted bugs in Boost, each run in its own worktree against every suite. **All 21 are caught.** They cover:
   - a withdrawal reading the valuation, or not lowering the bonus;
   - a non-cumulative or always-fresh plan;
   - unbooked deposit or withdrawal fees;
@@ -144,7 +156,7 @@ Raising or lowering a bonus costs about one record per active lot (ADR 0008). Ex
   - the custody value rounded down;
   - a strict Pyre tier;
   - a lapse or a cancel not returned;
-  - no owner check, or a deposit into a closed position;
+  - no owner check, a deposit into a closed position, or a dust deposit without a fee;
   - execution before maturity;
   - no overflow guard, or one too tight for 6-decimal stakes;
   - a fee on escrow.
