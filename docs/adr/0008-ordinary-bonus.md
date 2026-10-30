@@ -86,7 +86,7 @@ Status: accepted for this repository. Not audited, not deployed. Rules marked **
   - **The pro-rata split.** A lot amount is below 2⁹⁶, and the active principal is below 2¹⁰¹.
   - **The age haircut** (`HeatMath.cooledAge`). Ages are already capped, and custody is below 2¹³⁰.
 - Every existing test passes unchanged, and the differential scenarios still match canonical `cooledAge` after every execution.
-- ForgePool is now **24,401 bytes, 175 below the limit**.
+- ForgePool is now **24,401 bytes, 175 below the limit** (24,474 and 102 once ADR 0009 adds `custodyOf`).
 
 ## Provisional defaults
 
@@ -110,7 +110,7 @@ These are **not built**:
   - ForgePool has no owner transfer.
   - A Deed sale needs several changes inside this immutable pool, before deployment: an owner change; the buyer's 80% of capped age; a Streak reset for the new owner; and the seller's Pyre left behind, which is a bonus change.
   - Each must rewrite the active heads first, like the Streak anchor and the bonus. `_rewriteActive` is the reusable step.
-  - The pool has 175 bytes of headroom, so this needs another structural change.
+  - The pool has 175 bytes of headroom (102 after ADR 0009), so this needs another structural change.
 - **The rest of ADR 0007's list:**
   - the matching, match-reserve and Sealed-pot stream contracts, at mined addresses;
   - the emergency exit's stayers' share;

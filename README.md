@@ -17,6 +17,7 @@ EVM workspace for **FURNACE Protocol**, a loyalty-staking protocol built on EMBE
 | `contracts/src/forge/ForgePool.sol` | **Forge custody** (one pool): up to 32 lots per position, cooling plans with frozen slices, in-kind execution with proportional age haircuts, cancel and lapse that resume the frozen state exactly, emergency exit, exact per-position S/W measures, and a pool occupancy log. Every exit makes exactly one external call, the token transfer. Append-only per-lot checkpoint records, each carrying its position's Streak anchor and ordinary Heat bonus, give `epochMeasure` over any past interval. The **ordinary bonus** (Capstone + Pyre, ≤ 0.65) is set only by an immutable `BOOST` address and enters W, the sealed W and Ashfall segment by segment; a top-up dilutes it until Boost refreshes it. See [ADR 0004](docs/adr/0004-forge-custody.md) and [ADR 0008](docs/adr/0008-ordinary-bonus.md). |
 | `contracts/src/forge/ForgeEmissions.sol` | **Base epoch settlement**: the Mantle's distributor and the index of the four pools. It splits each epoch's base by pool weight and admits it only for occupied time. Bounded, resumable measure pages (≤32 lots, ≤256 record segments, due lapses charged) feed escrow pages that set each sealed position's capped Conviction escrow. Credit pages then pay `⌊flat·S_i/S⌋ + ⌊heat·W_i/W⌋` with one mint per page. Claims are fee-free 24h snapshots. **Ashfall** is split by pool weight and paid by stake × Heat² to lots with 30 days of participation in positions with a 30-day Streak; what nobody is owed rolls back to the Mantle. See [ADR 0005](docs/adr/0005-epoch-settlement.md) and [ADR 0007](docs/adr/0007-ashfall-and-handoffs.md). |
 | **Seals** (`seal`, `settleSeal`) | **Conviction tracks:** 30/90/180/365-day terms at +0.15/.25/.35/.50. The cohort is fixed at sealing. Pending cooling pauses a Seal and extends its term; an executed withdrawal or emergency exit forfeits it; completion is back-dated. Lots are tagged in their records, and escrow is `min(⌊bucket·C_i/C⌋, ⌊L·B_i/W⌋)`. Escrow stays locked until the Seal ends, then goes to a held Capstone ledger, or is split 50/25/25 into forfeit ledgers if forfeited. The burn lane is burned (no Ashfall credit); the Capstone, match reserve and Sealed-pot stream pull theirs from addresses fixed at deployment. See [ADR 0006](docs/adr/0006-seals.md) and [ADR 0007](docs/adr/0007-ashfall-and-handoffs.md). |
+| `contracts/src/forge/Boost.sol` | **Capstone and the ordinary bonus**: every pool's `BOOST`, ForgeEmissions' `CAPSTONE` and a Protocol burn registrar in one contract. Owners keep EMBER in a position's Capstone (1% fees, burned) for up to +0.5 Heat against the custody's EMBER value; Pyre adds up to +0.15. Withdrawals run on Forge's cumulative timers and never read a price; only raising does. The valuation source and the Pyre ledger are immutable interfaces, not built. See [ADR 0009](docs/adr/0009-capstone-boost.md). |
 | `contracts/src/forge/ForgeMeasures.sol` | External library: exact slot and position measures (S, W, their sealed parts, and the Ashfall weight) read from the pool's records by DELEGATECALL. It keeps ForgePool under the EIP-170 size limit. |
 | `contracts/test/` | Exact differential tests against BigInt vectors, fuzz properties, and invariants. |
 | `scripts/` | Independent checks: canonical checksums, config hash, CREATE3, and `gen`. `forge-model.ts` and `settlement-model.ts` are the exact BigInt references, and `forge-scenarios.ts` and `settlement-scenarios.ts` produce the differential scenarios. |
@@ -54,7 +55,7 @@ The engine tests (`apps/forge-sim/test`) check each projection against direct ca
 - **Canonical package:** all 54 files match `SHA256SUMS.json`, and they still match after the package's own build. Its 75 tests pass. The economics gate reports no diagnostics. Its deployment gate fails, by design, until real operators are supplied.
 - **Config hash:** v5.5.0 is `0x24f38f4aa11919503354bb5f8263978c7b3edc29723760928cb1eecdbafbe5ae` (31,451 bytes). This repo reproduces it independently with noble Keccak and its own serializer, and it equals the package manifest.
 - **CREATE3:** the 9 mined addresses re-derive from their salts; they are provisional because the deployer is still the placeholder. Seven modules are unmined by design: Mantle, BlastPool, SmelterPool, Flow, GenesisFeeEscrow, TreasuryVesting and Timelock.
-- **Forge tests, 163/163:**
+- **Forge tests, 186/186:**
   - The integer ports equal `canonical/accounting.ts` **exactly** on generated vectors. A deliberate 1-wei rounding change fails the suite.
   - The emission schedule is exact on every day from 0 to 1700 plus far-out days (ADR 0002). Day 365 is exactly 10,800 EMBER, and the floor is first reached on day 1,619.
   - The Heat integral telescopes exactly under checkpoint subdivision (fuzzed). The Heat² primitive (`squaredHeatPrimitive`, the Ashfall weight) is exact as well, including its ~280-bit square root.
@@ -93,9 +94,10 @@ The engine tests (`apps/forge-sim/test`) check each projection against direct ca
     - Runs start from 31 settled days, with random burns and consumer pulls, so Ashfall is live.
   - **Settlement and Seal mutations:** 28 planted bugs, each caught; see ADR 0005 and ADR 0006.
   - **Ashfall mutations:** 17 planted bugs (Heat², Streak anchors, eligibility, the Ashfall pass, the consumers), each caught; see ADR 0007.
+  - **Boost mutations:** 20 planted bugs (withdrawals reading a price, the cumulative timer, fees, raise rationing, roundings, the overflow guard, ownership), each caught; see ADR 0009.
   - **Ordinary-bonus mutations:** 15 planted bugs (the authority, the ceiling, the rewrite order, the bonus in W, the sealed W and Ashfall, dilution, the record limit), each caught. The 17 Ashfall mutations were re-run on this code and are still caught; see ADR 0008.
   - **CI gate:** `pnpm forge:gate` proves that a failing test fails the build. The upstream npm wrapper did not propagate forge's exit status.
-  - **Size gate:** `pnpm forge:sizes` fails the build if any contract exceeds the EIP-170 runtime limit (24,576 bytes). ForgePool had been 806 bytes over. The measure path now lives in the external library `ForgeMeasures`, and optimizer runs are 500. With Seals, the Streak anchors and the ordinary bonus, ForgePool is 24,401 bytes (175 under). Its two `mulDiv` calls became plain arithmetic, exact for its operands, to fit the bonus hook (ADR 0008).
+  - **Size gate:** `pnpm forge:sizes` fails the build if any contract exceeds the EIP-170 runtime limit (24,576 bytes). ForgePool had been 806 bytes over. The measure path now lives in the external library `ForgeMeasures`, and optimizer runs are 500. With Seals, the Streak anchors, the ordinary bonus and `custodyOf`, ForgePool is 24,474 bytes (102 under). Its two `mulDiv` calls became plain arithmetic, exact for its operands, to fit the bonus hook (ADR 0008).
 
 ## Toolchain
 
@@ -111,7 +113,8 @@ EVM target: `cancun`.
 - A 3-of-5 Treasury Safe with five real owners, plus the Safe's factory inputs, nonce and predicted address. Also the Timelock identity.
 - The guardian and treasury identities for Ethereum, the external WETH/USDC receipt, and the start time.
 - Mined addresses for the Capstone, match reserve and Sealed-pot stream: `ForgeEmissions` takes them as immutable constructor arguments (ADR 0007).
-- A mined address for the Boost contract (Capstone + Pyre): each `ForgePool` takes it as an immutable constructor argument (ADR 0008).
+- A mined address for Boost: each `ForgePool` takes it as `BOOST`, `ForgeEmissions` as `CAPSTONE`, and the Mantle lists it as a Protocol-category burn registrar (ADR 0008, ADR 0009).
+- The protected valuation source behind `IValuation` and the Relics contract behind `IPyreLedger` (ADR 0009).
 - Built and audited custody, settlement, escrow and auction contracts.
 
 ## Next steps (v5.5 `CONTRACTS.md`)
@@ -123,8 +126,8 @@ EVM target: `cancun`.
 5. ~~Ashfall and the Seal-ledger handoffs~~ (done; ADR 0007): the Heat² port, Streak anchors in the records, Ashfall pages, the uncredited forfeit burn, and pulls by the Capstone, match reserve and Sealed-pot stream.
 
    **Before any deployment,** these are still required (ADR 0007, ADR 0008):
-   - the Boost contract (Capstone deposits and withdrawals, the protected valuation checkpoint, Pyre), at a mined address;
-   - Deed transfers, which need an owner change, the buyer's 80% age and a Streak reset inside the immutable ForgePool (175 bytes under the size limit);
+   - the protected valuation source and the Relics (Pyre) ledger that Boost reads, and Boost's mined address (ADR 0009);
+   - Deed transfers, which need an owner change, the buyer's 80% age and a Streak reset inside the immutable ForgePool (102 bytes under the size limit);
    - the matching/match-reserve and Sealed-pot stream contracts, at mined addresses;
    - the emergency exit's stayers' share, which today goes to the fee collector.
 
@@ -132,3 +135,4 @@ EVM target: `cancun`.
 6. **FeeRouter (Vent)**, which pulls `ForgePool.feesOwed`, with the 0.5% per-call and per-window throughput limits, plus **GenesisFeeEscrow** for Kindling.
 7. ~~The Heat² primitive (`squaredHeatPrimitive`) port and Ashfall distribution~~ (done; ADR 0007).
 8. ~~The ordinary-bonus hook in ForgePool~~ (done; ADR 0008): `BOOST`, bonus-carrying records, dilution on top-ups, and a record limit for Boost rewrites.
+9. ~~Capstone and Boost~~ (done; ADR 0009): the Capstone ledger, vested escrow, Forge-timed withdrawals that never read a price, and the Capstone + Pyre bonus.
