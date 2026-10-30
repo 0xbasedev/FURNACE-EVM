@@ -1,5 +1,5 @@
-// Exact BigInt reference of ForgePool custody (docs/adr/0004-forge-custody.md) and
-// Seals (docs/adr/0006-seals.md). One pool: positions of ≤32 lots, cooling plans with
+// Exact BigInt reference of ForgePool custody (docs/adr/0004-forge-custody.md), Seals
+// (docs/adr/0006-seals.md) and the ordinary bonus (docs/adr/0008-ordinary-bonus.md). One pool: positions of ≤32 lots, cooling plans with
 // frozen slices, lazy lapses, in-kind exits, cumulative S/W measures (and their sealed
 // parts and the Ashfall weight, accrued independently of the records) and the pool
 // occupancy log. Built on canonical/accounting.ts (integrateHeat, integrateSquaredHeat, cooledAge). Rules marked [P] in
@@ -16,16 +16,19 @@ export const HORIZON = BigInt(cfg.execution.withdrawals.planHorizonSeconds);
 export const PART_CAP = BigInt(cfg.execution.ashfall.minimumParticipationDays) * DAY;
 /** Ashfall needs the position's active Streak to reach the `minRelic` Relic (ADR 0007). */
 export const MIN_STREAK = BigInt(cfg.forge.relics.find((r) => r.key === cfg.emissions.ashfall.minRelic)!.days) * DAY;
+/** [P] A position's ordinary bonus (Capstone + Pyre) is stored in units of 1e-5 (ADR 0008). */
+export const BONUS_UNIT = 10n ** 22n;
+export const MAX_BONUS_UNITS = ray('0.65') / BONUS_UNIT;
 /**
  * Ashfall weight of a lot over [a, b] (stake·∫Heat² dt over eligible time, RAY²-seconds, unrounded):
  * eligible once its actual participation (`part` at a, growing 1:1) and its position's Streak (from
- * `streak`) both reach their minimums. Ordinary Heat only: no Seal coefficient.
+ * `streak`) both reach their minimums. Ordinary Heat, its bonus (units) included: no Seal coefficient.
  */
-export function ashfallWeight(amount: bigint, age: bigint, part: bigint, streak: bigint, a: bigint, b: bigint): bigint {
+export function ashfallWeight(amount: bigint, age: bigint, part: bigint, streak: bigint, a: bigint, b: bigint, bonus = 0n): bigint {
   let e = streak + MIN_STREAK;
   if (part < PART_CAP && a + (PART_CAP - part) > e) e = a + (PART_CAP - part);
   if (e < a) e = a;
-  return e < b ? amount * integrateSquaredHeat(age + (e - a), b - e, 0n) : 0n;
+  return e < b ? amount * integrateSquaredHeat(age + (e - a), b - e, bonus * BONUS_UNIT) : 0n;
 }
 export const DEPOSIT_FEE_PCT = BigInt(cfg.forge.fees.depositPct);
 export const WITHDRAW_FEE_PCT = BigInt(cfg.forge.fees.withdrawPct);
@@ -50,6 +53,8 @@ export type Status = 'pending' | 'executed' | 'cancelled' | 'lapsed' | 'emergenc
 export interface Ticket { id: number; amount: bigint; maturity: bigint; status: Status; poolApplied: boolean; slices: Map<number, Slice> }
 export interface Position {
   id: number; lots: Lot[]; lotCount: number; reserved: number; last: bigint; streakStart: bigint;
+  /** Ordinary bonus (Capstone + Pyre) in BONUS_UNITs, set by BOOST. */
+  bonus: bigint;
   S: bigint; W: bigint; paused: bigint; closed: boolean; ashfallForfeited: boolean;
   plan: { start: bigint; reference: bigint; requested: bigint } | null;
   tickets: Map<number, Ticket>; pending: number[]; nextTicket: number;
@@ -63,7 +68,7 @@ export interface Position {
   /** Ashfall weight (unrounded), accrued from lot participation and the Streak itself. */
   Q: bigint; epochQ: Map<bigint, bigint>;
 }
-export interface Rec { since: bigint; amount: bigint; age: bigint; part: bigint; seal: number; streak: bigint }
+export interface Rec { since: bigint; amount: bigint; age: bigint; part: bigint; seal: number; streak: bigint; bonus: bigint }
 const UINT96_MAX = (1n << 96n) - 1n;
 export interface Occ { time: bigint; cum: bigint; on: boolean }
 
@@ -147,8 +152,8 @@ export class ForgeModel {
       const seal = this.running(p);
       p.lots.forEach((lot, j) => {
         if (lot.amount === 0n) return;
-        const s = lot.amount * d, w = lot.amount * integrateHeat(lot.age, d, 0n);
-        const q = ashfallWeight(lot.amount, lot.age, lot.part, p.streakStart, a, b);
+        const s = lot.amount * d, w = lot.amount * integrateHeat(lot.age, d, p.bonus * BONUS_UNIT);
+        const q = ashfallWeight(lot.amount, lot.age, lot.part, p.streakStart, a, b, p.bonus);
         const sealed = seal !== undefined && has(seal.cohort, j);
         p.S += s; p.W += w; p.Q += q;
         if (sealed) { p.SS += s; p.SW += w; }
@@ -261,9 +266,9 @@ export class ForgeModel {
     const head = p.heads.get(j);
     if (head && head.since !== t) {
       if (!p.history.has(j)) p.history.set(j, []);
-      p.history.get(j)!.push({ ...head, streak: p.streakStart });
+      p.history.get(j)!.push({ ...head, streak: p.streakStart, bonus: p.bonus });
     }
-    p.heads.set(j, { since: t, amount: lot.amount, age: lot.age, part: lot.part, seal: this.tag(p, j), streak: 0n });
+    p.heads.set(j, { since: t, amount: lot.amount, age: lot.age, part: lot.part, seal: this.tag(p, j), streak: 0n, bonus: 0n });
   }
 
   // ── Seals (mirror of ForgePool's Seal transitions) ───────────────────────
@@ -326,13 +331,14 @@ export class ForgeModel {
       if (end <= t0 || r.amount === 0n) continue;
       const a = r.since > t0 ? r.since : t0, b = end < t1 ? end : t1;
       const age = min(r.age + (a - r.since), AGE_CAP);
-      let s = r.amount * (b - a), w = r.amount * integrateHeat(age, b - a, 0n);
+      const bonus = i < n ? r.bonus : p.bonus; // a head carries the position's current anchors
+      let s = r.amount * (b - a), w = r.amount * integrateHeat(age, b - a, bonus * BONUS_UNIT);
       out.s += s; out.w += w;
-      if (ashfall) out.q += ashfallWeight(r.amount, r.age + (a - r.since), r.part + (a - r.since), i < n ? r.streak : p.streakStart, a, b);
+      if (ashfall) out.q += ashfallWeight(r.amount, r.age + (a - r.since), r.part + (a - r.since), i < n ? r.streak : p.streakStart, a, b, bonus);
       if (r.seal === 0) continue;
       const tagEnd = sealEnd(p.seals[r.seal - 1]);
       if (tagEnd <= a) continue;
-      if (tagEnd < b) { s = r.amount * (tagEnd - a); w = r.amount * integrateHeat(age, tagEnd - a, 0n); }
+      if (tagEnd < b) { s = r.amount * (tagEnd - a); w = r.amount * integrateHeat(age, tagEnd - a, bonus * BONUS_UNIT); }
       out.ss += s; out.sw += w; out.seal = r.seal;
     }
     return out;
@@ -355,7 +361,7 @@ export class ForgeModel {
     this.poolSync(now);
     const p: Position = {
       id: this.positions.length + 1, lots: Array.from({ length: MAX_LOTS }, emptyLot), lotCount: 0, reserved: 0,
-      last: now, streakStart: now, S: 0n, W: 0n, paused: 0n, closed: false, ashfallForfeited: false,
+      last: now, streakStart: now, bonus: 0n, S: 0n, W: 0n, paused: 0n, closed: false, ashfallForfeited: false,
       plan: null, tickets: new Map(), pending: [], nextTicket: 1,
       epochS: new Map(), epochW: new Map(), historySlots: new Set(), openedAt: now, closedAt: 0n,
       heads: new Map(), history: new Map(),
@@ -368,7 +374,26 @@ export class ForgeModel {
   deposit(id: number, amount: bigint, now: bigint) {
     const p = this.touch(id, now);
     need(!p.closed, 'Closed');
-    this.addLot(p, amount, now);
+    const units = p.bonus;
+    const { active, frozen } = this.custody(p);
+    const net = this.addLot(p, amount, now);
+    // [P] A top-up dilutes the bonus by custody before/after until BOOST refreshes it.
+    if (units !== 0n) this.rebonus(p, units * (active + frozen) / (active + frozen + net));
+  }
+  /** BOOST sets the ordinary bonus (ForgePool.setOrdinaryBonus); a closed position keeps its own. */
+  setBonus(id: number, units: bigint, now: bigint) {
+    need(units <= MAX_BONUS_UNITS, 'BonusAboveCeiling');
+    const p = this.positions[id - 1];
+    need(p !== undefined, 'UnknownPosition');
+    if (p.closed) return;
+    this.touch(id, now);
+    this.rebonus(p, units);
+  }
+  /** Close every active segment at p.last, then change the bonus. */
+  private rebonus(p: Position, units: bigint) {
+    if (units === p.bonus) return;
+    p.lots.forEach((lot, j) => { if (lot.amount !== 0n) this.recordHead(p, j); });
+    p.bonus = units;
   }
   request(id: number, r: bigint, now: bigint): number {
     const p = this.touch(id, now);

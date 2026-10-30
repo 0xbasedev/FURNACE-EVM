@@ -4,14 +4,14 @@
 import { keccak_256 } from '@noble/hashes/sha3.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
 import { DAY, RAY } from '../canonical/accounting';
-import { ForgeModel, run, MAX_LOTS, MAX_PENDING, MIN_STAKE_LP, TIERS, WINDOW, HORIZON, SealStatus } from './forge-model';
+import { ForgeModel, run, MAX_LOTS, MAX_PENDING, MIN_STAKE_LP, TIERS, WINDOW, HORIZON, SealStatus, MAX_BONUS_UNITS } from './forge-model';
 
 export const T0 = 1_700_000_000n;
 export const FUND = 10n ** 30n;
 const E = 10n ** 18n;
 const HOUR = 3_600n;
 
-export enum Kind { Open, Deposit, Request, Execute, Cancel, Emergency, Poke, Collect, Seal }
+export enum Kind { Open, Deposit, Request, Execute, Cancel, Emergency, Poke, Collect, Seal, Boost }
 export interface Action { kind: Kind; time: bigint; pos: number; arg: bigint }
 
 interface Sim { model: ForgeModel; users: bigint[]; collector: bigint }
@@ -22,13 +22,13 @@ function words(s: Sim, positions: number, now: bigint): bigint[] {
   const out: bigint[] = [];
   for (let id = 1; id <= positions; id++) {
     const p = m.positions[id - 1];
-    if (!p) { out.push(...Array(25 + 5 * MAX_LOTS).fill(0n)); continue; }
+    if (!p) { out.push(...Array(26 + 5 * MAX_LOTS).fill(0n)); continue; }
     out.push(p.S, p.W, BigInt(p.lotCount), BigInt(p.reserved), BigInt(p.pending.length), p.paused, p.streakStart, p.last,
       p.closed ? 1n : 0n, p.ashfallForfeited ? 1n : 0n, p.plan?.start ?? 0n, p.plan?.reference ?? 0n, p.plan?.requested ?? 0n, BigInt(p.nextTicket - 1));
     const seal = p.seals[p.seals.length - 1];
     out.push(p.SS, p.SW, BigInt(p.seals.length), BigInt(seal?.track ?? 0), BigInt(seal?.status ?? SealStatus.None),
       seal?.start ?? 0n, seal?.pausedAt ?? 0n, seal?.pausedSeconds ?? 0n, seal?.endedAt ?? 0n, BigInt(seal?.cohort ?? 0));
-    out.push(p.Q / RAY); // Ashfall weight, accrued independently; the contract's comes from records
+    out.push(p.Q / RAY, p.bonus); // Ashfall weight, accrued independently; the contract's comes from records
     p.lots.forEach((l, j) => out.push(l.amount, l.age, l.part, BigInt(l.heldBy), BigInt(p.heads.get(j)?.seal ?? 0)));
     for (const tid of p.pending) {
       const t = p.tickets.get(tid)!;
@@ -64,6 +64,7 @@ function apply(s: Sim, a: Action): { sim: Sim; reverted: boolean } {
       case Kind.Poke: m.poke(a.pos, a.time); return;
       case Kind.Collect: return;
       case Kind.Seal: m.seal(a.pos, Number(a.arg), a.time); return;
+      case Kind.Boost: m.setBonus(a.pos, a.arg, a.time); return;
     }
   });
   if (r.reverted) return { sim: s, reverted: true };
@@ -81,20 +82,21 @@ interface Scenario { name: string; lp: boolean; positions: number; actions: Acti
 function record(sc: Scenario) {
   let sim: Sim = { model: new ForgeModel(sc.lp), users: Array(sc.positions).fill(FUND), collector: 0n };
   const flat: string[] = [], hash: string[] = [], probe: string[] = [];
-  let reverts = 0;
+  let reverts = 0, boosted = 0;
   sc.actions.forEach((a, i) => { if (i > 0 && a.time < sc.actions[i - 1].time) throw new Error(`${sc.name}: time runs backwards at step ${i}`); });
   for (const [i, a] of sc.actions.entries()) {
     let r: ReturnType<typeof apply>;
     try { r = apply(sim, a); } catch (e) { throw new Error(`${sc.name} step ${i} (${Kind[a.kind]} pos ${a.pos} arg ${a.arg} t ${a.time})`, { cause: e }); }
     sim = r.sim;
     if (r.reverted) reverts++;
+    if (sim.model.positions.some((p) => p.bonus > 0n && p.lots.some((l) => l.amount > 0n))) boosted++;
     flat.push(String(a.kind), String(a.time), String(a.pos), String(a.arg), r.reverted ? '1' : '0');
     hash.push(hashWords(words(sim, sc.positions, a.time)));
     const m = sim.model, p1 = m.positions[0];
     probe.push(...[p1?.S ?? 0n, p1?.W ?? 0n, m.active, m.frozen, m.occupiedAt(a.time), p1?.SS ?? 0n].map(String));
   }
   const ashfall = sim.model.positions.filter((p) => p.Q > 0n).length;
-  return { lp: sc.lp, positions: sc.positions, steps: sc.actions.length, reverts, ashfall, actions: flat, hash, probe };
+  return { lp: sc.lp, positions: sc.positions, steps: sc.actions.length, reverts, ashfall, boosted, actions: flat, hash, probe };
 }
 
 // ── scripted scenarios ───────────────────────────────────────────────────
@@ -249,6 +251,53 @@ scripted.push(
     A(Kind.Seal, at(44n, 1n), 2, 0n), // NothingToSeal
   ] },
 );
+// ── Ordinary bonus: Capstone + Pyre through BOOST (ADR 0008) ───────────────
+scripted.push(
+  { name: 'boostCycle', lp: true, positions: 2, actions: [
+    // Position 1 is boosted through pending, lapsed, cancelled and executed tickets; position 2
+    // is the unboosted control. Both reach Ashfall eligibility, and position 1 ends at the
+    // maximum bonus past the age cap (canonical heatSeconds ≤ 3.65·stakeSeconds).
+    A(Kind.Open, at(0n), 1, 1000n * E),
+    A(Kind.Open, at(0n), 2, 1000n * E),
+    A(Kind.Boost, at(1n), 1, 25_000n), // +0.25 from day 1
+    A(Kind.Boost, at(1n), 3, 1n), // UnknownPosition
+    A(Kind.Boost, at(2n), 1, MAX_BONUS_UNITS + 1n), // above the 0.65 ceiling
+    A(Kind.Request, at(10n), 1, 99n * E), // ticket 1: its slice is frozen, not rewritten
+    A(Kind.Boost, at(10n, 1n), 1, 40_000n), // a change with a ticket pending
+    A(Kind.Boost, at(10n, 1n), 1, 40_000n), // unchanged: no rewrite
+    A(Kind.Cancel, at(10n, 2n), 1, 1n), // the slice resumes under the new bonus
+    A(Kind.Request, at(20n), 1, 99n * E), // ticket 2: lapses at day 21 + 6h
+    A(Kind.Boost, at(40n), 1, 50_000n), // the sync resolves the lapse, back-dated, before the change
+    A(Kind.Request, at(50n), 1, 99n * E), // ticket 3: matures at day 50 + 6h
+    A(Kind.Boost, at(50n, 6n), 1, MAX_BONUS_UNITS), // the change and the Streak reset share an instant
+    A(Kind.Execute, at(50n, 6n), 1, 3n),
+    A(Kind.Poke, at(400n), 1),
+    A(Kind.Poke, at(400n), 2),
+    A(Kind.Emergency, at(401n), 1),
+    A(Kind.Boost, at(402n), 1, 10_000n), // closed: keeps its bonus, no revert
+    A(Kind.Poke, at(402n), 2),
+  ] },
+  { name: 'boostSealDeposit', lp: true, positions: 2, actions: [
+    // The bonus inside a Seal's sealed W, and top-ups diluting it by custody before/after.
+    A(Kind.Open, at(0n), 1, 1000n * E),
+    A(Kind.Seal, at(0n, 1n), 1, 1n), // 90-day track
+    A(Kind.Boost, at(5n), 1, 50_000n), // mid-Seal
+    A(Kind.Deposit, at(10n), 1, 3000n * E), // custody ×4: the bonus quarters
+    A(Kind.Deposit, at(10n), 1, 100n * E), // same instant: dilutes again, heads overwritten
+    A(Kind.Request, at(20n), 1, 100n * E), // a pending slice still counts as custody
+    A(Kind.Deposit, at(20n, 1n), 1, 500n * E),
+    A(Kind.Boost, at(30n), 1, 0n),
+    A(Kind.Deposit, at(31n), 1, 10n * E), // no bonus: no rewrite
+    A(Kind.Boost, at(60n), 1, 30_000n), // the segment clipped at the Seal's end carries a bonus
+    A(Kind.Poke, at(100n), 1), // the Seal completes, back-dated
+    A(Kind.Open, at(100n), 2, 10n * E),
+    A(Kind.Request, at(101n), 2, net(10n * E)), // 100%: position 2 empties
+    A(Kind.Execute, at(104n), 2, 1n),
+    A(Kind.Boost, at(104n, 1n), 2, 30_000n), // no active lot to rewrite
+    A(Kind.Deposit, at(105n), 2, 10n * E), // custody was 0: the bonus drops to 0
+    A(Kind.Poke, at(140n), 2),
+  ] },
+);
 // Capacity edges: 16 young lots may split (16 + 16 = 32); 17 cannot, but 100% always can.
 for (const n of [16, 17]) {
   const actions: Action[] = [A(Kind.Open, at(0n), 1, 100n * E)];
@@ -305,6 +354,7 @@ function randomScenario(name: string, seed: bigint, steps: number, lp: boolean):
         else if (r2 < 90) a = A(Kind.Cancel, now, pos, anyId);
         else if (r2 < 94) a = A(Kind.Collect, now, 0);
         else if (r2 < 95 && i > steps / 2) a = A(Kind.Emergency, now, pos);
+        else if (r2 >= 95 && r2 < 99) a = A(Kind.Boost, now, pos, rnd(20n) === 0n ? MAX_BONUS_UNITS + 1n : rnd(MAX_BONUS_UNITS + 1n));
         else a = A(Kind.Poke, now, pos);
       }
     }
@@ -328,6 +378,8 @@ export function forgeVectors() {
   for (const sc of all) scenarios[sc.name] = record(sc);
   // The Ashfall weight comparison must not be vacuous: most scenarios reach both 30-day minimums.
   if (Object.values(scenarios).filter((x) => x.ashfall > 0).length < 12) throw new Error('too few scenarios with an Ashfall weight');
+  // Nor the ordinary bonus: boosted active lots in the scripted Boost scenarios and most random ones.
+  if (Object.values(scenarios).filter((x) => x.boosted > 0).length < 6) throw new Error('too few scenarios with a boosted lot');
   return {
     maxPendingTickets: MAX_PENDING, maxLots: MAX_LOTS, tiers: TIERS.map((t) => [String(t.maxPct), String(t.seconds)]),
     fund: String(FUND), names: all.map((s) => s.name), scenarios,

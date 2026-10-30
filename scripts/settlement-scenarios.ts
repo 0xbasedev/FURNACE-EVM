@@ -4,7 +4,7 @@
 import { keccak_256 } from '@noble/hashes/sha3.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
 import { DAY, RAY } from '../canonical/accounting';
-import { Revert, MIN_STAKE_LP } from './forge-model';
+import { Revert, MIN_STAKE_LP, MAX_BONUS_UNITS } from './forge-model';
 import { SettlementModel, Phase } from './settlement-model';
 
 export const S0 = 1_800_000_000n; // Mantle START in the settlement tests
@@ -13,7 +13,7 @@ const HOUR = 3_600n;
 
 export enum K {
   Open, Deposit, Request, Execute, Cancel, Emergency, Poke, Finalize, OpenEpoch, Advance, RequestClaim, ExecuteClaim, Seal, SettleSeal,
-  Burn, BurnForfeits, TakeCapstone, TakeMatchReserve, TakeSealedPot,
+  Burn, BurnForfeits, TakeCapstone, TakeMatchReserve, TakeSealedPot, Boost,
 }
 export interface Act { kind: K; time: bigint; pool: number; pos: number; arg: bigint }
 
@@ -81,6 +81,7 @@ function apply(m: SettlementModel, a: Act): { model: SettlementModel; reverted: 
       case K.TakeCapstone: x.takeCapstone(a.pool, a.pos); break;
       case K.TakeMatchReserve: x.takeMatchReserve(); break;
       case K.TakeSealedPot: x.takeSealedPot(a.pool); break;
+      case K.Boost: pool.setBonus(a.pos, a.arg, a.time); break;
     }
     return { model: x, reverted: false };
   } catch (e) {
@@ -295,6 +296,28 @@ scripted.push(
   );
   scripted.push({ name: 'ashfallHeatSquared', positions: 3, actions: acts });
 }
+{ // Ordinary bonus (ADR 0008). Positions 1 and 2 stake the same; position 1 is boosted to the
+  // 0.65 maximum from 6h into epoch 0, so its Heat share is larger. Position 3 is sealed and
+  // boosted: its candidate C (sealed W × Seal bonus) carries the ordinary bonus too. A top-up
+  // on day 1 halves position 1's bonus (custody doubles) until BOOST refreshes it on day 2.
+  const acts: Act[] = [
+    A(K.Open, at(0n), 0, 1, 1000n * E),
+    A(K.Open, at(0n), 0, 2, 1000n * E),
+    A(K.Open, at(0n), 0, 3, 1000n * E),
+    A(K.Seal, at(0n), 0, 3, 3n),
+    A(K.Boost, at(0n, 6n), 0, 1, MAX_BONUS_UNITS),
+    A(K.Boost, at(0n, 6n), 0, 3, 30_000n),
+    ...settle(at(1n, 1n), 0, 4, [0]),
+    A(K.Deposit, at(1n, 2n), 0, 1, 1000n * E),
+    A(K.Boost, at(1n, 3n), 0, 2, MAX_BONUS_UNITS + 1n), // above the ceiling
+    A(K.Boost, at(2n, 1n), 0, 1, MAX_BONUS_UNITS),
+    ...settle(at(2n, 1n), 1, 4, [0]),
+    ...settle(at(3n, 1n), 2, 4, [0]),
+    A(K.RequestClaim, at(3n, 2n), 0, 1),
+    A(K.ExecuteClaim, at(4n, 2n), 0, 1),
+  ];
+  scripted.push({ name: 'boostedHeat', positions: 3, actions: acts });
+}
 { // Due lapses cost page budget (LAPSE_UNITS each): three positions with two lapses due
   // when the page runs; the second cannot fit after the first, so it waits for page two.
   const acts: Act[] = [];
@@ -375,6 +398,7 @@ function randomScenario(name: string, seed: bigint, steps: number): Scenario {
       } else if (r2 < 82 && live.length) a = A(K.Cancel, now, i, pos, BigInt(live[0].id));
       else if (r2 < 83) a = A(K.Emergency, now, i, pos);
       else if (r2 < 93) a = A(K.Seal, now, i, pos, rnd(4n));
+      else if (r2 < 97) a = A(K.Boost, now, i, pos, rnd(MAX_BONUS_UNITS + 2n)); // the top value reverts
       else a = A(K.Poke, now, i, pos);
     }
     acts.push(a);
