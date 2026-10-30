@@ -95,7 +95,14 @@ c('uint256', 'HEAT_START_RAY', ray(String(f.heat.startMultiplier)));
 c('uint256', 'HEAT_RAMP_BONUS_RAY', ray(String(f.heat.rampBonus)));
 c('uint256', 'HEAT_AGE_CAP', `${f.heat.rampDays} days`);
 c('uint256', 'HEAT_CORE_CAP_RAY', ray(String(f.heat.startMultiplier)) + ray(String(f.heat.rampBonus)) + milestones.reduce((n, m) => n + ray(String(m.heatBump)), 0n));
+// The ordinary bonus ceiling is Capstone's maximum plus Pyre's (canonical integrateHeat checks 0.65).
+if (ray(String(f.capstone.maxBonus)) + ray(String(f.pyre.maxBoost)) !== ray('0.65')) throw new Error('Capstone + Pyre maximum must equal the 0.65 ordinary bonus ceiling');
 c('uint256', 'MAX_ORDINARY_BONUS_RAY', ray('0.65'), 'Capstone 0.5 + Pyre 0.15');
+// [P] ForgePool stores a position's ordinary bonus as uint16 units of 1e-5 (ADR 0008).
+const BONUS_UNIT = 10n ** 22n;
+if (ray('0.65') % BONUS_UNIT !== 0n || ray('0.65') / BONUS_UNIT > 65535n) throw new Error('ordinary bonus ceiling must be a whole number of uint16 units');
+c('uint256', 'ORDINARY_BONUS_UNIT_RAY', BONUS_UNIT, '[P] 0.00001');
+c('uint256', 'MAX_ORDINARY_BONUS_UNITS', ray('0.65') / BONUS_UNIT);
 c('uint256', 'MAX_LOTS_PER_POSITION', f.heat.maxLotsPerPosition);
 c('uint256', 'MILESTONE_COUNT', milestones.length);
 milestones.forEach((m, i) => {
@@ -148,6 +155,8 @@ wd.tiers.forEach((t, i) => {
 });
 c('uint256', 'WITHDRAW_EXECUTION_WINDOW', wd.executionWindowSeconds);
 c('uint256', 'COOLING_PLAN_HORIZON', ex.planHorizonSeconds);
+// Records store participation (saturating at this minimum) as uint24.
+if (BigInt(cfg.execution.ashfall.minimumParticipationDays) * DAY >= 1n << 24n) throw new Error('Ashfall participation minimum must fit uint24 records');
 c('uint256', 'ASHFALL_MIN_PARTICIPATION', `${cfg.execution.ashfall.minimumParticipationDays} days`, 'actual participation, stored saturating here');
 // Ashfall eligibility (spec §8, §12): a lot's actual participation AND its position's active Streak
 // must both reach their minimums; the Streak minimum is the `minRelic` Relic's days. Weight is stake × Heat².

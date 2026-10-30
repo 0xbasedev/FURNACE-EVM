@@ -36,6 +36,8 @@ library FurnaceParams {
     uint256 internal constant HEAT_AGE_CAP = 365 days;
     uint256 internal constant HEAT_CORE_CAP_RAY = 3000000000000000000000000000;
     uint256 internal constant MAX_ORDINARY_BONUS_RAY = 650000000000000000000000000; // Capstone 0.5 + Pyre 0.15
+    uint256 internal constant ORDINARY_BONUS_UNIT_RAY = 10000000000000000000000; // [P] 0.00001
+    uint256 internal constant MAX_ORDINARY_BONUS_UNITS = 65000;
     uint256 internal constant MAX_LOTS_PER_POSITION = 32;
     uint256 internal constant MILESTONE_COUNT = 5;
     uint256 internal constant MILESTONE_0_SECONDS = 7 days; // spark

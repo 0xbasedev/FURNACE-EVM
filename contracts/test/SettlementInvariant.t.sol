@@ -144,6 +144,13 @@ contract SettlementHandler is Test {
         try pool.seal(id, track % 4) {} catch {}
     }
 
+    /// BOOST sets an ordinary bonus (ADR 0008); the ceiling's neighbour reverts.
+    function boost(uint256 seed, uint256 units) external {
+        (ForgePool pool,, uint256 id,) = _pick(seed);
+        vm.prank(pool.BOOST());
+        try pool.setOrdinaryBonus(id, bound(units, 0, 65_001)) {} catch {}
+    }
+
     /// Settle any position's latest Seal; reverts (not ended, nothing locked) are expected.
     function settleSeal(uint256 seed) external {
         (ForgePool pool, uint256 poolIdx, uint256 id,) = _pick(seed);
