@@ -148,6 +148,12 @@ Taps, source-lot additions (Casting, Stoke into LP) and Kindling's additions mus
   - rewards travelling to the buyer;
   - Boost's lock, and the buyer's fresh allowance and plan in the sale's own second.
   - Boost's invariant handler now sells positions, so its invariants also hold across owner changes.
+- **`pnpm check`:** 212/212 Solidity tests, the size gate and generation freshness.
+- **Mutations:** 34 planted bugs on the Deed paths. **All 34 are caught.** They cover:
+  - settlement: the anchors changed before the rewrite; no nonce check; no parity check; a 100% carry; the bonus, the Streak, the plan or the phantom terms kept; the log recording the buyer or nothing; the listing not spent; no caller check;
+  - listing: no lock; emergency exit blocked; an exit that leaves the listing; listing with cooling pending, while closed, without a sync, for any seller, or by any caller; unlisting by anyone;
+  - decoding: wrong offsets for the listing, the sale count, `founder`, `headStart` and the brief's listing; a wrong log slot; `ownedSince` without the opening;
+  - the locks elsewhere: a Claim while listed; a Capstone deposit or withdrawal request while listed; Boost without the ownership reset, or resetting only the plan or only the allowance.
 
 ## Consequences
 
