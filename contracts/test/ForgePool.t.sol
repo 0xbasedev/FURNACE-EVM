@@ -876,6 +876,27 @@ contract ForgePoolTest is ForgeFixture {
         pool.requestTap(id, 1e18);
     }
 
+    /// The lower edges of Eternal (its 25% share) and Bedrock (its 60-day window), to the second.
+    function test_tapTierEdges() public {
+        vm.startPrank(alice);
+        uint256 id = pool.open(1000e18); // 990 active
+        uint256 start = pool.positionOf(id).streakStart;
+        vm.warp(start + P.TAP_TIER_1_STREAK - 1); // still Blaze: 10%
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.TapQuotaExceeded.selector, 99e18 + 1, 99e18));
+        pool.requestTap(id, 99e18 + 1);
+        skip(1); // Eternal: 25%
+        pool.cancelCooling(id, pool.requestTap(id, 247.5e18));
+        uint256 last = start + P.TAP_TIER_2_STREAK - P.TAP_TIER_2_EVERY - 1;
+        vm.warp(last);
+        pool.cancelCooling(id, pool.requestTap(id, 1e18));
+        vm.warp(last + P.TAP_TIER_2_EVERY); // a second before Bedrock: Eternal's 90-day window
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.TapTooSoon.selector, last + P.TAP_TIER_1_EVERY));
+        pool.requestTap(id, 1e18);
+        skip(1); // Bedrock: 60 days have passed
+        pool.requestTap(id, 1e18);
+        vm.stopPrank();
+    }
+
     function test_tapExecutesWithoutHaircutOrStreakReset() public {
         vm.prank(alice);
         uint256 id = pool.open(1000e18);

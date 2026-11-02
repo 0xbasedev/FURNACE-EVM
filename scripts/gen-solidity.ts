@@ -295,7 +295,7 @@ section('Taps: Relic-gated, Streak-preserving withdrawals (spec v5.5 §9)');
 // timer, and forfeits a running Seal. The position's Streak picks the highest Relic tier with a Tap.
 if (f.heat.tapDrawdownMode !== 'youngestFirst') throw new Error(`ForgePool draws Taps youngest-first, config has ${f.heat.tapDrawdownMode}`);
 const tapTiers = f.relics.filter((r) => r.perks.tap).map((r) => ({ key: r.key, days: r.days, ...r.perks.tap! }));
-if (tapTiers.length !== 3) throw new Error('ForgePool._tapTier unrolls exactly 3 Tap tiers');
+if (tapTiers.length !== 3) throw new Error('ForgePool._chargeTap unrolls exactly 3 Tap tiers');
 tapTiers.forEach((t, i) => {
   if (i > 0 && !(t.days > tapTiers[i - 1].days)) throw new Error('Tap tiers must ascend by Streak days');
   if (!(t.maxPct > 0 && t.maxPct <= 100 && Number.isInteger(t.maxPct))) throw new Error(`${t.key}: Tap share must be a whole percent in (0, 100]`);
