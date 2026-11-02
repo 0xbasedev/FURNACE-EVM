@@ -68,8 +68,16 @@ contract ForgePoolDifferentialTest is ForgeFixture {
         Poke,
         Collect,
         Seal,
-        Boost
+        Boost,
+        List,
+        Unlist,
+        Settle
     }
+
+    /// @dev Wallets beyond the openers, which only buy Deeds (scripts/forge-scenarios.ts BUYERS).
+    uint256 constant BUYERS = 2;
+    /// @dev The listing the market recorded at each position's last successful List.
+    mapping(uint256 pos => uint32) market;
 
     function setUp() public {
         _loadForgeVectors();
@@ -99,10 +107,20 @@ contract ForgePoolDifferentialTest is ForgeFixture {
     function test_scenario_random3() public { _replay("random3"); }
     function test_scenario_random4() public { _replay("random4"); }
     function test_scenario_random5() public { _replay("random5"); }
+    function test_scenario_deedCycle() public { _replay("deedCycle"); }
+    function test_scenario_deedExitEnds() public { _replay("deedExitEnds"); }
+    function test_scenario_deedRelist() public { _replay("deedRelist"); }
+    function test_scenario_deedLapseThenList() public { _replay("deedLapseThenList"); }
+    function test_scenario_deedSealTravels() public { _replay("deedSealTravels"); }
+    function test_scenario_deedPlanReset() public { _replay("deedPlanReset"); }
+    function test_scenario_deeds0() public { _replay("deeds0"); }
+    function test_scenario_deeds1() public { _replay("deeds1"); }
+    function test_scenario_deeds2() public { _replay("deeds2"); }
+    function test_scenario_deeds3() public { _replay("deeds3"); }
 
     /// Every generated scenario has a test above; a new one fails this until added.
     function test_everyScenarioIsReplayed() public view {
-        assertEq(vm.parseJsonStringArray(forgeJson, ".names").length, 24, "add a test_scenario_* for each new scenario");
+        assertEq(vm.parseJsonStringArray(forgeJson, ".names").length, 34, "add a test_scenario_* for each new scenario");
     }
 
     function test_provisionalConstantsMatchModel() public {
@@ -121,15 +139,17 @@ contract ForgePoolDifferentialTest is ForgeFixture {
         assertEq(a.length, hashes.length * 5, "layout");
 
         _deploy(lp);
-        for (uint256 k = 1; k <= positions; ++k) _fund(_user(k));
+        for (uint256 k = 1; k <= positions + BUYERS; ++k) _fund(_user(k));
 
         for (uint256 i; i < hashes.length; ++i) {
             (Kind kind, uint256 time, uint256 pos, uint256 arg, bool reverts) =
                 (Kind(a[5 * i]), a[5 * i + 1], a[5 * i + 2], a[5 * i + 3], a[5 * i + 4] == 1);
             vm.warp(time);
             string memory where = string.concat(name, " step ", vm.toString(i));
+            // The owner acts for its position; read before expectRevert claims the next call.
+            address actor = kind == Kind.Open ? _user(pos) : pool.ownerOf(pos);
             if (reverts) vm.expectRevert();
-            _act(kind, pos, arg);
+            _act(kind, pos, arg, actor, reverts);
 
             _probe(probe, i, time, where);
             assertEq(this.snapshot(positions), hashes[i], string.concat(where, ": state hash"));
@@ -146,7 +166,23 @@ contract ForgePoolDifferentialTest is ForgeFixture {
         assertEq(ss1, probe[6 * i + 5], string.concat(where, ": sealed S(1)"));
     }
 
-    function _act(Kind kind, uint256 pos, uint256 arg) internal {
+    function _act(Kind kind, uint256 pos, uint256 arg, address actor, bool reverts) internal {
+        if (kind == Kind.List) {
+            vm.prank(deeds);
+            if (reverts) pool.list(pos, _user(arg));
+            else market[pos] = pool.list(pos, _user(arg));
+            return;
+        }
+        if (kind == Kind.Settle) {
+            vm.prank(deeds);
+            pool.settle(pos, _user(arg), market[pos]);
+            return;
+        }
+        if (kind == Kind.Unlist) {
+            vm.prank(arg == 1 ? deeds : actor);
+            pool.unlist(pos);
+            return;
+        }
         if (kind == Kind.Collect) {
             vm.prank(collector);
             pool.collectFees();
@@ -157,7 +193,7 @@ contract ForgePoolDifferentialTest is ForgeFixture {
             pool.setOrdinaryBonus(pos, arg);
             return;
         }
-        vm.prank(_user(pos));
+        vm.prank(actor);
         if (kind == Kind.Open) assertEq(pool.open(arg), pos, "position id");
         else if (kind == Kind.Deposit) pool.deposit(pos, arg);
         else if (kind == Kind.Request) pool.requestCooling(pos, arg);
@@ -180,6 +216,7 @@ contract ForgePoolDifferentialTest is ForgeFixture {
             n = _pushSeal(w, n, id, m[2], m[3]);
             w[n++] = m[4]; // Ashfall weight from records; the model accrues it independently
             w[n++] = pool.positionOf(id).ordinaryBonus;
+            n = _pushOwnership(w, n, id);
             for (uint256 j; j < 32; ++j) {
                 n = _pushLot(w, n, id, j);
             }
@@ -200,7 +237,7 @@ contract ForgePoolDifferentialTest is ForgeFixture {
             token.balanceOf(collector)
         ];
         for (uint256 k; k < 11; ++k) w[n++] = tail[k];
-        for (uint256 id = 1; id <= positions; ++id) w[n++] = token.balanceOf(_user(id));
+        for (uint256 k = 1; k <= positions + BUYERS; ++k) w[n++] = token.balanceOf(_user(k));
         assembly ("memory-safe") {
             mstore(w, n)
         }
@@ -219,6 +256,20 @@ contract ForgePoolDifferentialTest is ForgeFixture {
         w[n++] = p.plan.requested;
         w[n++] = p.nextTicketId;
         return n;
+    }
+
+    /// @dev Owner wallet, listing, sales, tenure start and the latest previous owner (ADR 0011).
+    function _pushOwnership(uint256[] memory w, uint256 n, uint256 id) internal view returns (uint256) {
+        ForgePool.Position memory p = pool.positionOf(id);
+        n = _put4(w, n, _wallet(p.owner), p.listing, p.transfers, pool.ownedSince(id));
+        ForgePool.Ownership memory prev;
+        if (p.transfers != 0) prev = pool.ownershipAt(id, p.transfers - 1);
+        (w[n], w[n + 1]) = (_wallet(prev.owner), prev.until);
+        return n + 2;
+    }
+
+    function _wallet(address who) internal pure returns (uint256) {
+        return who == address(0) ? 0 : uint160(who) - 0x1000;
     }
 
     function _pushLot(uint256[] memory w, uint256 n, uint256 id, uint256 j) internal view returns (uint256) {

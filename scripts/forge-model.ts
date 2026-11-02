@@ -6,7 +6,7 @@
 // ADR 0004 are this repo's provisional readings: matching this model proves the
 // Solidity port is internally consistent, NOT that a [P] rule is canonical.
 import cfg from '../canonical/furnace.config';
-import { AGE_CAP, DAY, RAY, integrateHeat, integrateSquaredHeat, cooledAge, parseUnits, ray } from '../canonical/accounting';
+import { AGE_CAP, DAY, RAY, integrateHeat, integrateSquaredHeat, cooledAge, deedAge, parseUnits, ray } from '../canonical/accounting';
 
 export const MAX_LOTS = cfg.forge.heat.maxLotsPerPosition;
 export const MAX_PENDING = 8; // [P] not in the canonical config
@@ -67,6 +67,9 @@ export interface Position {
   seals: SealM[]; SS: bigint; SW: bigint; epochSS: Map<bigint, bigint>; epochSW: Map<bigint, bigint>;
   /** Ashfall weight (unrounded), accrued from lot participation and the Streak itself. */
   Q: bigint; epochQ: Map<bigint, bigint>;
+  /** Deeds (ADR 0011): the owner wallet, the listing nonce (odd while listed) and each
+   *  previous owner with the end of its tenure. */
+  owner: number; listing: number; owners: { owner: number; until: bigint }[];
 }
 export interface Rec { since: bigint; amount: bigint; age: bigint; part: bigint; seal: number; streak: bigint; bonus: bigint }
 const UINT96_MAX = (1n << 96n) - 1n;
@@ -244,6 +247,12 @@ export class ForgeModel {
     this.sync(p, now);
     return p;
   }
+  /** The owner's mutations: a listing locks them (ForgePool._touchOwned). */
+  private touchOwned(id: number, now: bigint): Position {
+    const p = this.touch(id, now);
+    need(p.listing % 2 === 0, 'Listed');
+    return p;
+  }
   private addLot(p: Position, amount: bigint, now: bigint): bigint {
     const fee = amount * DEPOSIT_FEE_PCT / 100n;
     const net = amount - fee;
@@ -357,7 +366,7 @@ export class ForgeModel {
   }
 
   // ── actions (each reverts atomically via run()) ────────────────────────
-  open(amount: bigint, now: bigint): number {
+  open(amount: bigint, now: bigint, owner = this.positions.length + 1): number {
     this.poolSync(now);
     const p: Position = {
       id: this.positions.length + 1, lots: Array.from({ length: MAX_LOTS }, emptyLot), lotCount: 0, reserved: 0,
@@ -366,13 +375,14 @@ export class ForgeModel {
       epochS: new Map(), epochW: new Map(), historySlots: new Set(), openedAt: now, closedAt: 0n,
       heads: new Map(), history: new Map(),
       seals: [], SS: 0n, SW: 0n, epochSS: new Map(), epochSW: new Map(), Q: 0n, epochQ: new Map(),
+      owner, listing: 0, owners: [],
     };
     this.positions.push(p);
     this.addLot(p, amount, now);
     return p.id;
   }
   deposit(id: number, amount: bigint, now: bigint) {
-    const p = this.touch(id, now);
+    const p = this.touchOwned(id, now);
     need(!p.closed, 'Closed');
     const units = p.bonus;
     const { active, frozen } = this.custody(p);
@@ -396,7 +406,7 @@ export class ForgeModel {
     p.bonus = units;
   }
   request(id: number, r: bigint, now: bigint): number {
-    const p = this.touch(id, now);
+    const p = this.touchOwned(id, now);
     need(!p.closed, 'Closed');
     need(r > 0n, 'ZeroAmount');
     const { active } = this.custody(p);
@@ -436,7 +446,7 @@ export class ForgeModel {
     return t.id;
   }
   execute(id: number, ticketId: number, now: bigint): bigint {
-    const p = this.touch(id, now);
+    const p = this.touchOwned(id, now);
     const t = p.tickets.get(ticketId);
     need(t !== undefined && t.status === 'pending', 'NotPending');
     need(now >= t!.maturity, 'NotMatured');
@@ -462,7 +472,7 @@ export class ForgeModel {
     return w - fee;
   }
   cancel(id: number, ticketId: number, now: bigint) {
-    const p = this.touch(id, now);
+    const p = this.touchOwned(id, now);
     const t = p.tickets.get(ticketId);
     need(t !== undefined && t.status === 'pending', 'NotPending');
     this.resume(p, t!, 'cancelled', now);
@@ -477,6 +487,7 @@ export class ForgeModel {
     this.endSeal(p, SealStatus.Forfeited, now);
     p.lots = Array.from({ length: MAX_LOTS }, emptyLot);
     p.lotCount = 0; p.reserved = 0; p.closed = true; p.ashfallForfeited = true; p.closedAt = now;
+    if (p.listing % 2 === 1) p.listing++; // a listing never blocks this exit; it ends
     const fee = total * EMERGENCY_FEE_PCT / 100n;
     this.fees.emergency += fee;
     this.frozen -= frozen;
@@ -485,8 +496,41 @@ export class ForgeModel {
     return total - fee;
   }
   poke(id: number, now: bigint) { this.touch(id, now); }
-  seal(id: number, track: number, now: bigint): number {
+  // ── Deeds (ADR 0011; mirror of ForgePool.list / unlist / settle) ─────────
+  /** DEEDS lists for `seller`, the owner of an open position with nothing pending. */
+  list(id: number, seller: number, now: bigint): number {
     const p = this.touch(id, now);
+    need(p.owner === seller, 'NotOwner');
+    need(!p.closed, 'Closed');
+    need(p.pending.length === 0, 'CoolingPending');
+    need(p.listing % 2 === 0, 'Listed');
+    return ++p.listing;
+  }
+  /** DEEDS or the owner ends a listing. No sync. */
+  unlist(id: number, caller: number | 'deeds') {
+    const p = this.positions[id - 1];
+    need(caller === 'deeds' || p?.owner === caller, 'NotOwner');
+    need((p?.listing ?? 0) % 2 === 1, 'NotListed');
+    p.listing++;
+  }
+  /** DEEDS completes the sale of `listing`: the seller's segments close at now, the buyer's
+   *  lots carry the canonical deedAge of their capped age with a new Streak, a zero bonus and
+   *  no cooling plan. */
+  settle(id: number, buyer: number, listing: number, now: bigint) {
+    const p = this.touch(id, now);
+    need(listing % 2 === 1 && p.listing === listing, 'NotListed');
+    p.owners.push({ owner: p.owner, until: now });
+    p.lots.forEach((lot, j) => {
+      if (lot.amount === 0n) return;
+      lot.age = deedAge(lot.age);
+      this.recordHead(p, j);
+    });
+    p.owner = buyer; p.streakStart = now; p.bonus = 0n; p.plan = null;
+    p.listing++;
+  }
+  ownedSince(p: Position): bigint { return p.owners.length ? p.owners[p.owners.length - 1].until : p.openedAt; }
+  seal(id: number, track: number, now: bigint): number {
+    const p = this.touchOwned(id, now);
     need(!p.closed, 'Closed');
     need(track >= 0 && track < SEAL_TRACKS.length, 'UnknownTrack');
     need(p.pending.length === 0, 'CoolingPending');
