@@ -2,6 +2,7 @@
 pragma solidity 0.8.28;
 
 import {ForgePool} from "./ForgePool.sol";
+import {ForgePoolBase} from "./ForgePoolBase.sol";
 import {ForgeView} from "./ForgeView.sol";
 import {Lot, Record, Seal} from "./ForgeMeasures.sol";
 
@@ -12,7 +13,7 @@ import {Lot, Record, Seal} from "./ForgeMeasures.sol";
 contract ForgeLens {
     using ForgeView for ForgePool;
 
-    function positionOf(ForgePool pool, uint256 id) external view returns (ForgePool.Position memory) {
+    function positionOf(ForgePool pool, uint256 id) external view returns (ForgePoolBase.Position memory) {
         return pool.positionOf(id);
     }
 
@@ -52,14 +53,14 @@ contract ForgeLens {
         return pool.pendingTickets(id);
     }
 
-    function ticketOf(ForgePool pool, uint256 id, uint32 ticketId) external view returns (ForgePool.Ticket memory) {
+    function ticketOf(ForgePool pool, uint256 id, uint32 ticketId) external view returns (ForgePoolBase.Ticket memory) {
         return pool.ticketOf(id, ticketId);
     }
 
     function sliceOf(ForgePool pool, uint256 id, uint32 ticketId, uint256 slot)
         external
         view
-        returns (ForgePool.Slice memory)
+        returns (ForgePoolBase.Slice memory)
     {
         return pool.sliceOf(id, ticketId, slot);
     }
@@ -72,7 +73,7 @@ contract ForgeLens {
         return pool.occupancyLength();
     }
 
-    function occupancyAt(ForgePool pool, uint256 i) external view returns (ForgePool.Occupancy memory) {
+    function occupancyAt(ForgePool pool, uint256 i) external view returns (ForgePoolBase.Occupancy memory) {
         return pool.occupancyAt(i);
     }
 
@@ -84,7 +85,7 @@ contract ForgeLens {
         return pool.listingOf(id);
     }
 
-    function ownershipAt(ForgePool pool, uint256 id, uint256 n) external view returns (ForgePool.Ownership memory) {
+    function ownershipAt(ForgePool pool, uint256 id, uint256 n) external view returns (ForgePoolBase.Ownership memory) {
         return pool.ownershipAt(id, n);
     }
 

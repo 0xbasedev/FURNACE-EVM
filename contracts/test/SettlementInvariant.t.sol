@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Mantle} from "../src/Mantle.sol";
 import {ForgePool} from "../src/forge/ForgePool.sol";
+import {ForgePoolBase} from "../src/forge/ForgePoolBase.sol";
 import {ForgeView} from "../src/forge/ForgeView.sol";
 import {ForgeEmissions} from "../src/forge/ForgeEmissions.sol";
 import {SettlementFixture} from "./ForgeEmissions.t.sol";
@@ -316,13 +317,13 @@ contract SettlementInvariantTest is SettlementFixture {
     function invariant_exitsIndependentOfSettlement() public {
         for (uint256 k; k < handler.ownedCount(); k += 3) {
             (uint256 i, uint256 id) = handler.ownedAt(k);
-            ForgePool.Position memory p = pools[i].positionOf(id);
+            ForgePoolBase.Position memory p = pools[i].positionOf(id);
             if (p.closedAt != 0) continue;
             uint256 snap = vm.snapshotState();
             vm.prank(p.owner);
             try pools[i].emergencyExit(id) {}
             catch (bytes memory err) {
-                if (bytes4(err) != ForgePool.NothingToExit.selector) revert("emergency exit reverted");
+                if (bytes4(err) != ForgePoolBase.NothingToExit.selector) revert("emergency exit reverted");
             }
             vm.revertToState(snap);
         }

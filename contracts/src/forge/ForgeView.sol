@@ -4,6 +4,7 @@ pragma solidity 0.8.28;
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {FurnaceParams as P} from "../generated/FurnaceParams.sol";
 import {ForgePool} from "./ForgePool.sol";
+import {ForgePoolBase} from "./ForgePoolBase.sol";
 import {Lot, Record, Seal, SealStatus} from "./ForgeMeasures.sol";
 
 /// @title ForgeView
@@ -52,7 +53,7 @@ library ForgeView {
 
     // ── positions ─────────────────────────────────────────────────────────
 
-    function positionOf(ForgePool pool, uint256 id) internal view returns (ForgePool.Position memory p) {
+    function positionOf(ForgePool pool, uint256 id) internal view returns (ForgePoolBase.Position memory p) {
         bytes32[] memory w = _readN(pool, _map(id, POSITIONS_SLOT), 5);
         (uint256 w0, uint256 w1, uint256 w2, uint256 w3, uint256 w4) =
             (uint256(w[0]), uint256(w[1]), uint256(w[2]), uint256(w[3]), uint256(w[4]));
@@ -75,7 +76,7 @@ library ForgeView {
         p.founder = _bits(w2, 10, 1) != 0;
         p.headStartActive = _bits(w2, 11, 1) != 0;
         p.headStart = uint32(_bits(w2, 12, 4));
-        p.plan = ForgePool.Plan(uint40(_bits(w3, 0, 5)), uint128(_bits(w3, 5, 16)), uint128(_bits(w4, 0, 16)));
+        p.plan = ForgePoolBase.Plan(uint40(_bits(w3, 0, 5)), uint128(_bits(w3, 5, 16)), uint128(_bits(w4, 0, 16)));
     }
 
     /// @notice What Boost checks on every action, from the first three position words: the
@@ -97,7 +98,7 @@ library ForgeView {
     }
 
     /// @notice The `n`th previous owner and the end of its tenure (n < transfers).
-    function ownershipAt(ForgePool pool, uint256 id, uint256 n) internal view returns (ForgePool.Ownership memory o) {
+    function ownershipAt(ForgePool pool, uint256 id, uint256 n) internal view returns (ForgePoolBase.Ownership memory o) {
         uint256 w = _read(pool, _map(n, _map(id, OWNERS_SLOT)));
         (o.owner, o.until) = (address(uint160(w)), uint40(_bits(w, 20, 5)));
     }
@@ -157,7 +158,7 @@ library ForgeView {
         view
         returns (uint256 amount, uint256 age, uint256 participated, uint256 heldBy)
     {
-        ForgePool.Position memory p = positionOf(pool, id);
+        ForgePoolBase.Position memory p = positionOf(pool, id);
         if (p.closedAt != 0) return (0, 0, 0, 0);
         Lot memory l = lotOf(pool, id, slot);
         (amount, age, participated, heldBy) = (l.amount, l.age, l.participated, l.heldBy);
@@ -223,11 +224,11 @@ library ForgeView {
         (, ids) = _maskAndPending(pool, id);
     }
 
-    function ticketOf(ForgePool pool, uint256 id, uint32 ticketId) internal view returns (ForgePool.Ticket memory t) {
+    function ticketOf(ForgePool pool, uint256 id, uint32 ticketId) internal view returns (ForgePoolBase.Ticket memory t) {
         uint256 w = _read(pool, _map(ticketId, _map(id, TICKETS_SLOT)));
         t.amount = uint128(_bits(w, 0, 16));
         t.maturity = uint40(_bits(w, 16, 5));
-        t.status = ForgePool.Status(_bits(w, 21, 1));
+        t.status = ForgePoolBase.Status(_bits(w, 21, 1));
         t.poolApplied = _bits(w, 22, 1) != 0;
         t.sliceMask = uint32(_bits(w, 23, 4));
     }
@@ -235,7 +236,7 @@ library ForgeView {
     function sliceOf(ForgePool pool, uint256 id, uint32 ticketId, uint256 slot)
         internal
         view
-        returns (ForgePool.Slice memory s)
+        returns (ForgePoolBase.Slice memory s)
     {
         uint256 w = _read(pool, _map(slot, _map(ticketId, _map(id, SLICES_SLOT))));
         (s.amount, s.age, s.participated) = (uint128(_bits(w, 0, 16)), uint32(_bits(w, 16, 4)), uint32(_bits(w, 20, 4)));
@@ -260,7 +261,7 @@ library ForgeView {
         return _read(pool, OCCUPANCY_SLOT);
     }
 
-    function occupancyAt(ForgePool pool, uint256 i) internal view returns (ForgePool.Occupancy memory o) {
+    function occupancyAt(ForgePool pool, uint256 i) internal view returns (ForgePoolBase.Occupancy memory o) {
         uint256 w = _read(pool, uint256(keccak256(abi.encode(OCCUPANCY_SLOT))) + i);
         (o.time, o.cumulative, o.on) = (uint40(_bits(w, 0, 5)), uint64(_bits(w, 5, 8)), _bits(w, 13, 1) != 0);
     }

@@ -20,9 +20,10 @@
     "sim:dev": "pnpm --filter @furnace/forge-sim dev",
     "sim:build": "pnpm --filter @furnace/forge-sim build",
     "sim:test": "pnpm --filter @furnace/forge-sim typecheck && pnpm --filter @furnace/forge-sim test",
-    "check": "pnpm typecheck && pnpm canonical:sums && pnpm config:verify-hash && pnpm verify:create3 && pnpm gen:check && pnpm sim:test && pnpm sim:build && pnpm forge:gate && pnpm forge:sizes && pnpm test:sol",
+    "check": "pnpm typecheck && pnpm canonical:sums && pnpm config:verify-hash && pnpm verify:create3 && pnpm gen:check && pnpm sim:test && pnpm sim:build && pnpm forge:gate && pnpm forge:sizes && pnpm check:layout && pnpm test:sol",
     "check:all": "pnpm check && pnpm canonical:test",
-    "forge:gate": "node scripts/check-forge-gate.mjs"
+    "forge:gate": "node scripts/check-forge-gate.mjs",
+    "check:layout": "node scripts/check-layout.mjs"
   },
   "devDependencies": {
     "@foundry-rs/forge": "1.7.1",

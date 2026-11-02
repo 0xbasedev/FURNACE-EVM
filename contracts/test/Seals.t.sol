@@ -3,6 +3,7 @@ pragma solidity 0.8.28;
 
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {ForgePool} from "../src/forge/ForgePool.sol";
+import {ForgePoolBase} from "../src/forge/ForgePoolBase.sol";
 import {ForgeView} from "../src/forge/ForgeView.sol";
 import {ForgeEmissions} from "../src/forge/ForgeEmissions.sol";
 import {Seal, SealStatus} from "../src/forge/ForgeMeasures.sol";
@@ -239,27 +240,27 @@ contract SealsTest is SettlementFixture {
 
     function test_sealGuards() public {
         uint256 a = _open(0, alice, 100e18);
-        vm.expectRevert(abi.encodeWithSelector(ForgePool.NotOwner.selector, a));
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.NotOwner.selector, a));
         _seal(0, bob, a, 0);
-        vm.expectRevert(abi.encodeWithSelector(ForgePool.UnknownTrack.selector, 4));
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.UnknownTrack.selector, 4));
         _seal(0, alice, a, 4);
         _seal(0, alice, a, 0);
-        vm.expectRevert(abi.encodeWithSelector(ForgePool.SealActive.selector, a, 1));
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.SealActive.selector, a, 1));
         _seal(0, alice, a, 1);
         vm.prank(alice);
         pools[0].requestCooling(a, 1e18);
-        vm.expectRevert(abi.encodeWithSelector(ForgePool.CoolingPending.selector, a));
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.CoolingPending.selector, a));
         _seal(0, alice, a, 1);
         skip(6 hours);
         vm.prank(alice);
         pools[0].executeWithdrawal(a, 1); // forfeits
-        vm.expectRevert(abi.encodeWithSelector(ForgePool.SealGap.selector, block.timestamp + P.EPOCH_SECONDS));
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.SealGap.selector, block.timestamp + P.EPOCH_SECONDS));
         _seal(0, alice, a, 1);
         skip(1 days);
         assertEq(_seal(0, alice, a, 1), 2, "a second Seal after the gap");
         vm.prank(alice);
         pools[0].emergencyExit(a);
-        vm.expectRevert(abi.encodeWithSelector(ForgePool.Closed.selector, a));
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.Closed.selector, a));
         _seal(0, alice, a, 0);
     }
 
