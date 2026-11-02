@@ -27,9 +27,16 @@ contract ForgeHandler is Test {
     mapping(uint256 id => uint256[]) internal bonusTimes;
     mapping(uint256 id => uint256[]) internal bonusUnits;
     mapping(uint256 id => uint256) internal lastBonus;
+    /// Deeds (ADR 0011): the listing the market holds, and a ghost of each ownership log.
+    address public deeds;
+    mapping(uint256 id => uint32) public market;
+    mapping(uint256 id => address[]) internal sellers;
+    mapping(uint256 id => uint256[]) internal soldAt;
+    uint256 public sales;
 
     constructor(ForgePool pool_, MockERC20 token_, address collector_) {
         (pool, token, collector) = (pool_, token_, collector_);
+        deeds = pool_.DEEDS();
         for (uint256 i; i < 3; ++i) {
             users[i] = address(uint160(0x2000 + i));
             token.mint(users[i], 1e30);
@@ -124,6 +131,56 @@ contract ForgeHandler is Test {
         vm.prank(pool.BOOST());
         try pool.setOrdinaryBonus(id, bound(units, 0, P.MAX_ORDINARY_BONUS_UNITS + 1)) {} catch {}
         _after();
+    }
+
+    function list(uint256 seed, uint256 coin) external {
+        if (ids.length == 0) return;
+        uint256 id = ids[seed % ids.length];
+        address seller = coin % 8 == 0 ? users[coin % 3] : pool.positionOf(id).owner; // sometimes wrong
+        vm.prank(deeds);
+        try pool.list(id, seller) returns (uint32 listing) {
+            market[id] = listing;
+        } catch {}
+        _after();
+    }
+
+    function unlist(uint256 seed, uint256 coin) external {
+        if (ids.length == 0) return;
+        uint256 id = ids[seed % ids.length];
+        vm.prank(coin % 2 == 0 ? deeds : pool.positionOf(id).owner);
+        try pool.unlist(id) {} catch {}
+        _after();
+    }
+
+    function settle(uint256 seed, uint256 buyer) external {
+        if (ids.length == 0) return;
+        uint256 id = ids[seed % ids.length];
+        address seller = pool.positionOf(id).owner;
+        vm.prank(deeds);
+        try pool.settle(id, users[buyer % 3], market[id]) {
+            sellers[id].push(seller);
+            soldAt[id].push(block.timestamp);
+            ++sales;
+        } catch {}
+        _after();
+    }
+
+    /// Wallet-bound phantom terms, through a test harness's setter when the pool has one.
+    function mark(uint256 seed, uint256 units) external {
+        if (ids.length == 0) return;
+        (bool ok,) = address(pool).call(
+            abi.encodeWithSignature("setPhantomForTest(uint256,bool,uint32)", ids[seed % ids.length], units % 2 == 0, uint32(units))
+        );
+        ok;
+        _after();
+    }
+
+    function soldCount(uint256 id) external view returns (uint256) {
+        return sellers[id].length;
+    }
+
+    function soldBy(uint256 id, uint256 n) external view returns (address, uint256) {
+        return (sellers[id][n], soldAt[id][n]);
     }
 
     /// The bonus in effect at `t`: the last change at or before it.
@@ -331,6 +388,37 @@ contract ForgePoolInvariantTest is Test {
         assertFalse(handler.monotoneBroken());
         if (handler.firstOpen() != 0) {
             assertLe(pool.occupiedSecondsAt(block.timestamp), block.timestamp - handler.firstOpen());
+        }
+    }
+
+    /// A listing exists only on an open position with no cooling pending (ADR 0011).
+    function invariant_listedPositionsAreQuiet() public view {
+        for (uint256 i; i < handler.idCount(); ++i) {
+            uint256 id = handler.ids(i);
+            ForgePool.Position memory p = pool.positionOf(id);
+            if (p.listing & 1 == 0) continue;
+            assertEq(p.closedAt, 0, "a listed position is open");
+            assertEq(p.pendingCount, 0, "a listed position has no cooling pending");
+        }
+    }
+
+    /// The ownership log holds exactly each completed sale's seller and instant, and the
+    /// current tenure starts at the last one.
+    function invariant_ownershipLogMatchesSales() public view {
+        for (uint256 i; i < handler.idCount(); ++i) {
+            uint256 id = handler.ids(i);
+            ForgePool.Position memory p = pool.positionOf(id);
+            uint256 n = handler.soldCount(id);
+            assertEq(p.transfers, n, "one log entry per sale");
+            uint256 since = p.openedAt;
+            for (uint256 k; k < n; ++k) {
+                (address seller, uint256 at) = handler.soldBy(id, k);
+                ForgePool.Ownership memory o = pool.ownershipAt(id, k);
+                assertEq(o.owner, seller, "the seller");
+                assertEq(o.until, at, "the sale instant");
+                since = at;
+            }
+            assertEq(pool.ownedSince(id), since, "tenure start");
         }
     }
 

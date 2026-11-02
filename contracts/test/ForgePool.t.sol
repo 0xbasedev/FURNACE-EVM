@@ -5,7 +5,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {ForgePool} from "../src/forge/ForgePool.sol";
 import {ForgeView} from "../src/forge/ForgeView.sol";
-import {Seal} from "../src/forge/ForgeMeasures.sol";
+import {Lot, Record, Seal} from "../src/forge/ForgeMeasures.sol";
 import {HeatMath} from "../src/libraries/HeatMath.sol";
 import {FurnaceParams as P} from "../src/generated/FurnaceParams.sol";
 import {ForgeVectors} from "./utils/ForgeVectors.sol";
@@ -26,6 +26,10 @@ contract ForgePoolHarness is ForgePool {
 
     function setRecordsForTest(uint256 id, uint256 slot, uint24 n) external {
         _lots[id][slot].records = n;
+    }
+
+    function setPhantomForTest(uint256 id, bool founder, uint32 headStart) external {
+        (_positions[id].founder, _positions[id].headStart) = (founder, headStart);
     }
 }
 
@@ -751,6 +755,187 @@ contract ForgePoolTest is ForgeFixture {
         pool.executeWithdrawal(id, t);
         emit log_named_uint("executeWithdrawal (32 lots)", g - gasleft());
         vm.stopPrank();
+    }
+
+    // ── Deeds (ADR 0011) ──────────────────────────────────────────────────
+
+    function _listed(uint256 amount) internal returns (uint256 id, uint32 listing) {
+        vm.prank(alice);
+        id = pool.open(amount);
+        vm.prank(deeds);
+        listing = pool.list(id, alice);
+    }
+
+    function test_deedAccessAndPreconditions() public {
+        vm.prank(alice);
+        uint256 id = pool.open(100e18);
+        vm.expectRevert(ForgePool.NotDeeds.selector);
+        vm.prank(alice);
+        pool.list(id, alice); // only the market lists
+        vm.startPrank(deeds);
+        vm.expectRevert(abi.encodeWithSelector(ForgePool.NotOwner.selector, id));
+        pool.list(id, bob);
+        vm.expectRevert(abi.encodeWithSelector(ForgePool.UnknownPosition.selector, 9));
+        pool.list(9, alice);
+        vm.expectRevert(abi.encodeWithSelector(ForgePool.NotListed.selector, id));
+        pool.settle(id, bob, 0); // never listed
+        vm.expectRevert(abi.encodeWithSelector(ForgePool.NotListed.selector, id));
+        pool.unlist(id);
+        vm.stopPrank();
+        vm.prank(alice);
+        pool.requestCooling(id, 10e18);
+        vm.expectRevert(abi.encodeWithSelector(ForgePool.CoolingPending.selector, id));
+        vm.prank(deeds);
+        pool.list(id, alice);
+        vm.prank(alice);
+        pool.cancelCooling(id, 1);
+
+        vm.prank(deeds);
+        uint32 listing = pool.list(id, alice);
+        assertEq(listing, 1);
+        vm.startPrank(deeds);
+        vm.expectRevert(abi.encodeWithSelector(ForgePool.Listed.selector, id));
+        pool.list(id, alice);
+        vm.expectRevert(ForgePool.ZeroAddress.selector);
+        pool.settle(id, address(0), listing);
+        vm.expectRevert(abi.encodeWithSelector(ForgePool.NotListed.selector, id));
+        pool.settle(id, bob, listing + 1);
+        vm.expectRevert(abi.encodeWithSelector(ForgePool.NotListed.selector, id));
+        pool.settle(id, bob, listing - 1);
+        vm.stopPrank();
+        vm.expectRevert(ForgePool.NotDeeds.selector);
+        vm.prank(alice);
+        pool.settle(id, bob, listing);
+        vm.expectRevert(abi.encodeWithSelector(ForgePool.NotOwner.selector, id));
+        vm.prank(bob);
+        pool.unlist(id); // a stranger cannot end it
+    }
+
+    function test_deedListingLocksOwnerButNotExits() public {
+        (uint256 id, uint32 listing) = _listed(100e18);
+        vm.startPrank(alice);
+        vm.expectRevert(abi.encodeWithSelector(ForgePool.Listed.selector, id));
+        pool.deposit(id, 1e18);
+        vm.expectRevert(abi.encodeWithSelector(ForgePool.Listed.selector, id));
+        pool.requestCooling(id, 1e18);
+        vm.expectRevert(abi.encodeWithSelector(ForgePool.Listed.selector, id));
+        pool.seal(id, 0);
+        vm.stopPrank();
+        vm.prank(boost);
+        pool.setOrdinaryBonus(id, 10_000); // BOOST is not the owner: not locked
+        pool.poke(id);
+
+        // The owner ends the listing directly, without the market.
+        vm.expectEmit(address(pool));
+        emit ForgePool.ListingChanged(id, listing + 1);
+        vm.prank(alice);
+        pool.unlist(id);
+        vm.prank(alice);
+        pool.deposit(id, 1e18);
+
+        // Emergency exit from a listing ends it: the market's sale can no longer settle.
+        vm.prank(deeds);
+        listing = pool.list(id, alice);
+        vm.prank(alice);
+        pool.emergencyExit(id);
+        assertEq(pool.listingOf(id), listing + 1, "the exit ended the listing");
+        vm.expectRevert(abi.encodeWithSelector(ForgePool.NotListed.selector, id));
+        vm.prank(deeds);
+        pool.settle(id, bob, listing);
+    }
+
+    function test_deedSettlementCarriesEightyPercentOfCappedAge() public {
+        vm.prank(alice);
+        uint256 id = pool.open(200e18);
+        skip(700 days);
+        vm.prank(alice);
+        pool.deposit(id, 100e18); // a young lot
+        skip(30 days); // lot 0: 730 days, capped at 365; lot 1: 30 days
+        vm.prank(alice);
+        pool.requestCooling(id, 10e18); // starts a plan
+        skip(7 days); // the ticket lapses and returns
+        vm.prank(boost);
+        pool.setOrdinaryBonus(id, 20_000);
+        uint256 sellerStreak = pool.positionOf(id).streakStart;
+        vm.prank(deeds);
+        uint32 listing = pool.list(id, alice);
+        skip(1 days);
+
+        vm.expectEmit(address(pool));
+        emit ForgePool.DeedSettled(id, alice, bob);
+        vm.prank(deeds);
+        pool.settle(id, bob, listing);
+
+        ForgePool.Position memory p = pool.positionOf(id);
+        assertEq(p.owner, bob);
+        assertEq(p.streakStart, block.timestamp, "a new Streak");
+        assertEq(p.ordinaryBonus, 0, "Pyre stays with the seller");
+        assertEq(p.plan.start, 0, "a fresh cooling plan");
+        assertEq(p.listing, listing + 1, "the listing is spent");
+        assertEq(p.transfers, 1);
+        assertEq(pool.ownedSince(id), block.timestamp);
+        ForgePool.Ownership memory o = pool.ownershipAt(id, 0);
+        assertEq(o.owner, alice);
+        assertEq(o.until, block.timestamp);
+        for (uint256 j; j < 32; ++j) {
+            (uint256 amount, uint256 age,,) = pool.lotAt(id, j);
+            if (amount == 0) continue;
+            Lot memory head = pool.lotOf(id, j);
+            assertEq(head.since, block.timestamp, "every active segment restarts at the sale");
+            Record memory closed = pool.historyAt(id, j, head.records - 1);
+            assertEq(closed.streak, sellerStreak, "the closed segment keeps the seller's Streak");
+            assertEq(closed.ordinaryBonus, 20_000, "and the seller's bonus");
+            uint256 before = Math.min(uint256(closed.age) + (block.timestamp - closed.since), P.HEAT_AGE_CAP);
+            assertEq(age, HeatMath.deedAge(before), "80% of capped age");
+        }
+        // The spec's example: 730 days carry 292.
+        (, uint256 oldest,,) = pool.lotAt(id, 0);
+        assertEq(oldest, 292 days);
+
+        // The buyer owns every path now; the seller none.
+        vm.expectRevert(abi.encodeWithSelector(ForgePool.NotOwner.selector, id));
+        vm.prank(alice);
+        pool.deposit(id, 1e18);
+        _fund(bob);
+        vm.prank(bob);
+        pool.deposit(id, 1e18);
+    }
+
+    function test_deedSettlementClearsWalletBoundTerms() public {
+        ForgePoolHarness h = new ForgePoolHarness(IERC20(address(token)), true, collector, boost, deeds);
+        vm.prank(alice);
+        token.approve(address(h), type(uint256).max);
+        vm.prank(alice);
+        uint256 id = h.open(10e18);
+        h.setPhantomForTest(id, true, 15 days);
+        vm.prank(deeds);
+        uint32 listing = h.list(id, alice);
+        assertTrue(h.positionOf(id).founder);
+        vm.prank(deeds);
+        h.settle(id, bob, listing);
+        ForgePool.Position memory p = h.positionOf(id);
+        assertFalse(p.founder, "First Flame stays with its wallet");
+        assertEq(p.headStart, 0, "the head start is never sold");
+    }
+
+    function test_gas_deedSettle() public {
+        vm.startPrank(alice);
+        uint256 id = pool.open(1e18);
+        for (uint256 i = 1; i < 32; ++i) {
+            skip(1 hours);
+            pool.deposit(id, 1e18);
+        }
+        vm.stopPrank();
+        skip(400 days);
+        vm.prank(deeds);
+        uint256 g = gasleft();
+        uint32 listing = pool.list(id, alice);
+        emit log_named_uint("list (32 lots)", g - gasleft());
+        skip(1 days);
+        vm.prank(deeds);
+        g = gasleft();
+        pool.settle(id, bob, listing);
+        emit log_named_uint("settle (32 lots)", g - gasleft());
     }
 }
 
