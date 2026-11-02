@@ -368,44 +368,27 @@ contract ForgePool is ReentrancyGuardTransient {
         STAKE_TOKEN.safeTransfer(FEE_COLLECTOR, dep + wd + em);
     }
 
-    // ── views (raw state as of each position's last checkpoint) ──────────
+    // ── views ─────────────────────────────────────────────────────────────
 
-    function positionOf(uint256 id) external view returns (Position memory) {
-        return _positions[id];
+    /// @notice Raw storage words. Positions, lots, records, tickets, slices, Seals and the
+    ///         occupancy log are read through ForgeView, which decodes this layout (ADR 0010).
+    function extsload(bytes32[] calldata slots) external view returns (bytes32[] memory out) {
+        out = new bytes32[](slots.length);
+        for (uint256 i; i < slots.length; ++i) {
+            bytes32 slot = slots[i];
+            bytes32 v;
+            assembly ("memory-safe") {
+                v := sload(slot)
+            }
+            out[i] = v;
+        }
     }
 
-    /// @notice Raw head of a slot (state as of `since`).
-    function lotOf(uint256 id, uint256 slot) external view returns (Lot memory) {
-        return _lots[id][slot];
-    }
 
-    /// @notice A slot's state at the position's last checkpoint (zero once closed).
-    function lotAt(uint256 id, uint256 slot)
-        external
-        view
-        returns (uint256 amount, uint256 age, uint256 participated, uint256 heldBy)
-    {
-        Position storage p = _positions[id];
-        if (p.closedAt != 0) return (0, 0, 0, 0);
-        Lot memory lot = _lots[id][slot];
-        (age, participated) = _lotAt(lot, p.lastCheckpoint);
-        return (lot.amount, age, participated, lot.heldBy);
-    }
 
-    /// @notice A position's custody principal, active plus frozen (zero once closed). Lapses
-    ///         move principal between the two, so it needs no sync.
-    function custodyOf(uint256 id) external view returns (uint256) {
-        Position storage p = _positions[id];
-        return _activeOf(id, p) + _frozenOf(id, p);
-    }
 
-    function historyLength(uint256 id, uint256 slot) external view returns (uint256) {
-        return _lots[id][slot].records;
-    }
 
-    function historyAt(uint256 id, uint256 slot, uint256 i) external view returns (Record memory) {
-        return _history[id][slot][i];
-    }
+
 
     /// @notice Exact time-integrated measures of a position over [t0, t1]:
     ///         S = ∫stake dt and W = ∫stake·Heat dt (RAY), summed over its records.
@@ -447,50 +430,15 @@ contract ForgePool is ReentrancyGuardTransient {
         );
     }
 
-    /// @notice Pending tickets whose lapse is due by now: the lapses a sync would resolve.
-    function dueLapses(uint256 id) external view returns (uint256 n) {
-        Position storage p = _positions[id];
-        for (uint256 k; k < p.pendingCount; ++k) {
-            if (_deadline(_tickets[id][_pending[id][k]]) <= block.timestamp) ++n;
-        }
-    }
 
-    function sealOf(uint256 id, uint256 k) external view returns (Seal memory) {
-        return _seals[id][k];
-    }
 
-    function historyMaskOf(uint256 id) external view returns (uint32) {
-        return _positions[id].historyMask;
-    }
 
-    function ticketOf(uint256 id, uint32 ticketId) external view returns (Ticket memory) {
-        return _tickets[id][ticketId];
-    }
 
-    function sliceOf(uint256 id, uint32 ticketId, uint256 slot) external view returns (Slice memory) {
-        return _slices[id][ticketId][slot];
-    }
 
-    function pendingTickets(uint256 id) external view returns (uint32[] memory ids) {
-        ids = new uint32[](_positions[id].pendingCount);
-        for (uint256 k; k < ids.length; ++k) ids[k] = _pending[id][k];
-    }
 
-    function lotCount(uint256 id) external view returns (uint256) {
-        return _popcount(_positions[id].usedMask);
-    }
 
-    function occupancyLength() external view returns (uint256) {
-        return _occupancy.length;
-    }
 
-    function occupancyAt(uint256 i) external view returns (Occupancy memory) {
-        return _occupancy[i];
-    }
 
-    function lapseQueueLength() external view returns (uint256) {
-        return _lapses.length();
-    }
 
     /// @notice Cumulative seconds with active principal up to `t` (t ≤ now). Includes
     ///         a lapse that has come due but no transaction has processed yet.

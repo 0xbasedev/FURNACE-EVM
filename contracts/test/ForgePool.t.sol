@@ -4,11 +4,15 @@ pragma solidity 0.8.28;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {ForgePool} from "../src/forge/ForgePool.sol";
+import {ForgeView} from "../src/forge/ForgeView.sol";
 import {Seal} from "../src/forge/ForgeMeasures.sol";
 import {HeatMath} from "../src/libraries/HeatMath.sol";
 import {FurnaceParams as P} from "../src/generated/FurnaceParams.sol";
 import {ForgeVectors} from "./utils/ForgeVectors.sol";
 import {MockERC20, FeeOnTransferERC20} from "./utils/MockERC20.sol";
+
+using ForgeView for ForgePool;
+using ForgeView for ForgePoolHarness;
 
 /// @dev Test-only subclass: jumps a position's ticket or record counter towards its limit.
 contract ForgePoolHarness is ForgePool {
