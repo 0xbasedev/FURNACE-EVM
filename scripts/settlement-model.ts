@@ -326,6 +326,13 @@ export class SettlementModel {
     this.hand(0, amount);
   }
   takeMatchReserve() { const amount = this.matchReserve; this.matchReserve = 0n; this.hand(1, amount); }
+  /** The Capstone takes a position's unclaimed rewards for a Stoke; a pending Claim keeps its snapshot. */
+  takeUnclaimed(i: number, id: number) {
+    need(i >= 0 && i < 4, 'UnknownPool');
+    const key = `${i}:${id}`, amount = this.unclaimed.get(key) ?? 0n;
+    this.unclaimed.set(key, 0n);
+    this.hand(0, amount);
+  }
   takeSealedPot(i: number) {
     need(i >= 0 && i < 4, 'UnknownPool');
     const amount = this.sealedPot[i]; this.sealedPot[i] = 0n; this.hand(2, amount);

@@ -50,12 +50,27 @@ interface IMantleBurn {
 ///         its owner can neither deposit nor request a withdrawal. After a sale the new owner
 ///         starts with a fresh raise allowance and a fresh withdrawal plan; the pool has zeroed
 ///         the bonus, and the first raise restores it with the new owner's Pyre.
+///
+///         Stoke (ADR 0013): the owner compounds the position's unclaimed rewards into its Capstone,
+///         with no fee (the protocol Compound fee is zero), no timer and no sale. Keepers may Stoke
+///         only a position whose owner opted in, within the canonical tip, interval and size limits;
+///         the settings lapse at a sale. A Stoke's raise spends the caller side's raise allowance.
 contract Boost is ReentrancyGuardTransient {
     using SafeERC20 for IERC20;
 
     struct Ticket {
         uint128 amount;
         uint40 maturity;
+    }
+
+    /// @dev The owner's keeper settings (spec §210); `tipBps == 0` means off. `last` is the time
+    ///      of the last keeper Stoke, which the interval counts from; the owner's own Stokes and
+    ///      changes of settings leave it as it is.
+    struct Keeper {
+        uint16 tipBps;
+        uint32 interval;
+        uint40 last;
+        uint128 minSize;
     }
 
     /// @dev One position's Capstone. `capstone` counts toward the bonus; a pending withdrawal
@@ -70,6 +85,7 @@ contract Boost is ReentrancyGuardTransient {
         uint128 planReference;
         uint128 planRequested;
         Ticket pending;
+        Keeper keeper;
     }
 
     ForgeEmissions public immutable EMISSIONS;
@@ -97,6 +113,9 @@ contract Boost is ReentrancyGuardTransient {
     event BonusUnavailable(uint256 indexed pool, uint256 indexed id);
     event BonusUnsynced(uint256 indexed pool, uint256 indexed id, uint256 units);
     event FeesBurned(uint256 amount);
+    event Stoked(uint256 indexed pool, uint256 indexed id, address indexed by, uint256 amount, uint256 tip);
+    event KeeperSet(uint256 indexed pool, uint256 indexed id, uint256 tipBps, uint256 interval, uint256 minSize);
+    event RaiseDeferred(uint256 indexed pool, uint256 indexed id, uint256 units);
 
     error ZeroAddress();
     error Miswired();
@@ -112,6 +131,11 @@ contract Boost is ReentrancyGuardTransient {
     error RaiseTooSoon(uint256 readyAt);
     error BelowMinimum(uint256 amount);
     error Listed(uint256 pool, uint256 id);
+    error NothingToStoke(uint256 pool, uint256 id);
+    error KeeperOff(uint256 pool, uint256 id);
+    error StokeTooSoon(uint256 readyAt);
+    error BelowStokeMinimum(uint256 amount, uint256 minimum);
+    error BadKeeperSettings();
 
     /// @dev Deployed after the pools, the Mantle and ForgeEmissions, at the address each of
     ///      them was given; the constructor checks every wire.
@@ -233,6 +257,90 @@ contract Boost is ReentrancyGuardTransient {
         if (units != current) _push(pool, id, p, units, true);
     }
 
+    // ── Stoke (ADR 0013) ──────────────────────────────────────────────────
+
+    /// @notice The owner compounds the position's unclaimed rewards into its Capstone (spec §6):
+    ///         no fee, no timer, no sale. A pending Claim keeps its snapshot. The bonus rises now
+    ///         if the owner's raise allowance is unspent this epoch; otherwise a later raise picks
+    ///         it up. A listing locks it (ADR 0011).
+    function stoke(uint256 pool, uint256 id) external nonReentrant returns (uint256 amount) {
+        (ForgePool p, uint256 closedAt, uint256 current, uint256 transfers) = _owned(pool, id, true);
+        if (closedAt != 0) revert Closed(pool, id);
+        Account storage a = _accounts[pool][id];
+        _settle(pool, id, a, transfers);
+        amount = EMISSIONS.takeUnclaimed(pool, id);
+        if (amount == 0) revert NothingToStoke(pool, id);
+        a.capstone += uint128(amount);
+        emit Stoked(pool, id, msg.sender, amount, 0);
+        _rationedRaise(pool, id, p, a, msg.sender, current, true);
+    }
+
+    /// @notice The owner opts the position into keeper Stokes, or out with `tipBps == 0`. A tip
+    ///         is 0.1–1% of each keeper Stoke; keepers wait at least 24h between Stokes and
+    ///         compound at least the owner's minimum, itself at least 100 EMBER [P]. The UI
+    ///         suggests 0.5%, 7 days and 100 EMBER. The settings end at a sale.
+    function setKeeper(uint256 pool, uint256 id, uint256 tipBps, uint256 interval, uint256 minSize)
+        external
+        nonReentrant
+    {
+        (,,, uint256 transfers) = _owned(pool, id, false); // open while listed: keeper Stokes are locked
+        if (tipBps == 0) {
+            (interval, minSize) = (0, 0);
+        } else if (
+            tipBps < P.AUTO_STOKE_TIP_MIN_BPS || tipBps > P.AUTO_STOKE_TIP_MAX_BPS
+                || interval < P.AUTO_STOKE_MIN_INTERVAL || interval > type(uint32).max
+                || minSize < P.AUTO_STOKE_MIN_SIZE || minSize > type(uint128).max
+        ) {
+            revert BadKeeperSettings();
+        }
+        Account storage a = _accounts[pool][id];
+        _settle(pool, id, a, transfers); // first, so a new owner's settings are not cleared after
+        Keeper storage k = a.keeper;
+        (k.tipBps, k.interval, k.minSize) = (uint16(tipBps), uint32(interval), uint128(minSize));
+        emit KeeperSet(pool, id, tipBps, interval, minSize);
+    }
+
+    /// @notice Anyone Stokes a position whose owner opted in, once its interval has passed and its
+    ///         unclaimed rewards reach the owner's minimum; the caller receives the tip. The owner
+    ///         calling it earns none. The raise spends the public allowance (the owner's, if the
+    ///         owner calls).
+    function keeperStoke(uint256 pool, uint256 id) external nonReentrant returns (uint256 amount, uint256 tip) {
+        ForgePool p = _pool(pool);
+        (address owner, uint256 current, uint256 tipBps) = _keeperReady(pool, id, p);
+        Account storage a = _accounts[pool][id];
+        amount = EMISSIONS.takeUnclaimed(pool, id);
+        bool byOwner = msg.sender == owner;
+        if (!byOwner) tip = (amount * tipBps) / 10_000;
+        a.capstone += uint128(amount - tip);
+        emit Stoked(pool, id, msg.sender, amount - tip, tip);
+        if (tip != 0) EMBER.safeTransfer(msg.sender, tip);
+        _rationedRaise(pool, id, p, a, owner, current, byOwner);
+    }
+
+    /// @dev A keeper Stoke's checks: open, not listed, opted in under this owner, the interval
+    ///      passed and the minimum reached. Starts the next interval now.
+    function _keeperReady(uint256 pool, uint256 id, ForgePool p)
+        internal
+        returns (address owner, uint256 current, uint256 tipBps)
+    {
+        uint256 closedAt;
+        uint256 listing;
+        uint256 transfers;
+        (owner, closedAt, current, listing, transfers) = p.briefOf(id);
+        if (closedAt != 0) revert Closed(pool, id);
+        if (listing & 1 != 0) revert Listed(pool, id);
+        Account storage a = _accounts[pool][id];
+        _settle(pool, id, a, transfers);
+        Keeper storage k = a.keeper;
+        tipBps = k.tipBps;
+        if (tipBps == 0) revert KeeperOff(pool, id);
+        uint256 readyAt = uint256(k.last) + k.interval;
+        if (block.timestamp < readyAt) revert StokeTooSoon(readyAt);
+        uint256 owed = EMISSIONS.unclaimed(pool, id);
+        if (owed < k.minSize) revert BelowStokeMinimum(owed, k.minSize);
+        k.last = uint40(block.timestamp);
+    }
+
     /// @notice Burn the booked Capstone fees through the Mantle (Protocol category).
     function burnFees() external nonReentrant returns (uint256 amount) {
         amount = feesToBurn;
@@ -303,10 +411,13 @@ contract Boost is ReentrancyGuardTransient {
     }
 
     /// @dev A new owner (the pool counted a sale since this account last looked) starts with an
-    ///      unused raise allowance and no withdrawal plan. A withdrawal not executed by the end of
-    ///      its window returns to the Capstone.
+    ///      unused raise allowance, no withdrawal plan and no keeper settings. A withdrawal not
+    ///      executed by the end of its window returns to the Capstone.
     function _settle(uint256 pool, uint256 id, Account storage a, uint256 transfers) internal {
-        if (transfers != a.transfers) (a.transfers, a.ownerRaiseAt, a.planStart) = (uint32(transfers), 0, 0);
+        if (transfers != a.transfers) {
+            (a.transfers, a.ownerRaiseAt, a.planStart) = (uint32(transfers), 0, 0);
+            delete a.keeper;
+        }
         Ticket memory t = a.pending;
         if (t.amount == 0 || block.timestamp < uint256(t.maturity) + P.WITHDRAW_EXECUTION_WINDOW) return;
         delete a.pending;
@@ -331,21 +442,57 @@ contract Boost is ReentrancyGuardTransient {
         return P.WITHDRAW_TIER_4_SECONDS;
     }
 
-    /// @dev Raise after a deposit or escrow: skipped (the deposit stands) if a source fails.
+    /// @dev Raise after a deposit or escrow: skipped (the deposit stands) if a source fails. A
+    ///      deposit pays a burned fee and escrow arrives once per Seal, so neither is rationed.
     function _tryRaise(uint256 pool, uint256 id, ForgePool p, Account storage a, address owner) internal {
+        (bool ok, uint256 units) = _target(pool, id, p, a, owner);
+        if (ok) _push(pool, id, p, units, false);
+    }
+
+    /// @dev A Stoke's raise: fee-free, so it spends the caller side's once-per-epoch allowance, like
+    ///      `refresh`. Spent, the Capstone still grows and the raise waits for a later one. Lowering
+    ///      needs no allowance.
+    function _rationedRaise(
+        uint256 pool,
+        uint256 id,
+        ForgePool p,
+        Account storage a,
+        address owner,
+        uint256 current,
+        bool byOwner
+    ) internal {
+        (bool ok, uint256 units) = _target(pool, id, p, a, owner);
+        if (!ok || units == current) return;
+        if (units > current) {
+            uint256 last = byOwner ? a.ownerRaiseAt : a.publicRaiseAt;
+            if (last != 0 && block.timestamp < last + P.EPOCH_SECONDS) {
+                emit RaiseDeferred(pool, id, units);
+                return;
+            }
+            if (byOwner) a.ownerRaiseAt = uint40(block.timestamp);
+            else a.publicRaiseAt = uint40(block.timestamp);
+        }
+        _push(pool, id, p, units, false);
+    }
+
+    /// @dev The bonus the position earns now, or ok = false (reported) if a source fails.
+    function _target(uint256 pool, uint256 id, ForgePool p, Account storage a, address owner)
+        internal
+        returns (bool ok, uint256 units)
+    {
         uint256 rate = P.RAY;
         if (EMBER_POOLS & (1 << pool) == 0) {
             try VALUATION.emberPerStake(pool) returns (uint256 r) {
                 rate = r;
             } catch {
                 emit BonusUnavailable(pool, id);
-                return;
+                return (false, 0);
             }
             // Custody is below 2^106, so a rate below 2^160 cannot overflow the units (a
             // 6-decimal stake's RAY rate is already ~1e39); a larger one counts as unavailable.
             if (rate > type(uint160).max) {
                 emit BonusUnavailable(pool, id);
-                return;
+                return (false, 0);
             }
         }
         uint256 burned;
@@ -353,9 +500,9 @@ contract Boost is ReentrancyGuardTransient {
             burned = b;
         } catch {
             emit BonusUnavailable(pool, id);
-            return;
+            return (false, 0);
         }
-        _push(pool, id, p, capstoneUnits(a.capstone, p.custodyOf(id), rate) + pyreUnits(burned), false);
+        return (true, capstoneUnits(a.capstone, p.custodyOf(id), rate) + pyreUnits(burned));
     }
 
     /// @dev Set the pool's bonus. Only `refresh` lets a pool failure revert; elsewhere it is

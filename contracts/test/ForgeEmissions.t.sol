@@ -96,7 +96,8 @@ contract ForgeEmissionsDifferentialTest is SettlementFixture {
         TakeCapstone,
         TakeMatchReserve,
         TakeSealedPot,
-        Boost
+        Boost,
+        TakeUnclaimed
     }
 
     string json;
@@ -111,6 +112,7 @@ contract ForgeEmissionsDifferentialTest is SettlementFixture {
     function test_settle_partialOccupancy() public { _replay("partialOccupancy"); }
     function test_settle_latePages() public { _replay("latePages"); }
     function test_settle_claimSnapshot() public { _replay("claimSnapshot"); }
+    function test_settle_stokeTakesUnclaimed() public { _replay("stokeTakesUnclaimed"); }
     function test_settle_pagedLots() public { _replay("pagedLots"); }
     function test_settle_recordSpam() public { _replay("recordSpam"); }
     function test_settle_lapseBudget() public { _replay("lapseBudget"); }
@@ -126,7 +128,7 @@ contract ForgeEmissionsDifferentialTest is SettlementFixture {
     function test_settle_random2() public { _replay("random2"); }
 
     function test_everySettlementScenarioIsReplayed() public view {
-        assertEq(vm.parseJsonStringArray(json, ".names").length, 19, "add a test_settle_* for each new scenario");
+        assertEq(vm.parseJsonStringArray(json, ".names").length, 20, "add a test_settle_* for each new scenario");
     }
 
     function _uints(string memory key) internal view returns (uint256[] memory out) {
@@ -185,6 +187,9 @@ contract ForgeEmissionsDifferentialTest is SettlementFixture {
         } else if (kind == K.Boost) {
             vm.prank(boost);
             pool.setOrdinaryBonus(pos, arg);
+        } else if (kind == K.TakeUnclaimed) {
+            vm.prank(capstone);
+            emissions.takeUnclaimed(poolIdx, pos);
         } else {
             vm.prank(_user(pos));
             if (kind == K.Open) assertEq(pool.open(arg), pos, "position id");
@@ -445,6 +450,33 @@ contract ForgeEmissionsTest is SettlementFixture {
         vm.prank(bob);
         assertEq(emissions.executeClaim(0, id), all);
         assertEq(ember.balanceOf(bob), all);
+    }
+
+    /// Only the Capstone takes unclaimed rewards (ADR 0013), and never a pending Claim's snapshot.
+    function test_onlyTheCapstoneTakesUnclaimedRewards() public {
+        vm.prank(alice);
+        uint256 id = pools[0].open(100e18);
+        skip(1 days);
+        _settle(0);
+        uint256 first = emissions.unclaimed(0, id);
+        vm.prank(alice);
+        emissions.requestClaim(0, id);
+        skip(1 days);
+        _settle(1);
+        uint256 second = emissions.unclaimed(0, id);
+        vm.expectRevert(abi.encodeWithSelector(ForgeEmissions.NotConsumer.selector, alice));
+        vm.prank(alice);
+        emissions.takeUnclaimed(0, id);
+        vm.expectRevert(abi.encodeWithSelector(ForgeEmissions.UnknownPool.selector, 4));
+        vm.prank(capstone);
+        emissions.takeUnclaimed(4, id);
+        vm.prank(capstone);
+        assertEq(emissions.takeUnclaimed(0, id), second);
+        assertEq(ember.balanceOf(capstone), second);
+        assertEq(emissions.claimOf(0, id).amount, first, "the snapshot stays");
+        skip(P.CLAIM_SECONDS);
+        vm.prank(alice);
+        assertEq(emissions.executeClaim(0, id), first);
     }
 
     function test_settlementNeverBlocksAnExit() public {

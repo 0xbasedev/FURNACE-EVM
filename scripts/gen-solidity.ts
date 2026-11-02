@@ -207,6 +207,33 @@ pyreCfg.tiers.forEach((t, i) => {
 c('uint256', 'PYRE_MAX_BOOST_UNITS', units(pyreCfg.maxBoost));
 if (units(capCfg.maxBonus) + units(pyreCfg.maxBoost) !== ray('0.65') / BONUS_UNIT) throw new Error('Capstone + Pyre maxima must fill the ordinary bonus ceiling');
 
+// Stoke into the Capstone (spec §6, §210): the protocol Compound fee is zero, a Stoke without a
+// matching reservation never sells, and keeper Stokes are opt-in per position. Boost implements
+// exactly this; fail generation if the config selects anything else.
+const auto = f.autoStoke;
+const stokePolicy: [string, unknown, unknown][] = [
+  ['forge.fees.compoundPct', f.fees.compoundPct, 0],
+  ['forge.compound.lpMatch.fallback', f.compound.lpMatch.fallback, 'capstone'],
+  ['forge.autoStoke.enabled', auto.enabled, true],
+  ['forge.autoStoke.defaultOn', auto.defaultOn, false],
+];
+for (const [path, got, want] of stokePolicy) if (got !== want) throw new Error(`Boost implements ${path} = ${String(want)}, config has ${String(got)}`);
+/** A percentage with at most two decimals, as exact basis points (no float arithmetic). */
+const bps = (pct: number): bigint => {
+  const m = /^(\d+)(?:\.(\d{1,2}))?$/.exec(String(pct));
+  if (!m) throw new Error(`${pct}% is not a whole number of basis points`);
+  return BigInt(m[1]) * 100n + BigInt((m[2] ?? '').padEnd(2, '0'));
+};
+const tipMin = bps(auto.tip.minPct), tipDefault = bps(auto.tip.defaultPct), tipMax = bps(auto.tip.maxPct);
+if (!(0n < tipMin && tipMin <= tipDefault && tipDefault <= tipMax && tipMax < 10_000n)) throw new Error('autoStoke tips must satisfy 0 < min ≤ default ≤ max < 100%');
+if (!(0 < auto.minInterval.minHours && auto.minInterval.minHours <= auto.minInterval.defaultHours)) throw new Error('autoStoke intervals must satisfy 0 < min ≤ default');
+c('uint256', 'AUTO_STOKE_TIP_MIN_BPS', tipMin, `${auto.tip.minPct}% of a keeper Stoke`);
+c('uint256', 'AUTO_STOKE_TIP_DEFAULT_BPS', tipDefault, `${auto.tip.defaultPct}% (the UI's default)`);
+c('uint256', 'AUTO_STOKE_TIP_MAX_BPS', tipMax, `${auto.tip.maxPct}%`);
+c('uint256', 'AUTO_STOKE_MIN_INTERVAL', BigInt(auto.minInterval.minHours) * 3600n, `${auto.minInterval.minHours}h between keeper Stokes`);
+c('uint256', 'AUTO_STOKE_DEFAULT_INTERVAL', BigInt(auto.minInterval.defaultHours) * 3600n, `${auto.minInterval.defaultHours}h (the UI's default)`);
+c('uint256', 'AUTO_STOKE_MIN_SIZE', parseUnits(auto.minSize, 18), `${auto.minSize} EMBER: [P] the floor of a position's keeper minimum`);
+
 section('Base epoch settlement: pools, pages, claims (spec v5.5 §4, §10, §11)');
 const st = cfg.execution.settlement;
 const settlementPolicy: [string, unknown, unknown][] = [

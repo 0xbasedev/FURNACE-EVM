@@ -119,6 +119,16 @@ abstract contract BoostFixture is OracleVectors {
     function _bonus(uint256 pool, uint256 id) internal view returns (uint256) {
         return pools[pool].positionOf(id).ordinaryBonus;
     }
+
+    /// @dev Credits `amount` of unclaimed rewards as a settled epoch would, backed by EMBER in
+    ///      ForgeEmissions (from the Kindling seed, so supply stays the Mantle's).
+    function _credit(uint256 pool, uint256 id, uint256 amount) internal {
+        uint256 owed = emissions.unclaimed(pool, id);
+        stdstore.target(address(emissions)).sig("unclaimed(uint256,uint256)").with_key(pool).with_key(id)
+            .checked_write(owed + amount);
+        vm.prank(kindling);
+        ember.transfer(address(emissions), amount);
+    }
 }
 
 contract BoostTest is BoostFixture {
@@ -411,6 +421,169 @@ contract BoostTest is BoostFixture {
         boost.refresh(0, id);
     }
 
+    // ── Stoke (ADR 0013) ─────────────────────────────────────────────────
+
+    function test_stokeCompoundsUnclaimedRewardsIntoTheCapstone() public {
+        uint256 id = _open(alice, 2, 1000e18); // 990 EMBER staked
+        _credit(2, id, 50e18);
+        vm.prank(alice);
+        emissions.requestClaim(2, id); // a pending Claim snapshots these 50
+        _credit(2, id, 99e18);
+        uint256 held = ember.balanceOf(address(boost));
+        vm.expectEmit(address(boost));
+        emit Boost.Stoked(2, id, alice, 99e18, 0);
+        vm.prank(alice);
+        assertEq(boost.stoke(2, id), 99e18, "only the unclaimed part");
+        assertEq(boost.accountOf(2, id).capstone, 99e18, "no fee: the Compound fee is zero");
+        assertEq(ember.balanceOf(address(boost)) - held, 99e18);
+        assertEq(emissions.unclaimed(2, id), 0);
+        assertEq(emissions.claimOf(2, id).amount, 50e18, "the Claim keeps its snapshot");
+        assertEq(_bonus(2, id), 10_000, "ratio 0.1: +0.1");
+        vm.expectRevert(abi.encodeWithSelector(Boost.NothingToStoke.selector, 2, id));
+        vm.prank(alice);
+        boost.stoke(2, id);
+    }
+
+    function test_stokeGuards() public {
+        uint256 id = _open(alice, 2, 1000e18);
+        _credit(2, id, 10e18);
+        vm.expectRevert(abi.encodeWithSelector(Boost.NotOwner.selector, 2, id));
+        vm.prank(bob);
+        boost.stoke(2, id);
+        vm.expectRevert(abi.encodeWithSelector(ForgeEmissions.NotConsumer.selector, alice));
+        vm.prank(alice);
+        emissions.takeUnclaimed(2, id); // only the Capstone takes unclaimed rewards
+        vm.prank(pools[2].DEEDS());
+        pools[2].list(id, alice);
+        vm.expectRevert(abi.encodeWithSelector(Boost.Listed.selector, 2, id));
+        vm.prank(alice);
+        boost.stoke(2, id); // the rewards travel with the Deed
+        vm.prank(alice);
+        pools[2].emergencyExit(id);
+        vm.expectRevert(abi.encodeWithSelector(Boost.Closed.selector, 2, id));
+        vm.prank(alice);
+        boost.stoke(2, id); // a closed position's rewards stay claimable
+    }
+
+    /// A Stoke is fee-free, so its raise spends the owner's once-per-epoch allowance.
+    function test_stokeRaiseSpendsTheAllowance() public {
+        uint256 id = _open(alice, 2, 1000e18); // 990
+        _credit(2, id, 99e18);
+        vm.prank(alice);
+        boost.stoke(2, id);
+        assertEq(_bonus(2, id), 10_000, "the first raise this epoch");
+        _credit(2, id, 99e18);
+        vm.expectEmit(address(boost));
+        emit Boost.RaiseDeferred(2, id, 20_000);
+        vm.prank(alice);
+        boost.stoke(2, id);
+        assertEq(boost.accountOf(2, id).capstone, 198e18, "the Capstone still grows");
+        assertEq(_bonus(2, id), 10_000, "a second Stoke in the epoch does not raise");
+        vm.expectRevert(abi.encodeWithSelector(Boost.RaiseTooSoon.selector, block.timestamp + P.EPOCH_SECONDS));
+        vm.prank(alice);
+        boost.refresh(2, id); // the same allowance
+        vm.prank(bob);
+        boost.refresh(2, id); // the public side is separate
+        assertEq(_bonus(2, id), 20_000);
+    }
+
+    /// The owner's Stoke spends the owner's allowance and a keeper's the public one: a spent owner
+    /// side does not hold back the keeper's raise.
+    function test_keeperRaiseSpendsThePublicAllowance() public {
+        uint256 id = _open(alice, 2, 1000e18); // 990
+        vm.prank(alice);
+        boost.setKeeper(2, id, P.AUTO_STOKE_TIP_MIN_BPS, P.AUTO_STOKE_MIN_INTERVAL, P.AUTO_STOKE_MIN_SIZE);
+        _credit(2, id, 99e18);
+        vm.prank(alice);
+        boost.stoke(2, id);
+        assertEq(_bonus(2, id), 10_000, "the owner's raise");
+        assertEq(boost.accountOf(2, id).ownerRaiseAt, block.timestamp);
+        _credit(2, id, 100e18);
+        vm.prank(bob);
+        boost.keeperStoke(2, id); // 0.1% tip: the Capstone holds 99 + 99.9
+        assertEq(_bonus(2, id), uint256(198.9e18) * 50_000 / 495e18, "the keeper's raise, same epoch");
+        assertEq(boost.accountOf(2, id).publicRaiseAt, block.timestamp);
+    }
+
+    function test_keeperIsOffUntilTheOwnerOptsIn() public {
+        uint256 id = _open(alice, 2, 1000e18);
+        _credit(2, id, 500e18);
+        vm.expectRevert(abi.encodeWithSelector(Boost.KeeperOff.selector, 2, id));
+        vm.prank(bob);
+        boost.keeperStoke(2, id);
+        vm.startPrank(alice);
+        vm.expectRevert(Boost.BadKeeperSettings.selector);
+        boost.setKeeper(2, id, P.AUTO_STOKE_TIP_MIN_BPS - 1, P.AUTO_STOKE_MIN_INTERVAL, P.AUTO_STOKE_MIN_SIZE);
+        vm.expectRevert(Boost.BadKeeperSettings.selector);
+        boost.setKeeper(2, id, P.AUTO_STOKE_TIP_MAX_BPS + 1, P.AUTO_STOKE_MIN_INTERVAL, P.AUTO_STOKE_MIN_SIZE);
+        vm.expectRevert(Boost.BadKeeperSettings.selector);
+        boost.setKeeper(2, id, P.AUTO_STOKE_TIP_MIN_BPS, P.AUTO_STOKE_MIN_INTERVAL - 1, P.AUTO_STOKE_MIN_SIZE);
+        vm.expectRevert(Boost.BadKeeperSettings.selector);
+        boost.setKeeper(2, id, P.AUTO_STOKE_TIP_MAX_BPS, P.AUTO_STOKE_MIN_INTERVAL, P.AUTO_STOKE_MIN_SIZE - 1);
+        boost.setKeeper(2, id, P.AUTO_STOKE_TIP_MIN_BPS, P.AUTO_STOKE_MIN_INTERVAL, P.AUTO_STOKE_MIN_SIZE); // the edges
+        boost.setKeeper(2, id, P.AUTO_STOKE_TIP_MAX_BPS, P.AUTO_STOKE_MIN_INTERVAL, P.AUTO_STOKE_MIN_SIZE);
+        boost.setKeeper(2, id, 0, 1, 1); // off, whatever else is passed
+        vm.stopPrank();
+        assertEq(abi.encode(boost.accountOf(2, id).keeper), abi.encode(Boost.Keeper(0, 0, 0, 0)));
+        vm.expectRevert(abi.encodeWithSelector(Boost.NotOwner.selector, 2, id));
+        vm.prank(bob);
+        boost.setKeeper(2, id, P.AUTO_STOKE_TIP_DEFAULT_BPS, P.AUTO_STOKE_DEFAULT_INTERVAL, P.AUTO_STOKE_MIN_SIZE);
+    }
+
+    function test_keeperStokePaysTheTipWithinTheOwnersLimits() public {
+        uint256 id = _open(alice, 2, 1000e18);
+        vm.prank(alice);
+        boost.setKeeper(2, id, P.AUTO_STOKE_TIP_DEFAULT_BPS, 1 days, 150e18);
+        _credit(2, id, 200e18);
+        address keeper = makeAddr("keeper");
+        vm.prank(keeper);
+        (uint256 amount, uint256 tip) = boost.keeperStoke(2, id);
+        assertEq(abi.encode(amount, tip), abi.encode(200e18, 1e18), "0.5% of 200");
+        assertEq(ember.balanceOf(keeper), 1e18);
+        assertEq(boost.accountOf(2, id).capstone, 199e18);
+        _credit(2, id, 200e18);
+        vm.expectRevert(abi.encodeWithSelector(Boost.StokeTooSoon.selector, block.timestamp + 1 days));
+        vm.prank(keeper);
+        boost.keeperStoke(2, id);
+        skip(1 days);
+        vm.prank(alice); // changing settings keeps the interval running from the last keeper Stoke
+        boost.setKeeper(2, id, P.AUTO_STOKE_TIP_MAX_BPS, 2 days, 300e18);
+        vm.expectRevert(abi.encodeWithSelector(Boost.StokeTooSoon.selector, block.timestamp + 1 days));
+        vm.prank(keeper);
+        boost.keeperStoke(2, id);
+        skip(1 days);
+        vm.expectRevert(abi.encodeWithSelector(Boost.BelowStokeMinimum.selector, 200e18, 300e18));
+        vm.prank(keeper);
+        boost.keeperStoke(2, id);
+        _credit(2, id, 100e18);
+        vm.prank(alice); // the owner earns no tip, even through the keeper path
+        (amount, tip) = boost.keeperStoke(2, id);
+        assertEq(abi.encode(amount, tip), abi.encode(300e18, 0));
+        assertEq(boost.accountOf(2, id).capstone, 499e18);
+    }
+
+    /// A listing locks keeper Stokes; the owner may still opt out. A sale ends the settings, and
+    /// a buyer's own first settings survive their first sync.
+    function test_keeperSettingsEndAtASale() public {
+        address deeds = pools[2].DEEDS();
+        uint256 id = _open(alice, 2, 1000e18);
+        vm.prank(alice);
+        boost.setKeeper(2, id, P.AUTO_STOKE_TIP_MAX_BPS, P.AUTO_STOKE_MIN_INTERVAL, P.AUTO_STOKE_MIN_SIZE);
+        _credit(2, id, 500e18);
+        vm.prank(deeds);
+        uint32 listing = pools[2].list(id, alice);
+        vm.expectRevert(abi.encodeWithSelector(Boost.Listed.selector, 2, id));
+        boost.keeperStoke(2, id);
+        vm.prank(deeds);
+        pools[2].settle(id, bob, listing);
+        vm.expectRevert(abi.encodeWithSelector(Boost.KeeperOff.selector, 2, id));
+        boost.keeperStoke(2, id); // the seller's settings do not bind the buyer
+        vm.prank(bob);
+        boost.setKeeper(2, id, P.AUTO_STOKE_TIP_MIN_BPS, P.AUTO_STOKE_MIN_INTERVAL, P.AUTO_STOKE_MIN_SIZE);
+        (, uint256 tip) = boost.keeperStoke(2, id);
+        assertEq(tip, 0.5e18, "the buyer's settings: 0.1% of 500");
+    }
+
     function test_onlyTheOwnerMovesCapstone() public {
         uint256 id = _open(alice, 2, 1000e18);
         vm.prank(alice);
@@ -497,7 +670,14 @@ contract BoostTest is BoostFixture {
         g = gasleft();
         boost.refresh(0, id);
         emit log_named_uint("refresh, raising 32 lots", g - gasleft());
+        boost.setKeeper(0, id, P.AUTO_STOKE_TIP_DEFAULT_BPS, P.AUTO_STOKE_MIN_INTERVAL, P.AUTO_STOKE_MIN_SIZE);
         vm.stopPrank();
+        _credit(0, id, 100e18);
+        skip(1 days); // new segments for all 32 lots, not an in-place rewrite
+        vm.prank(makeAddr("keeper"));
+        g = gasleft();
+        boost.keeperStoke(0, id);
+        emit log_named_uint("keeperStoke, raising 32 lots (the keeper's worst case)", g - gasleft());
         g = gasleft();
         boost.burnFees();
         emit log_named_uint("burnFees", g - gasleft());
@@ -530,6 +710,8 @@ contract BoostHandler is BoostFixture {
     uint256 public requests;
     uint256 public executions;
     uint256 public sales;
+    uint256 public stokes;
+    uint256 public keeperStokes;
 
     constructor() {
         _deployBoost();
@@ -621,6 +803,28 @@ contract BoostHandler is BoostFixture {
         boost.burnFees();
     }
 
+    /// Rewards credited to a position, then compounded by its owner (ADR 0013).
+    function stoke(uint256 seed, uint256 amount) external {
+        Pos memory q = positions[seed % positions.length];
+        _credit(q.pool, q.id, bound(amount, 0, 1_000e18));
+        vm.prank(q.owner);
+        try boost.stoke(q.pool, q.id) {
+            ++stokes;
+        } catch {}
+    }
+
+    /// The owner opts in with some tip; a keeper Stokes once credits reach the minimum.
+    function keeperStoke(uint256 seed, uint256 tip, uint256 amount) external {
+        Pos memory q = positions[seed % positions.length];
+        vm.prank(q.owner);
+        try boost.setKeeper(q.pool, q.id, bound(tip, P.AUTO_STOKE_TIP_MIN_BPS, P.AUTO_STOKE_TIP_MAX_BPS), 1 days, 100e18) {} catch {}
+        _credit(q.pool, q.id, bound(amount, 0, 1_000e18));
+        vm.prank(address(0xBEEF));
+        try boost.keeperStoke(q.pool, q.id) {
+            ++keeperStokes;
+        } catch {}
+    }
+
     /// A Deed sale to the other wallet (ADR 0011), when the market's own precondition holds: no
     /// Capstone withdrawal pending. The pool refuses a listing with cooling pending.
     function sell(uint256 seed) external {
@@ -694,8 +898,12 @@ contract BoostInvariantCoverageTest is Test {
             h.execute(i, i * 3_600);
             if (i % 4 == 0) h.cancel(i);
             if (i % 3 == 0) h.sell(i);
+            if (i % 2 == 0) h.stoke(i, 200e18 + i * 1e18);
+            h.keeperStoke(i + 1, i * 7, 150e18);
             h.warp(i * 4_000);
         }
+        assertGt(h.stokes(), 5, "owners stoke");
+        assertGt(h.keeperStokes(), 5, "keepers stoke");
         assertGt(h.requests(), 20);
         assertGt(h.executions(), 10);
         assertGt(h.sales(), 3, "positions change hands");
