@@ -912,6 +912,23 @@ contract ForgePoolTest is ForgeFixture {
         vm.stopPrank();
     }
 
+    /// Lots past the age cap tie: the Tap draws the lower slot first.
+    function test_tapTiesGoToTheLowerSlot() public {
+        vm.startPrank(alice);
+        uint256 id = pool.open(1000e18); // slot 0: 990
+        skip(1 days);
+        pool.deposit(id, 100e18); // slot 1: 99
+        skip(P.HEAT_AGE_CAP + 1 days); // both capped
+        pool.poke(id); // lotAt reads at the last checkpoint
+        (, uint256 age0,,) = pool.lotAt(id, 0);
+        (, uint256 age1,,) = pool.lotAt(id, 1);
+        assertEq(age0, age1, "a tie");
+        pool.requestTap(id, 50e18);
+        assertEq(pool.lotOf(id, 0).amount, 940e18, "the lower slot drawn");
+        assertEq(pool.lotOf(id, 1).amount, 99e18, "the higher slot untouched");
+        vm.stopPrank();
+    }
+
     function test_tapExecutesWithoutHaircutOrStreakReset() public {
         vm.prank(alice);
         uint256 id = pool.open(1000e18);
