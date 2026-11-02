@@ -283,7 +283,7 @@ contract Boost is ReentrancyGuardTransient {
         external
         nonReentrant
     {
-        (,,, uint256 transfers) = _owned(pool, id, false); // opting out stays open while listed
+        (,,, uint256 transfers) = _owned(pool, id, false); // open while listed: keeper Stokes are locked
         if (tipBps == 0) {
             (interval, minSize) = (0, 0);
         } else if (

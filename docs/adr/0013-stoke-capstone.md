@@ -49,7 +49,7 @@ Status: accepted for this repository. Not audited, not deployed.
   - The settings end at a sale. Boost sees the pool's sale count change and clears them with the raise allowance and the plan.
   - `setKeeper` syncs that count before it writes, so a buyer's first settings are not cleared afterwards.
 - **While listed and around changes.**
-  - A listing locks keeper Stokes, but the owner can still opt out while listed.
+  - A listing locks keeper Stokes. The owner can still change or end the settings while listed: no keeper Stoke runs until the listing ends, and a sale clears them.
   - Changing the settings does not restart the interval. [P]
 
 ## Deploy blockers and provisional readings
