@@ -26,6 +26,7 @@ library ForgeView {
     uint256 internal constant TICKETS_SLOT = 13;
     uint256 internal constant SLICES_SLOT = 14;
     uint256 internal constant SEALS_SLOT = 15;
+    uint256 internal constant OWNERS_SLOT = 16;
 
     // ── raw reads ─────────────────────────────────────────────────────────
 
@@ -67,23 +68,47 @@ library ForgeView {
         p.coolingPausedSeconds = uint64(_bits(w1, 14, 8));
         p.ashfallForfeited = _bits(w1, 22, 1) != 0;
         p.openedAt = uint40(_bits(w1, 23, 5));
+        p.listing = uint32(_bits(w1, 28, 4));
         p.closedAt = uint40(_bits(w2, 0, 5));
         p.sealCount = uint8(_bits(w2, 5, 1));
+        p.transfers = uint32(_bits(w2, 6, 4));
+        p.founder = _bits(w2, 10, 1) != 0;
+        p.headStartActive = _bits(w2, 11, 1) != 0;
+        p.headStart = uint32(_bits(w2, 12, 4));
         p.plan = ForgePool.Plan(uint40(_bits(w3, 0, 5)), uint128(_bits(w3, 5, 16)), uint128(_bits(w4, 0, 16)));
     }
 
-    /// @notice The owner, closure and ordinary bonus: the first and third position words only.
+    /// @notice What Boost checks on every action, from the first three position words: the
+    ///         owner, closure, ordinary bonus, listing (odd while listed) and completed sales.
     function briefOf(ForgePool pool, uint256 id)
         internal
         view
-        returns (address owner, uint256 closedAt, uint256 ordinaryBonus)
+        returns (address owner, uint256 closedAt, uint256 ordinaryBonus, uint256 listing, uint256 transfers)
     {
-        uint256 base = _map(id, POSITIONS_SLOT);
-        bytes32[] memory s = new bytes32[](2);
-        (s[0], s[1]) = (bytes32(base), bytes32(base + 2));
-        bytes32[] memory w = pool.extsload(s);
+        bytes32[] memory w = _readN(pool, _map(id, POSITIONS_SLOT), 3);
         (owner, ordinaryBonus) = (address(uint160(uint256(w[0]))), _bits(uint256(w[0]), 30, 2));
-        closedAt = _bits(uint256(w[1]), 0, 5);
+        listing = _bits(uint256(w[1]), 28, 4);
+        (closedAt, transfers) = (_bits(uint256(w[2]), 0, 5), _bits(uint256(w[2]), 6, 4));
+    }
+
+    /// @notice The position's listing nonce: odd while listed on DEEDS.
+    function listingOf(ForgePool pool, uint256 id) internal view returns (uint32) {
+        return uint32(_bits(_read(pool, _map(id, POSITIONS_SLOT) + 1), 28, 4));
+    }
+
+    /// @notice The `n`th previous owner and the end of its tenure (n < transfers).
+    function ownershipAt(ForgePool pool, uint256 id, uint256 n) internal view returns (ForgePool.Ownership memory o) {
+        uint256 w = _read(pool, _map(n, _map(id, OWNERS_SLOT)));
+        (o.owner, o.until) = (address(uint160(w)), uint40(_bits(w, 20, 5)));
+    }
+
+    /// @notice When the current owner's tenure began: the last sale, or the opening. Evidence
+    ///         for Keystone's continuous-ownership test, together with `ownershipAt`.
+    function ownedSince(ForgePool pool, uint256 id) internal view returns (uint256) {
+        bytes32[] memory w = _readN(pool, _map(id, POSITIONS_SLOT) + 1, 2);
+        uint256 n = _bits(uint256(w[1]), 6, 4);
+        if (n == 0) return _bits(uint256(w[0]), 23, 5);
+        return ownershipAt(pool, id, n - 1).until;
     }
 
     function ownerOf(ForgePool pool, uint256 id) internal view returns (address) {

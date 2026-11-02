@@ -5,7 +5,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {ForgePool} from "../src/forge/ForgePool.sol";
 import {ForgeView} from "../src/forge/ForgeView.sol";
-import {Seal} from "../src/forge/ForgeMeasures.sol";
+import {Lot, Record, Seal} from "../src/forge/ForgeMeasures.sol";
 import {HeatMath} from "../src/libraries/HeatMath.sol";
 import {FurnaceParams as P} from "../src/generated/FurnaceParams.sol";
 import {ForgeVectors} from "./utils/ForgeVectors.sol";
@@ -16,8 +16,8 @@ using ForgeView for ForgePoolHarness;
 
 /// @dev Test-only subclass: jumps a position's ticket or record counter towards its limit.
 contract ForgePoolHarness is ForgePool {
-    constructor(IERC20 stakeToken, bool isLp, address feeCollector, address boost)
-        ForgePool(stakeToken, isLp, feeCollector, boost)
+    constructor(IERC20 stakeToken, bool isLp, address feeCollector, address boost, address deeds)
+        ForgePool(stakeToken, isLp, feeCollector, boost, deeds)
     {}
 
     function setNextTicketIdForTest(uint256 id, uint32 value) external {
@@ -27,6 +27,11 @@ contract ForgePoolHarness is ForgePool {
     function setRecordsForTest(uint256 id, uint256 slot, uint24 n) external {
         _lots[id][slot].records = n;
     }
+
+    function setPhantomForTest(uint256 id, bool founder, bool active, uint32 headStart) external {
+        Position storage p = _positions[id];
+        (p.founder, p.headStartActive, p.headStart) = (founder, active, headStart);
+    }
 }
 
 abstract contract ForgeFixture is ForgeVectors {
@@ -34,12 +39,13 @@ abstract contract ForgeFixture is ForgeVectors {
     ForgePool pool;
     address collector = makeAddr("feeRouter");
     address boost = makeAddr("boost");
+    address deeds = makeAddr("deeds");
 
     uint256 constant FUND = 1e30;
 
     function _deploy(bool lp) internal {
         token = new MockERC20("Receipt", "RCPT");
-        pool = new ForgePool(IERC20(address(token)), lp, collector, boost);
+        pool = new ForgePool(IERC20(address(token)), lp, collector, boost, deeds);
     }
 
     function _user(uint256 pos) internal pure returns (address) {
@@ -67,8 +73,16 @@ contract ForgePoolDifferentialTest is ForgeFixture {
         Poke,
         Collect,
         Seal,
-        Boost
+        Boost,
+        List,
+        Unlist,
+        Settle
     }
+
+    /// @dev Wallets beyond the openers, which only buy Deeds (scripts/forge-scenarios.ts BUYERS).
+    uint256 constant BUYERS = 2;
+    /// @dev The listing the market recorded at each position's last successful List.
+    mapping(uint256 pos => uint32) market;
 
     function setUp() public {
         _loadForgeVectors();
@@ -98,10 +112,20 @@ contract ForgePoolDifferentialTest is ForgeFixture {
     function test_scenario_random3() public { _replay("random3"); }
     function test_scenario_random4() public { _replay("random4"); }
     function test_scenario_random5() public { _replay("random5"); }
+    function test_scenario_deedCycle() public { _replay("deedCycle"); }
+    function test_scenario_deedExitEnds() public { _replay("deedExitEnds"); }
+    function test_scenario_deedRelist() public { _replay("deedRelist"); }
+    function test_scenario_deedLapseThenList() public { _replay("deedLapseThenList"); }
+    function test_scenario_deedSealTravels() public { _replay("deedSealTravels"); }
+    function test_scenario_deedPlanReset() public { _replay("deedPlanReset"); }
+    function test_scenario_deeds0() public { _replay("deeds0"); }
+    function test_scenario_deeds1() public { _replay("deeds1"); }
+    function test_scenario_deeds2() public { _replay("deeds2"); }
+    function test_scenario_deeds3() public { _replay("deeds3"); }
 
     /// Every generated scenario has a test above; a new one fails this until added.
     function test_everyScenarioIsReplayed() public view {
-        assertEq(vm.parseJsonStringArray(forgeJson, ".names").length, 24, "add a test_scenario_* for each new scenario");
+        assertEq(vm.parseJsonStringArray(forgeJson, ".names").length, 34, "add a test_scenario_* for each new scenario");
     }
 
     function test_provisionalConstantsMatchModel() public {
@@ -120,15 +144,17 @@ contract ForgePoolDifferentialTest is ForgeFixture {
         assertEq(a.length, hashes.length * 5, "layout");
 
         _deploy(lp);
-        for (uint256 k = 1; k <= positions; ++k) _fund(_user(k));
+        for (uint256 k = 1; k <= positions + BUYERS; ++k) _fund(_user(k));
 
         for (uint256 i; i < hashes.length; ++i) {
             (Kind kind, uint256 time, uint256 pos, uint256 arg, bool reverts) =
                 (Kind(a[5 * i]), a[5 * i + 1], a[5 * i + 2], a[5 * i + 3], a[5 * i + 4] == 1);
             vm.warp(time);
             string memory where = string.concat(name, " step ", vm.toString(i));
+            // The owner acts for its position; read before expectRevert claims the next call.
+            address actor = kind == Kind.Open ? _user(pos) : pool.ownerOf(pos);
             if (reverts) vm.expectRevert();
-            _act(kind, pos, arg);
+            _act(kind, pos, arg, actor, reverts);
 
             _probe(probe, i, time, where);
             assertEq(this.snapshot(positions), hashes[i], string.concat(where, ": state hash"));
@@ -145,7 +171,23 @@ contract ForgePoolDifferentialTest is ForgeFixture {
         assertEq(ss1, probe[6 * i + 5], string.concat(where, ": sealed S(1)"));
     }
 
-    function _act(Kind kind, uint256 pos, uint256 arg) internal {
+    function _act(Kind kind, uint256 pos, uint256 arg, address actor, bool reverts) internal {
+        if (kind == Kind.List) {
+            vm.prank(deeds);
+            if (reverts) pool.list(pos, _user(arg));
+            else market[pos] = pool.list(pos, _user(arg));
+            return;
+        }
+        if (kind == Kind.Settle) {
+            vm.prank(deeds);
+            pool.settle(pos, _user(arg), market[pos]);
+            return;
+        }
+        if (kind == Kind.Unlist) {
+            vm.prank(arg == 1 ? deeds : actor);
+            pool.unlist(pos);
+            return;
+        }
         if (kind == Kind.Collect) {
             vm.prank(collector);
             pool.collectFees();
@@ -156,7 +198,7 @@ contract ForgePoolDifferentialTest is ForgeFixture {
             pool.setOrdinaryBonus(pos, arg);
             return;
         }
-        vm.prank(_user(pos));
+        vm.prank(actor);
         if (kind == Kind.Open) assertEq(pool.open(arg), pos, "position id");
         else if (kind == Kind.Deposit) pool.deposit(pos, arg);
         else if (kind == Kind.Request) pool.requestCooling(pos, arg);
@@ -179,6 +221,7 @@ contract ForgePoolDifferentialTest is ForgeFixture {
             n = _pushSeal(w, n, id, m[2], m[3]);
             w[n++] = m[4]; // Ashfall weight from records; the model accrues it independently
             w[n++] = pool.positionOf(id).ordinaryBonus;
+            n = _pushOwnership(w, n, id);
             for (uint256 j; j < 32; ++j) {
                 n = _pushLot(w, n, id, j);
             }
@@ -199,7 +242,7 @@ contract ForgePoolDifferentialTest is ForgeFixture {
             token.balanceOf(collector)
         ];
         for (uint256 k; k < 11; ++k) w[n++] = tail[k];
-        for (uint256 id = 1; id <= positions; ++id) w[n++] = token.balanceOf(_user(id));
+        for (uint256 k = 1; k <= positions + BUYERS; ++k) w[n++] = token.balanceOf(_user(k));
         assembly ("memory-safe") {
             mstore(w, n)
         }
@@ -218,6 +261,20 @@ contract ForgePoolDifferentialTest is ForgeFixture {
         w[n++] = p.plan.requested;
         w[n++] = p.nextTicketId;
         return n;
+    }
+
+    /// @dev Owner wallet, listing, sales, tenure start and the latest previous owner (ADR 0011).
+    function _pushOwnership(uint256[] memory w, uint256 n, uint256 id) internal view returns (uint256) {
+        ForgePool.Position memory p = pool.positionOf(id);
+        n = _put4(w, n, _wallet(p.owner), p.listing, p.transfers, pool.ownedSince(id));
+        ForgePool.Ownership memory prev;
+        if (p.transfers != 0) prev = pool.ownershipAt(id, p.transfers - 1);
+        (w[n], w[n + 1]) = (_wallet(prev.owner), prev.until);
+        return n + 2;
+    }
+
+    function _wallet(address who) internal pure returns (uint256) {
+        return who == address(0) ? 0 : uint160(who) - 0x1000;
     }
 
     function _pushLot(uint256[] memory w, uint256 n, uint256 id, uint256 j) internal view returns (uint256) {
@@ -276,16 +333,18 @@ contract ForgePoolTest is ForgeFixture {
 
     function test_constructorRejectsZeroAddresses() public {
         vm.expectRevert(ForgePool.ZeroAddress.selector);
-        new ForgePool(IERC20(address(0)), true, collector, boost);
+        new ForgePool(IERC20(address(0)), true, collector, boost, deeds);
         vm.expectRevert(ForgePool.ZeroAddress.selector);
-        new ForgePool(IERC20(address(token)), true, address(0), boost);
+        new ForgePool(IERC20(address(token)), true, address(0), boost, deeds);
         vm.expectRevert(ForgePool.ZeroAddress.selector);
-        new ForgePool(IERC20(address(token)), true, collector, address(0));
+        new ForgePool(IERC20(address(token)), true, collector, address(0), deeds);
+        vm.expectRevert(ForgePool.ZeroAddress.selector);
+        new ForgePool(IERC20(address(token)), true, collector, boost, address(0));
     }
 
     function test_feeOnTransferTokenIsRejected() public {
         FeeOnTransferERC20 skim = new FeeOnTransferERC20();
-        ForgePool skimPool = new ForgePool(IERC20(address(skim)), false, collector, boost);
+        ForgePool skimPool = new ForgePool(IERC20(address(skim)), false, collector, boost, deeds);
         skim.mint(alice, 1e18);
         vm.startPrank(alice);
         skim.approve(address(skimPool), type(uint256).max);
@@ -387,7 +446,7 @@ contract ForgePoolTest is ForgeFixture {
 
     function test_emergencyExitIgnoresTheFeeCollector() public {
         // Exits never call the fee collector, so one that always reverts cannot block them.
-        ForgePool hostile = new ForgePool(IERC20(address(token)), true, address(new Reverter()), boost);
+        ForgePool hostile = new ForgePool(IERC20(address(token)), true, address(new Reverter()), boost, deeds);
         vm.startPrank(alice);
         token.approve(address(hostile), type(uint256).max);
         uint256 id = hostile.open(100e18);
@@ -401,7 +460,7 @@ contract ForgePoolTest is ForgeFixture {
     }
 
     function test_ticketIdsStopAtTheHeldByWidth() public {
-        ForgePoolHarness h = new ForgePoolHarness(IERC20(address(token)), true, collector, boost);
+        ForgePoolHarness h = new ForgePoolHarness(IERC20(address(token)), true, collector, boost, deeds);
         vm.startPrank(alice);
         token.approve(address(h), type(uint256).max);
         uint256 id = h.open(100e18);
@@ -498,7 +557,7 @@ contract ForgePoolTest is ForgeFixture {
     }
 
     function test_boostCannotExhaustTheRecordCounter() public {
-        ForgePoolHarness h = new ForgePoolHarness(IERC20(address(token)), true, collector, boost);
+        ForgePoolHarness h = new ForgePoolHarness(IERC20(address(token)), true, collector, boost, deeds);
         vm.startPrank(alice);
         token.approve(address(h), type(uint256).max);
         uint256 id = h.open(100e18);
@@ -697,6 +756,188 @@ contract ForgePoolTest is ForgeFixture {
         pool.executeWithdrawal(id, t);
         emit log_named_uint("executeWithdrawal (32 lots)", g - gasleft());
         vm.stopPrank();
+    }
+
+    // ── Deeds (ADR 0011) ──────────────────────────────────────────────────
+
+    function _listed(uint256 amount) internal returns (uint256 id, uint32 listing) {
+        vm.prank(alice);
+        id = pool.open(amount);
+        vm.prank(deeds);
+        listing = pool.list(id, alice);
+    }
+
+    function test_deedAccessAndPreconditions() public {
+        vm.prank(alice);
+        uint256 id = pool.open(100e18);
+        vm.expectRevert(ForgePool.NotDeeds.selector);
+        vm.prank(alice);
+        pool.list(id, alice); // only the market lists
+        vm.startPrank(deeds);
+        vm.expectRevert(abi.encodeWithSelector(ForgePool.NotOwner.selector, id));
+        pool.list(id, bob);
+        vm.expectRevert(abi.encodeWithSelector(ForgePool.UnknownPosition.selector, 9));
+        pool.list(9, alice);
+        vm.expectRevert(abi.encodeWithSelector(ForgePool.NotListed.selector, id));
+        pool.settle(id, bob, 0); // never listed
+        vm.expectRevert(abi.encodeWithSelector(ForgePool.NotListed.selector, id));
+        pool.unlist(id);
+        vm.stopPrank();
+        vm.prank(alice);
+        pool.requestCooling(id, 10e18);
+        vm.expectRevert(abi.encodeWithSelector(ForgePool.CoolingPending.selector, id));
+        vm.prank(deeds);
+        pool.list(id, alice);
+        vm.prank(alice);
+        pool.cancelCooling(id, 1);
+
+        vm.prank(deeds);
+        uint32 listing = pool.list(id, alice);
+        assertEq(listing, 1);
+        vm.startPrank(deeds);
+        vm.expectRevert(abi.encodeWithSelector(ForgePool.Listed.selector, id));
+        pool.list(id, alice);
+        vm.expectRevert(ForgePool.ZeroAddress.selector);
+        pool.settle(id, address(0), listing);
+        vm.expectRevert(abi.encodeWithSelector(ForgePool.NotListed.selector, id));
+        pool.settle(id, bob, listing + 1);
+        vm.expectRevert(abi.encodeWithSelector(ForgePool.NotListed.selector, id));
+        pool.settle(id, bob, listing - 1);
+        vm.stopPrank();
+        vm.expectRevert(ForgePool.NotDeeds.selector);
+        vm.prank(alice);
+        pool.settle(id, bob, listing);
+        vm.expectRevert(abi.encodeWithSelector(ForgePool.NotOwner.selector, id));
+        vm.prank(bob);
+        pool.unlist(id); // a stranger cannot end it
+    }
+
+    function test_deedListingLocksOwnerButNotExits() public {
+        (uint256 id, uint32 listing) = _listed(100e18);
+        vm.startPrank(alice);
+        vm.expectRevert(abi.encodeWithSelector(ForgePool.Listed.selector, id));
+        pool.deposit(id, 1e18);
+        vm.expectRevert(abi.encodeWithSelector(ForgePool.Listed.selector, id));
+        pool.requestCooling(id, 1e18);
+        vm.expectRevert(abi.encodeWithSelector(ForgePool.Listed.selector, id));
+        pool.seal(id, 0);
+        vm.stopPrank();
+        vm.prank(boost);
+        pool.setOrdinaryBonus(id, 10_000); // BOOST is not the owner: not locked
+        pool.poke(id);
+
+        // The owner ends the listing directly, without the market.
+        vm.expectEmit(address(pool));
+        emit ForgePool.ListingChanged(id, listing + 1);
+        vm.prank(alice);
+        pool.unlist(id);
+        vm.prank(alice);
+        pool.deposit(id, 1e18);
+
+        // Emergency exit from a listing ends it: the market's sale can no longer settle.
+        vm.prank(deeds);
+        listing = pool.list(id, alice);
+        vm.prank(alice);
+        pool.emergencyExit(id);
+        assertEq(pool.listingOf(id), listing + 1, "the exit ended the listing");
+        vm.expectRevert(abi.encodeWithSelector(ForgePool.NotListed.selector, id));
+        vm.prank(deeds);
+        pool.settle(id, bob, listing);
+    }
+
+    function test_deedSettlementCarriesEightyPercentOfCappedAge() public {
+        vm.prank(alice);
+        uint256 id = pool.open(200e18);
+        skip(700 days);
+        vm.prank(alice);
+        pool.deposit(id, 100e18); // a young lot
+        skip(30 days); // lot 0: 730 days, capped at 365; lot 1: 30 days
+        vm.prank(alice);
+        pool.requestCooling(id, 10e18); // starts a plan
+        skip(7 days); // the ticket lapses and returns
+        vm.prank(boost);
+        pool.setOrdinaryBonus(id, 20_000);
+        uint256 sellerStreak = pool.positionOf(id).streakStart;
+        vm.prank(deeds);
+        uint32 listing = pool.list(id, alice);
+        skip(1 days);
+
+        vm.expectEmit(address(pool));
+        emit ForgePool.DeedSettled(id, alice, bob);
+        vm.prank(deeds);
+        pool.settle(id, bob, listing);
+
+        ForgePool.Position memory p = pool.positionOf(id);
+        assertEq(p.owner, bob);
+        assertEq(p.streakStart, block.timestamp, "a new Streak");
+        assertEq(p.ordinaryBonus, 0, "Pyre stays with the seller");
+        assertEq(p.plan.start, 0, "a fresh cooling plan");
+        assertEq(p.listing, listing + 1, "the listing is spent");
+        assertEq(p.transfers, 1);
+        assertEq(pool.ownedSince(id), block.timestamp);
+        ForgePool.Ownership memory o = pool.ownershipAt(id, 0);
+        assertEq(o.owner, alice);
+        assertEq(o.until, block.timestamp);
+        for (uint256 j; j < 32; ++j) {
+            (uint256 amount, uint256 age,,) = pool.lotAt(id, j);
+            if (amount == 0) continue;
+            Lot memory head = pool.lotOf(id, j);
+            assertEq(head.since, block.timestamp, "every active segment restarts at the sale");
+            Record memory closed = pool.historyAt(id, j, head.records - 1);
+            assertEq(closed.streak, sellerStreak, "the closed segment keeps the seller's Streak");
+            assertEq(closed.ordinaryBonus, 20_000, "and the seller's bonus");
+            uint256 before = Math.min(uint256(closed.age) + (block.timestamp - closed.since), P.HEAT_AGE_CAP);
+            assertEq(age, HeatMath.deedAge(before), "80% of capped age");
+        }
+        // The spec's example: 730 days carry 292.
+        (, uint256 oldest,,) = pool.lotAt(id, 0);
+        assertEq(oldest, 292 days);
+
+        // The buyer owns every path now; the seller none.
+        vm.expectRevert(abi.encodeWithSelector(ForgePool.NotOwner.selector, id));
+        vm.prank(alice);
+        pool.deposit(id, 1e18);
+        _fund(bob);
+        vm.prank(bob);
+        pool.deposit(id, 1e18);
+    }
+
+    function test_deedSettlementClearsWalletBoundTerms() public {
+        ForgePoolHarness h = new ForgePoolHarness(IERC20(address(token)), true, collector, boost, deeds);
+        vm.prank(alice);
+        token.approve(address(h), type(uint256).max);
+        vm.prank(alice);
+        uint256 id = h.open(10e18);
+        h.setPhantomForTest(id, true, true, 3 days);
+        vm.prank(deeds);
+        uint32 listing = h.list(id, alice);
+        assertTrue(h.positionOf(id).founder && h.positionOf(id).headStartActive);
+        vm.prank(deeds);
+        h.settle(id, bob, listing);
+        ForgePool.Position memory p = h.positionOf(id);
+        assertFalse(p.founder, "First Flame stays with its wallet");
+        assertFalse(p.headStartActive, "the head start is never sold");
+        assertEq(p.headStart, 3 days, "its amount stays for the seller's records");
+    }
+
+    function test_gas_deedSettle() public {
+        vm.startPrank(alice);
+        uint256 id = pool.open(1e18);
+        for (uint256 i = 1; i < 32; ++i) {
+            skip(1 hours);
+            pool.deposit(id, 1e18);
+        }
+        vm.stopPrank();
+        skip(400 days);
+        vm.prank(deeds);
+        uint256 g = gasleft();
+        uint32 listing = pool.list(id, alice);
+        emit log_named_uint("list (32 lots)", g - gasleft());
+        skip(1 days);
+        vm.prank(deeds);
+        g = gasleft();
+        pool.settle(id, bob, listing);
+        emit log_named_uint("settle (32 lots)", g - gasleft());
     }
 }
 

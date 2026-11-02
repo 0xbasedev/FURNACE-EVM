@@ -36,7 +36,7 @@ abstract contract SettlementFixture is Test {
         bool[4] memory lp = [true, true, false, false];
         for (uint256 i; i < 4; ++i) {
             stake[i] = new MockERC20("Stake", "STK");
-            pools[i] = new ForgePool(IERC20(address(stake[i])), lp[i], feeRouter, boost);
+            pools[i] = new ForgePool(IERC20(address(stake[i])), lp[i], feeRouter, boost, makeAddr("deeds"));
         }
         uint256 nonce = vm.getNonce(address(this));
         address mantleAt = vm.computeCreateAddress(address(this), nonce + 1);
@@ -412,6 +412,39 @@ contract ForgeEmissionsTest is SettlementFixture {
         assertEq(emissions.executeClaim(0, 1), first, "only the snapshot is paid");
         assertEq(ember.balanceOf(alice), first);
         assertEq(emissions.unclaimed(0, 1), later);
+    }
+
+    /// A listed position's rewards stay with it (ADR 0011): no Claim while listed, and after the
+    /// sale the buyer claims everything credited before and after it.
+    function test_rewardsTravelWithTheDeed() public {
+        address deeds = pools[0].DEEDS();
+        vm.prank(alice);
+        uint256 id = pools[0].open(100e18);
+        skip(1 days);
+        _settle(0);
+        uint256 beforeSale = emissions.unclaimed(0, id);
+        assertGt(beforeSale, 0);
+        vm.prank(deeds);
+        uint32 listing = pools[0].list(id, alice);
+        vm.expectRevert(abi.encodeWithSelector(ForgeEmissions.Listed.selector, 0, id));
+        vm.prank(alice);
+        emissions.requestClaim(0, id);
+        skip(12 hours);
+        vm.prank(deeds);
+        pools[0].settle(id, bob, listing);
+        skip(12 hours);
+        _settle(1); // the epoch of the sale: credited to the position, so to its owner now
+        uint256 all = emissions.unclaimed(0, id);
+        assertGt(all, beforeSale);
+        vm.expectRevert(abi.encodeWithSelector(ForgeEmissions.NotOwner.selector, 0, id));
+        vm.prank(alice);
+        emissions.requestClaim(0, id);
+        vm.prank(bob);
+        emissions.requestClaim(0, id);
+        skip(P.CLAIM_SECONDS);
+        vm.prank(bob);
+        assertEq(emissions.executeClaim(0, id), all);
+        assertEq(ember.balanceOf(bob), all);
     }
 
     function test_settlementNeverBlocksAnExit() public {

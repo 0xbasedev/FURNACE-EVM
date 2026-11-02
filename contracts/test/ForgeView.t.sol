@@ -17,10 +17,23 @@ using ForgeView for ForgePool;
 /// @dev The pool's own storage, returned by Solidity's accessors, and the views ForgePool
 ///      used to define itself (before ADR 0010): the reference ForgeView must reproduce.
 contract ForgePoolViewHarness is ForgePool {
-    constructor(IERC20 token, address collector, address boost) ForgePool(token, true, collector, boost) {}
+    constructor(IERC20 token, address collector, address boost, address deeds)
+        ForgePool(token, true, collector, boost, deeds)
+    {}
 
     function rawPosition(uint256 id) external view returns (Position memory) {
         return _positions[id];
+    }
+
+    function rawOwnership(uint256 id, uint256 n) external view returns (Ownership memory) {
+        return _owners[id][n];
+    }
+
+    /// Kindling's phantom terms are not built (ADR 0011); this exercises their decoding and
+    /// their clearing at settlement.
+    function setPhantomForTest(uint256 id, bool founder, bool active, uint32 headStart) external {
+        Position storage p = _positions[id];
+        (p.founder, p.headStartActive, p.headStart) = (founder, active, headStart);
     }
 
     function rawLot(uint256 id, uint256 j) external view returns (Lot memory) {
@@ -89,7 +102,7 @@ contract ForgeViewTest is Test {
     function setUp() public {
         vm.warp(1_700_000_000);
         MockERC20 token = new MockERC20("Receipt", "RCPT");
-        pool = new ForgePoolViewHarness(IERC20(address(token)), makeAddr("feeRouter"), makeAddr("boost"));
+        pool = new ForgePoolViewHarness(IERC20(address(token)), makeAddr("feeRouter"), makeAddr("boost"), makeAddr("deeds"));
         handler = new ForgeHandler(pool, token, makeAddr("feeRouter"));
         targetContract(address(handler));
     }
@@ -100,6 +113,8 @@ contract ForgeViewTest is Test {
             uint256 id = handler.ids(i);
             assertEq(abi.encode(p.positionOf(id)), abi.encode(pool.rawPosition(id)), "position");
             assertEq(p.historyMaskOf(id), pool.rawPosition(id).historyMask, "history mask");
+            assertEq(p.listingOf(id), pool.rawPosition(id).listing, "listing");
+            _ownership(p, id);
             assertEq(p.custodyOf(id), pool.rawCustody(id), "custody");
             assertEq(p.dueLapses(id), pool.rawDue(id), "due lapses");
             assertEq(abi.encode(p.pendingTickets(id)), abi.encode(pool.rawPending(id)), "pending");
@@ -129,6 +144,32 @@ contract ForgeViewTest is Test {
         assertEq(p.dueLapses(id), pool.rawDue(id));
     }
 
+    /// Every Deed field decodes at a non-zero value: a listed position with phantom terms, then
+    /// a sale (which clears them) and a second listing.
+    function test_deedFieldsDecode() public {
+        ForgePool p = ForgePool(address(pool));
+        uint256 id = handler.ids(0);
+        // Each flag alone, between non-zero neighbours, so no offset can decode by coincidence.
+        pool.setPhantomForTest(id, false, true, 0xabcdef12);
+        assertEq(abi.encode(p.positionOf(id)), abi.encode(pool.rawPosition(id)), "head start only");
+        pool.setPhantomForTest(id, true, false, 0xabcdef13);
+        handler.list(0, 1);
+        ForgePool.Position memory raw = pool.rawPosition(id);
+        assertTrue(raw.founder && !raw.headStartActive && raw.headStart == 0xabcdef13 && raw.listing == 1, "set up");
+        assertEq(abi.encode(p.positionOf(id)), abi.encode(raw), "listed, founder only");
+        pool.setPhantomForTest(id, true, true, 0xabcdef13);
+        vm.warp(block.timestamp + 3 days);
+        handler.settle(0, 1);
+        handler.list(0, 1);
+        raw = pool.rawPosition(id);
+        assertTrue(!raw.founder && !raw.headStartActive && raw.headStart == 0xabcdef13, "sale clears the flags only");
+        assertTrue(raw.transfers == 1 && raw.listing == 3, "sold, relisted");
+        assertEq(abi.encode(p.positionOf(id)), abi.encode(raw), "sold");
+        assertEq(abi.encode(p.ownershipAt(id, 0)), abi.encode(pool.rawOwnership(id, 0)), "log");
+        assertEq(p.ownedSince(id), block.timestamp, "tenure");
+        assertEq(p.listingOf(id), 3, "listing");
+    }
+
     /// The lens is the same library behind external calls.
     function test_lensMatchesTheLibrary() public {
         ForgeLens lens = new ForgeLens();
@@ -142,6 +183,13 @@ contract ForgeViewTest is Test {
         assertEq(abi.encode(lens.ticketOf(p, id, 1)), abi.encode(p.ticketOf(id, 1)));
         assertEq(lens.occupancyLength(p), p.occupancyLength());
         assertEq(lens.lapseQueueLength(p), p.lapseQueueLength());
+        vm.warp(block.timestamp + 2 days); // the 10% ticket lapses; listing syncs it first
+        handler.list(0, 1);
+        handler.settle(0, 2);
+        assertEq(lens.listingOf(p, id), p.listingOf(id));
+        assertEq(abi.encode(lens.ownershipAt(p, id, 0)), abi.encode(p.ownershipAt(id, 0)));
+        assertEq(lens.ownedSince(p, id), p.ownedSince(id));
+        assertEq(p.positionOf(id).transfers, 1, "the sale happened");
     }
 
     function _lots(ForgePool p, uint256 id) internal view {
@@ -161,6 +209,19 @@ contract ForgeViewTest is Test {
             if (pool.rawPosition(id).usedMask & (1 << j) != 0) ++used;
         }
         assertEq(p.lotCount(id), used, "lot count");
+    }
+
+    function _ownership(ForgePool p, uint256 id) internal view {
+        ForgePool.Position memory raw = pool.rawPosition(id);
+        uint256 since = raw.openedAt;
+        for (uint256 k; k < raw.transfers; ++k) {
+            assertEq(abi.encode(p.ownershipAt(id, k)), abi.encode(pool.rawOwnership(id, k)), "ownership");
+            since = pool.rawOwnership(id, k).until;
+        }
+        assertEq(p.ownedSince(id), since, "owned since");
+        (address owner, uint256 closedAt, uint256 bonus, uint256 listing, uint256 transfers) = p.briefOf(id);
+        assertEq(abi.encode(owner, closedAt, bonus, listing, transfers),
+            abi.encode(raw.owner, raw.closedAt, raw.ordinaryBonus, raw.listing, raw.transfers), "brief");
     }
 
     function _tickets(ForgePool p, uint256 id) internal view {

@@ -206,6 +206,7 @@ contract ForgeEmissions is ReentrancyGuardTransient {
     error SealNotEnded(uint256 pool, uint256 id, uint256 seal);
     error NothingToSettle(uint256 pool, uint256 id, uint256 seal);
     error NotConsumer(address caller);
+    error Listed(uint256 pool, uint256 id);
 
     constructor(
         IMantleDistribution mantle,
@@ -553,9 +554,12 @@ contract ForgeEmissions is ReentrancyGuardTransient {
     // ── claims ────────────────────────────────────────────────────────────
 
     /// @notice Snapshot the position's credited rewards and start the 24h timer.
-    ///         Rewards credited later are not added to this claim.
+    ///         Rewards credited later are not added to this claim. A listed position's
+    ///         rewards stay with it for the sale (ADR 0011).
     function requestClaim(uint256 pool, uint256 id) external nonReentrant returns (uint256 amount) {
-        _onlyOwner(pool, id);
+        (address owner,,, uint256 listing,) = poolAt(pool).briefOf(id);
+        if (owner != msg.sender) revert NotOwner(pool, id);
+        if (listing & 1 != 0) revert Listed(pool, id);
         Claim storage c = _claims[pool][id];
         if (c.amount != 0) revert ClaimPending(pool, id);
         amount = unclaimed[pool][id];

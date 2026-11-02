@@ -11,10 +11,15 @@ export const FUND = 10n ** 30n;
 const E = 10n ** 18n;
 const HOUR = 3_600n;
 
-export enum Kind { Open, Deposit, Request, Execute, Cancel, Emergency, Poke, Collect, Seal, Boost }
+export enum Kind { Open, Deposit, Request, Execute, Cancel, Emergency, Poke, Collect, Seal, Boost, List, Unlist, Settle }
+/** List: arg = the seller wallet DEEDS names. Unlist: arg 0 = the owner, 1 = DEEDS. Settle: arg =
+ *  the buyer wallet; the listing named is the one the market recorded at its last List. */
 export interface Action { kind: Kind; time: bigint; pos: number; arg: bigint }
 
-interface Sim { model: ForgeModel; users: bigint[]; collector: bigint }
+/** Wallets beyond the openers, which only ever buy Deeds. Wallet w is `_user(w)` onchain. */
+export const BUYERS = 2;
+/** `users`: token balance per wallet; `market`: the listing the market holds per position. */
+interface Sim { model: ForgeModel; users: bigint[]; collector: bigint; market: number[] }
 
 /** Word layout mirrored by contracts/test/ForgePool.t.sol::_snapshot. */
 function words(s: Sim, positions: number, now: bigint): bigint[] {
@@ -22,13 +27,15 @@ function words(s: Sim, positions: number, now: bigint): bigint[] {
   const out: bigint[] = [];
   for (let id = 1; id <= positions; id++) {
     const p = m.positions[id - 1];
-    if (!p) { out.push(...Array(26 + 5 * MAX_LOTS).fill(0n)); continue; }
+    if (!p) { out.push(...Array(32 + 5 * MAX_LOTS).fill(0n)); continue; }
     out.push(p.S, p.W, BigInt(p.lotCount), BigInt(p.reserved), BigInt(p.pending.length), p.paused, p.streakStart, p.last,
       p.closed ? 1n : 0n, p.ashfallForfeited ? 1n : 0n, p.plan?.start ?? 0n, p.plan?.reference ?? 0n, p.plan?.requested ?? 0n, BigInt(p.nextTicket - 1));
     const seal = p.seals[p.seals.length - 1];
     out.push(p.SS, p.SW, BigInt(p.seals.length), BigInt(seal?.track ?? 0), BigInt(seal?.status ?? SealStatus.None),
       seal?.start ?? 0n, seal?.pausedAt ?? 0n, seal?.pausedSeconds ?? 0n, seal?.endedAt ?? 0n, BigInt(seal?.cohort ?? 0));
     out.push(p.Q / RAY, p.bonus); // Ashfall weight, accrued independently; the contract's comes from records
+    const prev = p.owners[p.owners.length - 1];
+    out.push(BigInt(p.owner), BigInt(p.listing), BigInt(p.owners.length), m.ownedSince(p), BigInt(prev?.owner ?? 0), prev?.until ?? 0n);
     p.lots.forEach((l, j) => out.push(l.amount, l.age, l.part, BigInt(l.heldBy), BigInt(p.heads.get(j)?.seal ?? 0)));
     for (const tid of p.pending) {
       const t = p.tickets.get(tid)!;
@@ -39,7 +46,7 @@ function words(s: Sim, positions: number, now: bigint): bigint[] {
   const queued = m.positions.reduce((n, p) => n + p.pending.filter((id) => !p.tickets.get(id)!.poolApplied).length, 0);
   out.push(m.active, m.frozen, m.occupiedAt(now), BigInt(m.occ.length), m.fees.deposit, m.fees.withdraw, m.fees.emergency,
     m.active + m.frozen + m.fees.deposit + m.fees.withdraw + m.fees.emergency, BigInt(queued), BigInt(m.positions.length), s.collector);
-  for (let id = 1; id <= positions; id++) out.push(s.users[id - 1]);
+  for (const u of s.users) out.push(u);
   return out;
 }
 
@@ -50,21 +57,27 @@ const hashWords = (ws: bigint[]) => '0x' + bytesToHex(keccak_256(Uint8Array.from
 
 function apply(s: Sim, a: Action): { sim: Sim; reverted: boolean } {
   const u = [...s.users];
+  const market = [...s.market];
+  // The actor of an owner action is the position's owner wallet; payouts go to it.
+  const owner = s.model.positions[a.pos - 1]?.owner ?? a.pos;
   const r = run(s.model, (m) => {
     switch (a.kind) {
       case Kind.Open: {
         if (a.pos !== m.positions.length + 1) throw new Error('scenario: Open must create the next position id');
         m.open(a.arg, a.time); u[a.pos - 1] -= a.arg; return;
       }
-      case Kind.Deposit: m.deposit(a.pos, a.arg, a.time); u[a.pos - 1] -= a.arg; return;
+      case Kind.Deposit: m.deposit(a.pos, a.arg, a.time); u[owner - 1] -= a.arg; return;
       case Kind.Request: m.request(a.pos, a.arg, a.time); return;
-      case Kind.Execute: u[a.pos - 1] += m.execute(a.pos, Number(a.arg), a.time); return;
+      case Kind.Execute: u[owner - 1] += m.execute(a.pos, Number(a.arg), a.time); return;
       case Kind.Cancel: m.cancel(a.pos, Number(a.arg), a.time); return;
-      case Kind.Emergency: u[a.pos - 1] += m.emergency(a.pos, a.time); return;
+      case Kind.Emergency: u[owner - 1] += m.emergency(a.pos, a.time); return;
       case Kind.Poke: m.poke(a.pos, a.time); return;
       case Kind.Collect: return;
       case Kind.Seal: m.seal(a.pos, Number(a.arg), a.time); return;
       case Kind.Boost: m.setBonus(a.pos, a.arg, a.time); return;
+      case Kind.List: market[a.pos - 1] = m.list(a.pos, Number(a.arg), a.time); return;
+      case Kind.Unlist: m.unlist(a.pos, a.arg === 1n ? 'deeds' : owner); return;
+      case Kind.Settle: m.settle(a.pos, Number(a.arg), market[a.pos - 1] ?? 0, a.time); return;
     }
   });
   if (r.reverted) return { sim: s, reverted: true };
@@ -74,21 +87,22 @@ function apply(s: Sim, a: Action): { sim: Sim; reverted: boolean } {
     collector += f.deposit + f.withdraw + f.emergency;
     r.model.fees = { deposit: 0n, withdraw: 0n, emergency: 0n };
   }
-  return { sim: { model: r.model, users: u, collector }, reverted: false };
+  return { sim: { model: r.model, users: u, collector, market }, reverted: false };
 }
 
 interface Scenario { name: string; lp: boolean; positions: number; actions: Action[] }
 
 function record(sc: Scenario) {
-  let sim: Sim = { model: new ForgeModel(sc.lp), users: Array(sc.positions).fill(FUND), collector: 0n };
+  let sim: Sim = { model: new ForgeModel(sc.lp), users: Array(sc.positions + BUYERS).fill(FUND), collector: 0n, market: [] };
   const flat: string[] = [], hash: string[] = [], probe: string[] = [];
-  let reverts = 0, boosted = 0;
+  let reverts = 0, boosted = 0, sold = 0;
   sc.actions.forEach((a, i) => { if (i > 0 && a.time < sc.actions[i - 1].time) throw new Error(`${sc.name}: time runs backwards at step ${i}`); });
   for (const [i, a] of sc.actions.entries()) {
     let r: ReturnType<typeof apply>;
     try { r = apply(sim, a); } catch (e) { throw new Error(`${sc.name} step ${i} (${Kind[a.kind]} pos ${a.pos} arg ${a.arg} t ${a.time})`, { cause: e }); }
     sim = r.sim;
     if (r.reverted) reverts++;
+    else if (a.kind === Kind.Settle) sold++;
     if (sim.model.positions.some((p) => p.bonus > 0n && p.lots.some((l) => l.amount > 0n))) boosted++;
     flat.push(String(a.kind), String(a.time), String(a.pos), String(a.arg), r.reverted ? '1' : '0');
     hash.push(hashWords(words(sim, sc.positions, a.time)));
@@ -96,7 +110,7 @@ function record(sc: Scenario) {
     probe.push(...[p1?.S ?? 0n, p1?.W ?? 0n, m.active, m.frozen, m.occupiedAt(a.time), p1?.SS ?? 0n].map(String));
   }
   const ashfall = sim.model.positions.filter((p) => p.Q > 0n).length;
-  return { lp: sc.lp, positions: sc.positions, steps: sc.actions.length, reverts, ashfall, boosted, actions: flat, hash, probe };
+  return { lp: sc.lp, positions: sc.positions, steps: sc.actions.length, reverts, ashfall, boosted, sold, actions: flat, hash, probe };
 }
 
 // ── scripted scenarios ───────────────────────────────────────────────────
@@ -297,6 +311,80 @@ scripted.push(
     A(Kind.Deposit, at(105n), 2, 10n * E), // custody was 0: the bonus drops to 0
     A(Kind.Poke, at(140n), 2),
   ] },
+  // ── Deeds (ADR 0011). Wallets 1..positions open; the next BUYERS wallets only buy. ──
+  { name: 'deedCycle', lp: true, positions: 2, actions: [
+    A(Kind.Open, at(0n), 1, 1000n * E),
+    A(Kind.Open, at(1n), 2, 200n * E),
+    A(Kind.Deposit, at(10n), 1, 500n * E),
+    A(Kind.Boost, at(40n), 1, 30_000n),
+    A(Kind.List, at(50n), 1, 1n),
+    A(Kind.Deposit, at(50n, 1n), 1, 10n * E), // locked: Listed
+    A(Kind.Request, at(50n, 1n), 1, 10n * E), // locked
+    A(Kind.Seal, at(50n, 1n), 1, 0n), // locked
+    A(Kind.Boost, at(50n, 2n), 1, 40_000n), // BOOST is not locked
+    A(Kind.List, at(50n, 3n), 1, 1n), // already listed
+    A(Kind.Settle, at(51n), 1, 3n), // wallet 3 buys: ages × 0.8, new Streak, bonus 0
+    A(Kind.Settle, at(51n, 1n), 1, 4n), // the market's listing is spent: reverts
+    A(Kind.Deposit, at(52n), 1, 100n * E), // the buyer's own deposit
+    A(Kind.Request, at(53n), 1, 100n * E),
+    A(Kind.Execute, at(53n, 6n), 1, 1n), // paid to wallet 3
+    A(Kind.Poke, at(90n), 1), // the buyer's Streak passes 30 days: Ashfall weight again
+    A(Kind.Poke, at(90n), 2),
+  ] },
+  { name: 'deedExitEnds', lp: false, positions: 1, actions: [
+    A(Kind.Open, at(0n), 1, 100n * E),
+    A(Kind.List, at(10n), 1, 1n),
+    A(Kind.Emergency, at(11n), 1), // never blocked; the listing ends
+    A(Kind.Settle, at(12n), 1, 2n), // reverts: not listed
+    A(Kind.Unlist, at(12n), 1, 0n), // reverts: not listed
+    A(Kind.List, at(13n), 1, 1n), // reverts: closed
+  ] },
+  { name: 'deedRelist', lp: true, positions: 1, actions: [
+    A(Kind.Open, at(0n), 1, 300n * E),
+    A(Kind.List, at(5n), 1, 2n), // wallet 2 is not the owner
+    A(Kind.List, at(5n, 1n), 1, 1n), // listing 1
+    A(Kind.Unlist, at(6n), 1, 0n), // by the owner: 2
+    A(Kind.Settle, at(6n, 1n), 1, 2n), // the market holds listing 1: stale
+    A(Kind.List, at(7n), 1, 1n), // 3
+    A(Kind.Unlist, at(7n, 1n), 1, 1n), // by DEEDS: 4
+    A(Kind.List, at(8n), 1, 1n), // 5
+    A(Kind.Settle, at(9n), 1, 2n), // wallet 2 buys
+    A(Kind.List, at(10n), 1, 1n), // the old seller: not the owner
+    A(Kind.List, at(10n, 1n), 1, 2n), // 7
+    A(Kind.Unlist, at(10n, 2n), 1, 0n), // the new owner unlists: 8
+    A(Kind.List, at(11n), 1, 2n), // 9
+    A(Kind.Settle, at(40n), 1, 3n), // wallet 3 buys: two log entries
+    A(Kind.Poke, at(80n), 1),
+  ] },
+  { name: 'deedLapseThenList', lp: true, positions: 1, actions: [
+    A(Kind.Open, at(0n), 1, 1000n * E),
+    A(Kind.Request, at(1n), 1, 99n * E), // ≤10%: 6h timer, lapses at day 2 + 6h
+    A(Kind.List, at(1n, 1n), 1, 1n), // a ticket is pending
+    A(Kind.List, at(3n), 1, 1n), // the sync resolves the lapse first (back-dated): listed
+    A(Kind.Settle, at(4n), 1, 2n),
+    A(Kind.List, at(5n), 1, 2n),
+    A(Kind.Settle, at(6n), 1, 2n), // a sale to its own seller is the market's business
+    A(Kind.Poke, at(40n), 1),
+  ] },
+  { name: 'deedSealTravels', lp: true, positions: 1, actions: [
+    A(Kind.Open, at(0n), 1, 1000n * E),
+    A(Kind.Seal, at(0n, 1n), 1, 0n), // 30-day track
+    A(Kind.List, at(5n), 1, 1n),
+    A(Kind.Settle, at(6n), 1, 2n), // the Seal and its tags travel
+    A(Kind.Poke, at(31n), 1), // completes under the buyer, back-dated
+    A(Kind.Request, at(32n), 1, 100n * E),
+    A(Kind.Poke, at(40n), 1),
+  ] },
+  { name: 'deedPlanReset', lp: true, positions: 1, actions: [
+    A(Kind.Open, at(0n), 1, 1000n * E),
+    A(Kind.Request, at(1n), 1, net(1000n * E)), // the whole plan quota
+    A(Kind.Cancel, at(1n, 1n), 1, 1n), // the quota stays consumed
+    A(Kind.Request, at(2n), 1, 10n * E), // PlanQuotaExceeded
+    A(Kind.List, at(2n, 1n), 1, 1n),
+    A(Kind.Settle, at(3n), 1, 2n), // the buyer starts a fresh plan
+    A(Kind.Request, at(3n, 1n), 1, 10n * E),
+    A(Kind.Poke, at(10n), 1),
+  ] },
 );
 // Capacity edges: 16 young lots may split (16 + 16 = 32); 17 cannot, but 100% always can.
 for (const n of [16, 17]) {
@@ -318,12 +406,14 @@ for (const n of [16, 17]) {
 }
 
 // ── seeded random scenarios ──────────────────────────────────────────────
-function randomScenario(name: string, seed: bigint, steps: number, lp: boolean): Scenario {
+/** `deeds` adds List, Unlist and Settle actions; without it the stream of draws, and so every
+ *  action, is exactly the walk ADR 0010's mutations were checked against. */
+function randomScenario(name: string, seed: bigint, steps: number, lp: boolean, deeds = false): Scenario {
   let x = seed;
   const rnd = (n: bigint) => { x = (x * 6364136223846793005n + 1442695040888963407n) & ((1n << 64n) - 1n); return (x >> 11n) % n; };
   const positions = 3;
   const actions: Action[] = [];
-  let sim: Sim = { model: new ForgeModel(lp), users: Array(positions).fill(FUND), collector: 0n };
+  let sim: Sim = { model: new ForgeModel(lp), users: Array(positions + BUYERS).fill(FUND), collector: 0n, market: [] };
   let now = T0;
   const gaps = [0n, 0n, 1n, 59n, HOUR, HOUR, 6n * HOUR - 1n, 6n * HOUR, 12n * HOUR, DAY, WINDOW + 1n, 3n * DAY, 7n * DAY, 30n * DAY, HORIZON, 200n * DAY];
   for (let i = 0; i < steps; i++) {
@@ -333,7 +423,16 @@ function randomScenario(name: string, seed: bigint, steps: number, lp: boolean):
     const pos = opened === 0 ? 1 : Number(rnd(BigInt(Math.min(opened + 1, positions)))) + 1;
     let a: Action;
     if (pos > opened) a = A(Kind.Open, now, opened + 1, rnd(1000n * E) + MIN_STAKE_LP * 2n);
-    else {
+    else if (deeds && rnd(100n) < 20n) {
+      // Listed: mostly a sale to any wallet (the seller included), else an unlist by the owner
+      // or DEEDS. Not listed: mostly a listing (now and then for the wrong seller), else a
+      // stale sale or unlist, which revert.
+      const p = m.positions[pos - 1];
+      const d = Number(rnd(100n)), wallets = BigInt(positions + BUYERS);
+      if (p.listing % 2 === 1) a = d < 80 ? A(Kind.Settle, now, pos, rnd(wallets) + 1n) : A(Kind.Unlist, now, pos, rnd(2n));
+      else if (d < 85) a = A(Kind.List, now, pos, rnd(10n) === 0n ? rnd(wallets) + 1n : BigInt(p.owner));
+      else a = d < 93 ? A(Kind.Settle, now, pos, rnd(wallets) + 1n) : A(Kind.Unlist, now, pos, rnd(2n));
+    } else {
       const p = m.positions[pos - 1];
       const active = p.lots.reduce((n, l) => n + l.amount, 0n);
       const live = p.pending.map((id) => p.tickets.get(id)!).filter((t) => t.maturity + WINDOW > now);
@@ -370,6 +469,10 @@ const random = [
   randomScenario('random3', 0xc001n, 120, true),
   randomScenario('random4', 0x5eedn, 120, false),
   randomScenario('random5', 0xbeefn, 150, true),
+  randomScenario('deeds0', 0xdeedn, 120, true, true),
+  randomScenario('deeds1', 0xd00dn, 120, false, true),
+  randomScenario('deeds2', 0x5a1en, 150, true, true),
+  randomScenario('deeds3', 0xb1dn, 150, false, true),
 ];
 
 export function forgeVectors() {
@@ -380,6 +483,8 @@ export function forgeVectors() {
   if (Object.values(scenarios).filter((x) => x.ashfall > 0).length < 12) throw new Error('too few scenarios with an Ashfall weight');
   // Nor the ordinary bonus: boosted active lots in the scripted Boost scenarios and most random ones.
   if (Object.values(scenarios).filter((x) => x.boosted > 0).length < 6) throw new Error('too few scenarios with a boosted lot');
+  // Nor the Deeds: every Deed walk completes sales.
+  for (const n of ['deeds0', 'deeds1', 'deeds2', 'deeds3']) if (scenarios[n].sold < 3) throw new Error(`${n}: too few sales`);
   return {
     maxPendingTickets: MAX_PENDING, maxLots: MAX_LOTS, tiers: TIERS.map((t) => [String(t.maxPct), String(t.seconds)]),
     fund: String(FUND), names: all.map((s) => s.name), scenarios,

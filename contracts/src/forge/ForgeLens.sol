@@ -79,4 +79,16 @@ contract ForgeLens {
     function lapseQueueLength(ForgePool pool) external view returns (uint256) {
         return pool.lapseQueueLength();
     }
+
+    function listingOf(ForgePool pool, uint256 id) external view returns (uint32) {
+        return pool.listingOf(id);
+    }
+
+    function ownershipAt(ForgePool pool, uint256 id, uint256 n) external view returns (ForgePool.Ownership memory) {
+        return pool.ownershipAt(id, n);
+    }
+
+    function ownedSince(ForgePool pool, uint256 id) external view returns (uint256) {
+        return pool.ownedSince(id);
+    }
 }

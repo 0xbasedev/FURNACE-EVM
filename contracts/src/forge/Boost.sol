@@ -45,6 +45,11 @@ interface IMantleBurn {
 ///         Raising a bonus reads the valuation; nothing else does. A withdrawal lowers the bonus
 ///         by the remaining Capstone fraction and pays out without any price, so an unavailable
 ///         valuation can never hold Capstone EMBER. The pools never call Boost.
+///
+///         Deeds (ADR 0011): the Capstone travels with its position. While the position is listed
+///         its owner can neither deposit nor request a withdrawal. After a sale the new owner
+///         starts with a fresh raise allowance and a fresh withdrawal plan; the pool has zeroed
+///         the bonus, and the first raise restores it with the new owner's Pyre.
 contract Boost is ReentrancyGuardTransient {
     using SafeERC20 for IERC20;
 
@@ -60,6 +65,7 @@ contract Boost is ReentrancyGuardTransient {
         uint128 capstone;
         uint40 ownerRaiseAt;
         uint40 publicRaiseAt;
+        uint32 transfers; // the pool's sale count when this owner's allowance and plan began
         uint40 planStart;
         uint128 planReference;
         uint128 planRequested;
@@ -105,6 +111,7 @@ contract Boost is ReentrancyGuardTransient {
     error NotMatured(uint256 maturity);
     error RaiseTooSoon(uint256 readyAt);
     error BelowMinimum(uint256 amount);
+    error Listed(uint256 pool, uint256 id);
 
     /// @dev Deployed after the pools, the Mantle and ForgeEmissions, at the address each of
     ///      them was given; the constructor checks every wire.
@@ -131,7 +138,7 @@ contract Boost is ReentrancyGuardTransient {
     /// @notice The owner adds EMBER to an open position's Capstone (1% fee, burned). The bonus
     ///         is then raised from the valuation if it is available; the deposit stands either way.
     function deposit(uint256 pool, uint256 id, uint256 amount) external nonReentrant {
-        (ForgePool p, uint256 closedAt,) = _owned(pool, id);
+        (ForgePool p, uint256 closedAt,, uint256 transfers) = _owned(pool, id, true);
         if (closedAt != 0) revert Closed(pool, id);
         if (amount == 0) revert ZeroAmount();
         EMBER.safeTransferFrom(msg.sender, address(this), amount);
@@ -139,7 +146,7 @@ contract Boost is ReentrancyGuardTransient {
         if (fee == 0) revert BelowMinimum(amount); // every raise by deposit pays a burned fee
         feesToBurn += fee;
         Account storage a = _accounts[pool][id];
-        _settle(pool, id, a);
+        _settle(pool, id, a, transfers);
         a.capstone += uint128(amount - fee);
         emit CapstoneDeposited(pool, id, amount - fee, fee);
         _tryRaise(pool, id, p, a, msg.sender);
@@ -151,11 +158,11 @@ contract Boost is ReentrancyGuardTransient {
         ForgePool p = _pool(pool);
         amount = EMISSIONS.takeCapstone(pool, id);
         if (amount == 0) return 0;
+        (address owner, uint256 closedAt,,, uint256 transfers) = p.briefOf(id);
         Account storage a = _accounts[pool][id];
-        _settle(pool, id, a);
+        _settle(pool, id, a, transfers);
         a.capstone += uint128(amount);
         emit EscrowClaimed(pool, id, amount);
-        (address owner, uint256 closedAt,) = p.briefOf(id);
         if (closedAt == 0) _tryRaise(pool, id, p, a, owner);
     }
 
@@ -163,9 +170,9 @@ contract Boost is ReentrancyGuardTransient {
     ///         `sameAsWithdraw`). The amount stops counting at once: the bonus is scaled by the
     ///         remaining Capstone fraction, without any price.
     function requestWithdraw(uint256 pool, uint256 id, uint256 amount) external nonReentrant returns (uint256 maturity) {
-        (ForgePool p,, uint256 current) = _owned(pool, id);
+        (ForgePool p,, uint256 current, uint256 transfers) = _owned(pool, id, true);
         Account storage a = _accounts[pool][id];
-        _settle(pool, id, a);
+        _settle(pool, id, a, transfers);
         if (a.pending.amount != 0) revert WithdrawPending(pool, id);
         if (amount == 0) revert ZeroAmount();
         uint256 before = a.capstone;
@@ -179,9 +186,9 @@ contract Boost is ReentrancyGuardTransient {
 
     /// @notice The owner takes a matured withdrawal inside its 24h window (1% fee, burned).
     function executeWithdraw(uint256 pool, uint256 id) external nonReentrant returns (uint256 net) {
-        _owned(pool, id);
+        (,,, uint256 transfers) = _owned(pool, id, false);
         Account storage a = _accounts[pool][id];
-        _settle(pool, id, a);
+        _settle(pool, id, a, transfers);
         Ticket memory t = a.pending;
         if (t.amount == 0) revert NotPending(pool, id);
         if (block.timestamp < t.maturity) revert NotMatured(t.maturity);
@@ -196,9 +203,9 @@ contract Boost is ReentrancyGuardTransient {
     /// @notice The owner cancels a pending withdrawal: the amount counts again (the bonus
     ///         returns on the next raise); the plan's quota stays consumed.
     function cancelWithdraw(uint256 pool, uint256 id) external nonReentrant {
-        _owned(pool, id);
+        (,,, uint256 transfers) = _owned(pool, id, false);
         Account storage a = _accounts[pool][id];
-        _settle(pool, id, a);
+        _settle(pool, id, a, transfers);
         uint256 amount = a.pending.amount;
         if (amount == 0) revert NotPending(pool, id);
         delete a.pending;
@@ -211,10 +218,10 @@ contract Boost is ReentrancyGuardTransient {
     ///         most once per epoch, so neither can use up the other's allowance.
     function refresh(uint256 pool, uint256 id) external nonReentrant returns (uint256 units) {
         ForgePool p = _pool(pool);
-        (address owner_, uint256 closedAt, uint256 current) = p.briefOf(id);
+        (address owner_, uint256 closedAt, uint256 current,, uint256 transfers) = p.briefOf(id);
         if (closedAt != 0 || owner_ == address(0)) return current;
         Account storage a = _accounts[pool][id];
-        _settle(pool, id, a);
+        _settle(pool, id, a, transfers);
         units = bonusTarget(pool, id);
         if (units > current) {
             bool owner = msg.sender == owner_;
@@ -281,16 +288,25 @@ contract Boost is ReentrancyGuardTransient {
         revert UnknownPool(i);
     }
 
-    /// @dev The caller must own the position; returns its closure time and current bonus.
-    function _owned(uint256 pool, uint256 id) internal view returns (ForgePool p, uint256 closedAt, uint256 bonus) {
+    /// @dev The caller must own the position; returns its closure time, current bonus and sales.
+    ///      A listing locks the owner's mutations (`locked`; ADR 0011).
+    function _owned(uint256 pool, uint256 id, bool locked)
+        internal
+        view
+        returns (ForgePool p, uint256 closedAt, uint256 bonus, uint256 transfers)
+    {
         p = _pool(pool);
-        address owner;
-        (owner, closedAt, bonus) = p.briefOf(id);
+        (address owner, uint256 c, uint256 b, uint256 listing, uint256 t) = p.briefOf(id);
         if (owner != msg.sender) revert NotOwner(pool, id);
+        if (locked && listing & 1 != 0) revert Listed(pool, id);
+        return (p, c, b, t);
     }
 
-    /// @dev A withdrawal not executed by the end of its window returns to the Capstone.
-    function _settle(uint256 pool, uint256 id, Account storage a) internal {
+    /// @dev A new owner (the pool counted a sale since this account last looked) starts with an
+    ///      unused raise allowance and no withdrawal plan. A withdrawal not executed by the end of
+    ///      its window returns to the Capstone.
+    function _settle(uint256 pool, uint256 id, Account storage a, uint256 transfers) internal {
+        if (transfers != a.transfers) (a.transfers, a.ownerRaiseAt, a.planStart) = (uint32(transfers), 0, 0);
         Ticket memory t = a.pending;
         if (t.amount == 0 || block.timestamp < uint256(t.maturity) + P.WITHDRAW_EXECUTION_WINDOW) return;
         delete a.pending;

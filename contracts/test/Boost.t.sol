@@ -77,7 +77,7 @@ abstract contract BoostFixture is OracleVectors {
         bool[4] memory lp = [true, true, false, false];
         for (uint256 i; i < 4; ++i) {
             IERC20 token = i == 2 ? IERC20(address(ember)) : IERC20(address(stake[i]));
-            pools[i] = new ForgePool(token, lp[i], makeAddr("feeRouter"), boostAt);
+            pools[i] = new ForgePool(token, lp[i], makeAddr("feeRouter"), boostAt, makeAddr("deeds"));
         }
         address[] memory registrars = new address[](1);
         Mantle.BurnCategory[] memory categories = new Mantle.BurnCategory[](1);
@@ -338,6 +338,79 @@ contract BoostTest is BoostFixture {
         assertEq(boost.claimEscrow(2, id), 0); // nothing more owed
     }
 
+    // ── Deeds (ADR 0011) ─────────────────────────────────────────────────
+
+    function test_listingLocksCapstoneMutations() public {
+        address deeds = pools[2].DEEDS();
+        uint256 id = _open(alice, 2, 1000e18);
+        vm.prank(alice);
+        boost.deposit(2, id, 100e18);
+        vm.prank(deeds);
+        pools[2].list(id, alice);
+        vm.startPrank(alice);
+        vm.expectRevert(abi.encodeWithSelector(Boost.Listed.selector, 2, id));
+        boost.deposit(2, id, 10e18);
+        vm.expectRevert(abi.encodeWithSelector(Boost.Listed.selector, 2, id));
+        boost.requestWithdraw(2, id, 10e18);
+        vm.stopPrank();
+        // Value the position already owns still arrives, and refreshing stays open.
+        stdstore.target(address(emissions)).sig("capstoneOwed(uint256,uint256)").with_key(uint256(2)).with_key(id)
+            .checked_write(uint256(50e18));
+        vm.prank(kindling);
+        ember.transfer(address(emissions), 50e18);
+        assertEq(boost.claimEscrow(2, id), 50e18);
+        vm.prank(bob);
+        boost.refresh(2, id);
+        // The owner ends the listing in the pool itself; Capstone actions resume.
+        vm.prank(alice);
+        pools[2].unlist(id);
+        vm.prank(alice);
+        boost.deposit(2, id, 10e18);
+    }
+
+    /// A buyer is not bound by the seller's raise allowance or withdrawal plan, even within the
+    /// sale's own second: Boost keys them to the pool's sale count, not to time.
+    function test_newOwnerStartsWithFreshAllowanceAndPlan() public {
+        address deeds = pools[0].DEEDS();
+        valuation.set(0, P.RAY);
+        pyre.set(alice, P.PYRE_TIER_2_BURN);
+        uint256 id = _open(alice, 0, 1000e18);
+        vm.startPrank(alice);
+        boost.deposit(0, id, 100e18); // +0.1 and the seller's Pyre
+        valuation.set(0, P.RAY / 2);
+        boost.refresh(0, id); // the seller's raise for this epoch
+        uint256 cap = boost.accountOf(0, id).capstone;
+        boost.requestWithdraw(0, id, cap); // the whole plan quota; the bonus scales to 0
+        boost.cancelWithdraw(0, id); // stays consumed
+        vm.expectRevert(abi.encodeWithSelector(Boost.PlanQuotaExceeded.selector, cap + 1, cap));
+        boost.requestWithdraw(0, id, 1);
+        vm.stopPrank();
+        vm.prank(bob);
+        boost.refresh(0, id); // the public raise restores it
+        assertEq(_bonus(0, id), 20_000 + boost.pyreUnits(P.PYRE_TIER_2_BURN));
+
+        vm.prank(deeds);
+        uint32 listing = pools[0].list(id, alice);
+        vm.prank(deeds);
+        pools[0].settle(id, bob, listing);
+        assertEq(_bonus(0, id), 0, "the pool zeroes the bonus at the sale");
+
+        vm.startPrank(bob);
+        boost.refresh(0, id); // same second as the seller's raise: a fresh allowance
+        assertEq(_bonus(0, id), 20_000, "the Capstone travels; the seller's Pyre does not");
+        uint256 t0 = block.timestamp;
+        assertEq(boost.requestWithdraw(0, id, cap / 10) - t0, P.WITHDRAW_TIER_0_SECONDS, "a fresh plan");
+        vm.stopPrank();
+        vm.expectRevert(abi.encodeWithSelector(Boost.NotOwner.selector, 0, id));
+        vm.prank(alice);
+        boost.cancelWithdraw(0, id);
+        // The allowance is the buyer's own from now on: a second raise this epoch waits.
+        valuation.set(0, P.RAY / 4);
+        vm.expectRevert(abi.encodeWithSelector(Boost.RaiseTooSoon.selector, t0 + P.EPOCH_SECONDS));
+        vm.prank(bob);
+        boost.refresh(0, id);
+    }
+
     function test_onlyTheOwnerMovesCapstone() public {
         uint256 id = _open(alice, 2, 1000e18);
         vm.prank(alice);
@@ -456,6 +529,7 @@ contract BoostHandler is BoostFixture {
     bool public withdrawRaised;
     uint256 public requests;
     uint256 public executions;
+    uint256 public sales;
 
     constructor() {
         _deployBoost();
@@ -547,6 +621,22 @@ contract BoostHandler is BoostFixture {
         boost.burnFees();
     }
 
+    /// A Deed sale to the other wallet (ADR 0011), when the market's own precondition holds: no
+    /// Capstone withdrawal pending. The pool refuses a listing with cooling pending.
+    function sell(uint256 seed) external {
+        uint256 k = seed % positions.length;
+        Pos memory q = positions[k];
+        if (boost.accountOf(q.pool, q.id).pending.amount != 0) return;
+        address deeds = pools[q.pool].DEEDS();
+        vm.prank(deeds);
+        try pools[q.pool].list(q.id, q.owner) returns (uint32 listing) {
+            vm.prank(deeds);
+            pools[q.pool].settle(q.id, q.owner == alice ? bob : alice, listing);
+            positions[k].owner = q.owner == alice ? bob : alice;
+            ++sales;
+        } catch {}
+    }
+
     function warp(uint256 dt) external {
         vm.warp(block.timestamp + bound(dt, 0, 2 days));
     }
@@ -603,10 +693,12 @@ contract BoostInvariantCoverageTest is Test {
             h.market(i, i * 7919 * 1e24, i % 5 == 0);
             h.execute(i, i * 3_600);
             if (i % 4 == 0) h.cancel(i);
+            if (i % 3 == 0) h.sell(i);
             h.warp(i * 4_000);
         }
         assertGt(h.requests(), 20);
         assertGt(h.executions(), 10);
+        assertGt(h.sales(), 3, "positions change hands");
         assertFalse(h.exitBroken());
         assertFalse(h.withdrawRaised());
     }
