@@ -78,7 +78,8 @@ contract ForgePoolDifferentialTest is ForgeFixture {
         Boost,
         List,
         Unlist,
-        Settle
+        Settle,
+        Tap
     }
 
     /// @dev Wallets beyond the openers, which only buy Deeds (scripts/forge-scenarios.ts BUYERS).
@@ -124,10 +125,19 @@ contract ForgePoolDifferentialTest is ForgeFixture {
     function test_scenario_deeds1() public { _replay("deeds1"); }
     function test_scenario_deeds2() public { _replay("deeds2"); }
     function test_scenario_deeds3() public { _replay("deeds3"); }
+    function test_scenario_tapCycle() public { _replay("tapCycle"); }
+    function test_scenario_tapYoungestFirst() public { _replay("tapYoungestFirst"); }
+    function test_scenario_tapSealForfeit() public { _replay("tapSealForfeit"); }
+    function test_scenario_tapStreakResetBetween() public { _replay("tapStreakResetBetween"); }
+    function test_scenario_tapAfterDeed() public { _replay("tapAfterDeed"); }
+    function test_scenario_tapLotCapacity() public { _replay("tapLotCapacity"); }
+    function test_scenario_taps0() public { _replay("taps0"); }
+    function test_scenario_taps1() public { _replay("taps1"); }
+    function test_scenario_taps2() public { _replay("taps2"); }
 
     /// Every generated scenario has a test above; a new one fails this until added.
     function test_everyScenarioIsReplayed() public view {
-        assertEq(vm.parseJsonStringArray(forgeJson, ".names").length, 34, "add a test_scenario_* for each new scenario");
+        assertEq(vm.parseJsonStringArray(forgeJson, ".names").length, 43, "add a test_scenario_* for each new scenario");
     }
 
     function test_provisionalConstantsMatchModel() public {
@@ -208,6 +218,7 @@ contract ForgePoolDifferentialTest is ForgeFixture {
         else if (kind == Kind.Cancel) pool.cancelCooling(pos, uint32(arg));
         else if (kind == Kind.Emergency) pool.emergencyExit(pos);
         else if (kind == Kind.Seal) pool.seal(pos, arg);
+        else if (kind == Kind.Tap) pool.requestTap(pos, arg);
         else pool.poke(pos);
     }
 
@@ -271,8 +282,8 @@ contract ForgePoolDifferentialTest is ForgeFixture {
         n = _put4(w, n, _wallet(p.owner), p.listing, p.transfers, pool.ownedSince(id));
         ForgePoolBase.Ownership memory prev;
         if (p.transfers != 0) prev = pool.ownershipAt(id, p.transfers - 1);
-        (w[n], w[n + 1]) = (_wallet(prev.owner), prev.until);
-        return n + 2;
+        (w[n], w[n + 1], w[n + 2]) = (_wallet(prev.owner), prev.until, p.lastTapAt);
+        return n + 3;
     }
 
     function _wallet(address who) internal pure returns (uint256) {
@@ -302,7 +313,8 @@ contract ForgePoolDifferentialTest is ForgeFixture {
     function _pushTicket(uint256[] memory w, uint256 n, uint256 id, uint32 ticketId) internal view returns (uint256) {
         ForgePoolBase.Ticket memory t = pool.ticketOf(id, ticketId);
         n = _put4(w, n, ticketId, t.amount, t.maturity, uint256(t.status));
-        w[n++] = t.poolApplied ? 1 : 0;
+        (w[n], w[n + 1]) = (t.poolApplied ? 1 : 0, t.tap ? 1 : 0);
+        n += 2;
         for (uint256 j; j < 32; ++j) {
             ForgePoolBase.Slice memory s = pool.sliceOf(id, ticketId, j);
             (w[n], w[n + 1], w[n + 2]) = (s.amount, s.age, s.participated);
