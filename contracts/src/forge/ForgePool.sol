@@ -40,6 +40,13 @@ import {Lot, Record, Seal, SealStatus, SlotMeasure, ForgeMeasures} from "./Forge
 ///         Capstone + Pyre Heat bonus (≤ 0.65). It enters W, the sealed W and the Ashfall
 ///         weight through the records, segment by segment. A top-up dilutes it until
 ///         BOOST refreshes it; exits never call BOOST.
+///
+///         Deeds (ADR 0011): the immutable DEEDS market lists a position for its owner, which
+///         locks the owner's mutations until the listing ends; emergency exit still works and
+///         ends it. A sale settles here once, with no external call: the seller's record
+///         segments close, the buyer receives 80% of capped age, a new Streak, a zero bonus,
+///         no wallet-bound terms and a fresh cooling plan, and the seller joins the ownership
+///         log that proves each owner's tenure.
 contract ForgePool is ReentrancyGuardTransient {
     using SafeERC20 for IERC20;
     using SafeCast for uint256;
@@ -102,9 +109,22 @@ contract ForgePool is ReentrancyGuardTransient {
         uint64 coolingPausedSeconds;
         bool ashfallForfeited;
         uint40 openedAt;
+        uint32 listing; // odd while listed on DEEDS; every list, unlist, exit or sale moves it
         uint40 closedAt; // emergency exit; measures stop here, records stay
         uint8 sealCount; // the latest Seal is `_seals[id][sealCount]`
+        uint32 transfers; // completed Deed sales: entries in `_owners[id]`
+        // Wallet-bound phantom terms (spec §2), set by the Kindling hooks (not built). Settlement
+        // clears them; they never enter a lot's age (ADR 0011).
+        bool founder;
+        uint32 headStart;
         Plan plan;
+    }
+
+    /// @notice A previous owner and the end of its tenure. Its start is the previous entry's
+    ///         `until`, or `openedAt` for the first.
+    struct Ownership {
+        address owner;
+        uint40 until;
     }
 
     struct Occupancy {
@@ -118,6 +138,8 @@ contract ForgePool is ReentrancyGuardTransient {
     address public immutable FEE_COLLECTOR;
     /// @notice The only caller of `setOrdinaryBonus` (Capstone + Pyre; ADR 0008).
     address public immutable BOOST;
+    /// @notice The Deed market: the only caller of `list` and `settle` (ADR 0011).
+    address public immutable DEEDS;
 
     uint256 public positionCount;
     /// @notice Principal that earns now. Lapsed slices not yet processed are still
@@ -135,6 +157,7 @@ contract ForgePool is ReentrancyGuardTransient {
     mapping(uint256 id => mapping(uint32 ticketId => Ticket)) internal _tickets;
     mapping(uint256 id => mapping(uint32 ticketId => mapping(uint256 slot => Slice))) internal _slices;
     mapping(uint256 id => mapping(uint256 k => Seal)) internal _seals;
+    mapping(uint256 id => mapping(uint256 n => Ownership)) internal _owners;
 
     event Opened(uint256 indexed id, address indexed owner);
     event Deposited(uint256 indexed id, uint256 slot, uint256 net, uint256 fee);
@@ -148,6 +171,8 @@ contract ForgePool is ReentrancyGuardTransient {
     event SealResumed(uint256 indexed id, uint256 indexed k, uint256 at);
     event SealEnded(uint256 indexed id, uint256 indexed k, SealStatus status, uint256 at);
     event OrdinaryBonusSet(uint256 indexed id, uint256 units);
+    event ListingChanged(uint256 indexed id, uint32 listing);
+    event DeedSettled(uint256 indexed id, address indexed seller, address indexed buyer);
 
     error ZeroAddress();
     error UnknownPosition(uint256 id);
@@ -178,14 +203,21 @@ contract ForgePool is ReentrancyGuardTransient {
     error NotBoost();
     error BonusAboveCeiling(uint256 units);
     error RecordLimit(uint256 id, uint256 slot);
+    error NotDeeds();
+    error Listed(uint256 id);
+    error NotListed(uint256 id);
 
-    constructor(IERC20 stakeToken, bool isLp, address feeCollector, address boost) {
-        if (address(stakeToken) == address(0) || feeCollector == address(0) || boost == address(0)) revert ZeroAddress();
+    constructor(IERC20 stakeToken, bool isLp, address feeCollector, address boost, address deeds) {
+        if (
+            address(stakeToken) == address(0) || feeCollector == address(0) || boost == address(0)
+                || deeds == address(0)
+        ) revert ZeroAddress();
         if (P.MAX_LOTS_PER_POSITION != MAX_LOTS || P.WITHDRAW_TIER_COUNT != 5) revert ConfigMismatch();
         STAKE_TOKEN = stakeToken;
         IS_LP = isLp;
         FEE_COLLECTOR = feeCollector;
         BOOST = boost;
+        DEEDS = deeds;
     }
 
     // ── principal paths ───────────────────────────────────────────────────
@@ -286,7 +318,8 @@ contract ForgePool is ReentrancyGuardTransient {
     ///         8% fee (routed 50/25/25 later by the fee router); pending Ashfall is
     ///         forfeited. Closes the position; its measures remain.
     function emergencyExit(uint256 id) external nonReentrant returns (uint256 net) {
-        Position storage p = _touchOwned(id);
+        Position storage p = _touch(id); // not _touchOwned: a listing never blocks this exit
+        if (p.owner != msg.sender) revert NotOwner(id);
         if (p.closedAt != 0) revert Closed(id);
         uint256 active = _activeOf(id, p);
         uint256 frozen = _frozenOf(id, p);
@@ -306,6 +339,11 @@ contract ForgePool is ReentrancyGuardTransient {
         p.reservedSlots = 0;
         p.closedAt = uint40(block.timestamp);
         p.ashfallForfeited = true;
+        if (p.listing & 1 != 0) {
+            unchecked {
+                ++p.listing; // the sale can no longer settle
+            }
+        }
 
         uint256 fee = (total * P.EMERGENCY_EXIT_FEE_PCT) / 100;
         net = total - fee;
@@ -359,6 +397,61 @@ contract ForgePool is ReentrancyGuardTransient {
         _touch(id);
     }
 
+    // ── Deeds (ADR 0011) ──────────────────────────────────────────────────
+
+    /// @notice DEEDS lists an open position for its owner `seller`, with no cooling ticket
+    ///         pending. Until the listing ends, the owner can neither deposit, cool nor Seal;
+    ///         emergency exit stays open and ends it. Returns the listing a sale must name.
+    ///         The market itself checks that no Claim or Capstone withdrawal is pending.
+    function list(uint256 id, address seller) external nonReentrant returns (uint32 listing) {
+        if (msg.sender != DEEDS) revert NotDeeds();
+        Position storage p = _touch(id);
+        if (p.owner != seller) revert NotOwner(id);
+        if (p.closedAt != 0) revert Closed(id);
+        if (p.pendingCount != 0) revert CoolingPending(id);
+        if (p.listing & 1 != 0) revert Listed(id);
+        unchecked {
+            listing = ++p.listing;
+        }
+        emit ListingChanged(id, listing);
+    }
+
+    /// @notice End a listing: DEEDS on the seller's behalf, or the owner directly, so no
+    ///         market state can keep a position locked.
+    function unlist(uint256 id) external nonReentrant {
+        Position storage p = _positions[id];
+        if (msg.sender != DEEDS && msg.sender != p.owner) revert NotOwner(id);
+        if (p.listing & 1 == 0) revert NotListed(id);
+        unchecked {
+            ++p.listing;
+        }
+        emit ListingChanged(id, p.listing);
+    }
+
+    /// @notice DEEDS completes the sale of listing `listing` to `buyer` (spec §5), once.
+    ///         Every active segment closes at now under the seller's anchors; the buyer's
+    ///         lots carry 80% of their capped age with a new Streak and a zero bonus (Pyre
+    ///         stays with the seller until BOOST refreshes). Wallet-bound terms are cleared
+    ///         and the cooling plan starts afresh. Lots, records, Seals, rewards and escrow
+    ///         stay with the position. No external call.
+    function settle(uint256 id, address buyer, uint32 listing) external nonReentrant {
+        if (msg.sender != DEEDS) revert NotDeeds();
+        if (buyer == address(0)) revert ZeroAddress();
+        Position storage p = _touch(id);
+        if (listing & 1 == 0 || p.listing != listing) revert NotListed(id);
+        // Listed ⇒ open with no ticket pending: an exit ends the listing, cooling is locked.
+        address seller = p.owner;
+        _owners[id][p.transfers++] = Ownership(seller, uint40(block.timestamp));
+        _rewriteActive(id, p, 100 - P.DEED_HEAT_CARRY_PCT, 100, type(uint256).max);
+        (p.owner, p.streakStart, p.ordinaryBonus) = (buyer, uint40(block.timestamp), 0);
+        (p.founder, p.headStart) = (false, 0);
+        delete p.plan;
+        unchecked {
+            ++p.listing;
+        }
+        emit DeedSettled(id, seller, buyer);
+    }
+
     /// @notice The fee router pulls booked fees. Exits never call it.
     function collectFees() external nonReentrant returns (uint256 dep, uint256 wd, uint256 em) {
         if (msg.sender != FEE_COLLECTOR) revert NotCollector();
@@ -383,12 +476,6 @@ contract ForgePool is ReentrancyGuardTransient {
             out[i] = v;
         }
     }
-
-
-
-
-
-
 
     /// @notice Exact time-integrated measures of a position over [t0, t1]:
     ///         S = ∫stake dt and W = ∫stake·Heat dt (RAY), summed over its records.
@@ -429,16 +516,6 @@ contract ForgePool is ReentrancyGuardTransient {
             _history[id][slot], _lots[id][slot], _seals[id], _anchor(_positions[id]), ashfall, t0, t1, from, maxSegs
         );
     }
-
-
-
-
-
-
-
-
-
-
 
     /// @notice Cumulative seconds with active principal up to `t` (t ≤ now). Includes
     ///         a lapse that has come due but no transaction has processed yet.
@@ -493,9 +570,11 @@ contract ForgePool is ReentrancyGuardTransient {
         _sync(id, p, now_);
     }
 
+    /// @dev The owner's mutations; a listing locks them (ADR 0011).
     function _touchOwned(uint256 id) internal returns (Position storage p) {
         p = _touch(id);
         if (p.owner != msg.sender) revert NotOwner(id);
+        if (p.listing & 1 != 0) revert Listed(id);
     }
 
     /// @dev Resolve every lapse due by `now_` in deadline order, each back-dated to its
@@ -772,7 +851,6 @@ contract ForgePool is ReentrancyGuardTransient {
         if (_popcount(p.usedMask) + p.reservedSlots + splits > MAX_LOTS) revert LotCapacity(id);
         p.reservedSlots += uint8(splits);
     }
-
 
     /// @dev An executed ticket frees the slots its slices held or reserved.
     function _releaseSlots(uint256 id, Position storage p, uint32 ticketId, uint32 mask) internal {

@@ -17,7 +17,9 @@ using ForgeView for ForgePool;
 /// @dev The pool's own storage, returned by Solidity's accessors, and the views ForgePool
 ///      used to define itself (before ADR 0010): the reference ForgeView must reproduce.
 contract ForgePoolViewHarness is ForgePool {
-    constructor(IERC20 token, address collector, address boost) ForgePool(token, true, collector, boost) {}
+    constructor(IERC20 token, address collector, address boost, address deeds)
+        ForgePool(token, true, collector, boost, deeds)
+    {}
 
     function rawPosition(uint256 id) external view returns (Position memory) {
         return _positions[id];
@@ -89,7 +91,7 @@ contract ForgeViewTest is Test {
     function setUp() public {
         vm.warp(1_700_000_000);
         MockERC20 token = new MockERC20("Receipt", "RCPT");
-        pool = new ForgePoolViewHarness(IERC20(address(token)), makeAddr("feeRouter"), makeAddr("boost"));
+        pool = new ForgePoolViewHarness(IERC20(address(token)), makeAddr("feeRouter"), makeAddr("boost"), makeAddr("deeds"));
         handler = new ForgeHandler(pool, token, makeAddr("feeRouter"));
         targetContract(address(handler));
     }

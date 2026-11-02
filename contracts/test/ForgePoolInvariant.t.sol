@@ -195,7 +195,7 @@ contract ForgePoolInvariantTest is Test {
     function setUp() public {
         vm.warp(1_700_000_000);
         token = new MockERC20("Receipt", "RCPT");
-        pool = new ForgePool(IERC20(address(token)), true, collector, boost);
+        pool = new ForgePool(IERC20(address(token)), true, collector, boost, makeAddr("deeds"));
         handler = new ForgeHandler(pool, token, collector);
         targetContract(address(handler));
     }
