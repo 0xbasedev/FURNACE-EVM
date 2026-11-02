@@ -68,9 +68,11 @@ Status: accepted for this repository. Not audited, not deployed.
 - Two kinds of phantom age exist (spec §2):
   - First Flame's 15-day floor;
   - the Ignition head start.
-- The position stores them as `founder` and `headStart`.
-- The measures will add them through flags in each record's anchor word. `Record.streak` is a uint40 timestamp, so it has spare high bits.
-- Settlement clears both after closing the seller's segments, so the buyer's segments never carry them.
+- The position stores two wallet-bound flags, `founder` and `headStartActive`, and the head start's amount, `headStart`, in seconds.
+- The measures will apply them through flags in each record's anchor word. `Record.streak` is a uint40 timestamp, so it has spare high bits.
+  - A flagged segment reads the 15-day floor, a constant, or the position's `headStart` amount.
+- Settlement clears both flags after closing the seller's segments, so the buyer's segments never carry them.
+- **Settlement keeps the amount.** The seller's closed records still carry the head-start flag. A late measure of an epoch before the sale must find the amount, so that every past interval stays exactly measurable (ADR 0005).
 - **Why not store phantom age in a lot's age:**
   - the 80% carry would sell it, which the spec forbids;
   - it could not be removed later: participation stops counting at 30 days, and the record has no spare bytes to mark it.
@@ -84,6 +86,7 @@ Status: accepted for this repository. Not audited, not deployed.
 **6. Boost recognizes a new owner by the pool's sale count, not by time.**
 - Each Capstone account remembers the `transfers` count it last saw.
 - When the count changes, the new owner gets an unused raise allowance and no withdrawal plan, even within the sale's own second.
+- The count shares the account's first word. The plan fields move down one word, so an account now spans four words instead of three: a read costs one more slot, and a plan or ticket write touches as many slots as before.
 
 ## What the unbuilt DEEDS market must do (deploy blockers)
 
@@ -107,14 +110,14 @@ Taps, source-lot additions (Casting, Stoke into LP) and Kindling's additions mus
 | | Runtime bytes |
 |---|---:|
 | ForgePool before (ADR 0010) | 20,681 |
-| ForgePool after | 22,400 (+1,719) |
-| ↳ `settle` (incl. ownership log 161, plan reset 59, phantom terms 25) | 755 |
+| ForgePool after | 22,398 (+1,717) |
+| ↳ `settle` (incl. ownership log 161, plan reset 59, phantom flags ≈ 25) | ≈ 755 |
 | ↳ `list` | 465 |
 | ↳ `unlist` | 311 |
 | ↳ emergency exit ending the listing | 63 |
 | ↳ the lock in `_touchOwned` | 47 |
 | ↳ the rest: the `DEEDS` immutable and the new fields | ≈ 78 |
-| **Left under EIP-170** | **2,176** |
+| **Left under EIP-170** | **2,178** |
 
 - ADR 0010 estimated 2–2.5 KB for all six hooks. Deeds alone used 1.7 KB, so that estimate was low.
 - By ADR 0010's rule, the next lever comes before the next hook, in its own PR. Cold paths move into an external library that the pool calls by delegatecall, as it already does for `ForgeMeasures`: `seal()`, the bodies of `settle` and `list`, and the plan logic. Lowering optimizer runs, which saves about 500 bytes, is the fallback.
@@ -149,10 +152,10 @@ Taps, source-lot additions (Casting, Stoke into LP) and Kindling's additions mus
   - Boost's lock, and the buyer's fresh allowance and plan in the sale's own second.
   - Boost's invariant handler now sells positions, so its invariants also hold across owner changes.
 - **`pnpm check`:** 212/212 Solidity tests, the size gate and generation freshness.
-- **Mutations:** 34 planted bugs on the Deed paths. **All 34 are caught.** They cover:
-  - settlement: the anchors changed before the rewrite; no nonce check; no parity check; a 100% carry; the bonus, the Streak, the plan or the phantom terms kept; the log recording the buyer or nothing; the listing not spent; no caller check;
+- **Mutations:** 36 planted bugs on the Deed paths. **All 36 are caught.** They cover:
+  - settlement: the anchors changed before the rewrite; no nonce check; no parity check; a 100% carry; the bonus, the Streak, the plan or the phantom flags kept; the head-start amount zeroed; the log recording the buyer or nothing; the listing not spent; no caller check;
   - listing: no lock; emergency exit blocked; an exit that leaves the listing; listing with cooling pending, while closed, without a sync, for any seller, or by any caller; unlisting by anyone;
-  - decoding: wrong offsets for the listing, the sale count, `founder`, `headStart` and the brief's listing; a wrong log slot; `ownedSince` without the opening;
+  - decoding: wrong offsets for the listing, the sale count, `founder`, `headStartActive`, `headStart` and the brief's listing; a wrong log slot; `ownedSince` without the opening;
   - the locks elsewhere: a Claim while listed; a Capstone deposit or withdrawal request while listed; Boost without the ownership reset, or resetting only the plan or only the allowance.
 
 ## Consequences

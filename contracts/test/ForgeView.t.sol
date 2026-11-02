@@ -31,8 +31,9 @@ contract ForgePoolViewHarness is ForgePool {
 
     /// Kindling's phantom terms are not built (ADR 0011); this exercises their decoding and
     /// their clearing at settlement.
-    function setPhantomForTest(uint256 id, bool founder, uint32 headStart) external {
-        (_positions[id].founder, _positions[id].headStart) = (founder, headStart);
+    function setPhantomForTest(uint256 id, bool founder, bool active, uint32 headStart) external {
+        Position storage p = _positions[id];
+        (p.founder, p.headStartActive, p.headStart) = (founder, active, headStart);
     }
 
     function rawLot(uint256 id, uint256 j) external view returns (Lot memory) {
@@ -148,16 +149,21 @@ contract ForgeViewTest is Test {
     function test_deedFieldsDecode() public {
         ForgePool p = ForgePool(address(pool));
         uint256 id = handler.ids(0);
-        pool.setPhantomForTest(id, true, 0xabcdef12);
+        // Each flag alone, between non-zero neighbours, so no offset can decode by coincidence.
+        pool.setPhantomForTest(id, false, true, 0xabcdef12);
+        assertEq(abi.encode(p.positionOf(id)), abi.encode(pool.rawPosition(id)), "head start only");
+        pool.setPhantomForTest(id, true, false, 0xabcdef13);
         handler.list(0, 1);
         ForgePool.Position memory raw = pool.rawPosition(id);
-        assertTrue(raw.founder && raw.headStart == 0xabcdef12 && raw.listing == 1, "set up");
-        assertEq(abi.encode(p.positionOf(id)), abi.encode(raw), "listed, phantom terms");
+        assertTrue(raw.founder && !raw.headStartActive && raw.headStart == 0xabcdef13 && raw.listing == 1, "set up");
+        assertEq(abi.encode(p.positionOf(id)), abi.encode(raw), "listed, founder only");
+        pool.setPhantomForTest(id, true, true, 0xabcdef13);
         vm.warp(block.timestamp + 3 days);
         handler.settle(0, 1);
         handler.list(0, 1);
         raw = pool.rawPosition(id);
-        assertTrue(!raw.founder && raw.headStart == 0 && raw.transfers == 1 && raw.listing == 3, "sold, relisted");
+        assertTrue(!raw.founder && !raw.headStartActive && raw.headStart == 0xabcdef13, "sale clears the flags only");
+        assertTrue(raw.transfers == 1 && raw.listing == 3, "sold, relisted");
         assertEq(abi.encode(p.positionOf(id)), abi.encode(raw), "sold");
         assertEq(abi.encode(p.ownershipAt(id, 0)), abi.encode(pool.rawOwnership(id, 0)), "log");
         assertEq(p.ownedSince(id), block.timestamp, "tenure");

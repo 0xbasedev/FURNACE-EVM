@@ -169,7 +169,9 @@ contract ForgeHandler is Test {
     function mark(uint256 seed, uint256 units) external {
         if (ids.length == 0) return;
         (bool ok,) = address(pool).call(
-            abi.encodeWithSignature("setPhantomForTest(uint256,bool,uint32)", ids[seed % ids.length], units % 2 == 0, uint32(units))
+            abi.encodeWithSignature(
+                "setPhantomForTest(uint256,bool,bool,uint32)", ids[seed % ids.length], units % 2 == 0, units % 3 == 0, uint32(units)
+            )
         );
         ok;
         _after();

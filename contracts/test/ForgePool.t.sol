@@ -28,8 +28,9 @@ contract ForgePoolHarness is ForgePool {
         _lots[id][slot].records = n;
     }
 
-    function setPhantomForTest(uint256 id, bool founder, uint32 headStart) external {
-        (_positions[id].founder, _positions[id].headStart) = (founder, headStart);
+    function setPhantomForTest(uint256 id, bool founder, bool active, uint32 headStart) external {
+        Position storage p = _positions[id];
+        (p.founder, p.headStartActive, p.headStart) = (founder, active, headStart);
     }
 }
 
@@ -907,15 +908,16 @@ contract ForgePoolTest is ForgeFixture {
         token.approve(address(h), type(uint256).max);
         vm.prank(alice);
         uint256 id = h.open(10e18);
-        h.setPhantomForTest(id, true, 15 days);
+        h.setPhantomForTest(id, true, true, 3 days);
         vm.prank(deeds);
         uint32 listing = h.list(id, alice);
-        assertTrue(h.positionOf(id).founder);
+        assertTrue(h.positionOf(id).founder && h.positionOf(id).headStartActive);
         vm.prank(deeds);
         h.settle(id, bob, listing);
         ForgePool.Position memory p = h.positionOf(id);
         assertFalse(p.founder, "First Flame stays with its wallet");
-        assertEq(p.headStart, 0, "the head start is never sold");
+        assertFalse(p.headStartActive, "the head start is never sold");
+        assertEq(p.headStart, 3 days, "its amount stays for the seller's records");
     }
 
     function test_gas_deedSettle() public {

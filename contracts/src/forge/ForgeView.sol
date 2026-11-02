@@ -73,7 +73,8 @@ library ForgeView {
         p.sealCount = uint8(_bits(w2, 5, 1));
         p.transfers = uint32(_bits(w2, 6, 4));
         p.founder = _bits(w2, 10, 1) != 0;
-        p.headStart = uint32(_bits(w2, 11, 4));
+        p.headStartActive = _bits(w2, 11, 1) != 0;
+        p.headStart = uint32(_bits(w2, 12, 4));
         p.plan = ForgePool.Plan(uint40(_bits(w3, 0, 5)), uint128(_bits(w3, 5, 16)), uint128(_bits(w4, 0, 16)));
     }
 

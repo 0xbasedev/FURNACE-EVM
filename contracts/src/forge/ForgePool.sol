@@ -113,10 +113,12 @@ contract ForgePool is ReentrancyGuardTransient {
         uint40 closedAt; // emergency exit; measures stop here, records stay
         uint8 sealCount; // the latest Seal is `_seals[id][sealCount]`
         uint32 transfers; // completed Deed sales: entries in `_owners[id]`
-        // Wallet-bound phantom terms (spec §2), set by the Kindling hooks (not built). Settlement
-        // clears them; they never enter a lot's age (ADR 0011).
-        bool founder;
-        uint32 headStart;
+        // Wallet-bound phantom terms (spec §2), set by the Kindling hooks (not built); they never
+        // enter a lot's age (ADR 0011). Settlement clears the two flags, so the buyer's segments
+        // carry neither; the head start's amount stays, for the seller's records that do.
+        bool founder; // First Flame's 15-day floor applies
+        bool headStartActive; // the head start applies
+        uint32 headStart; // the head start, in seconds of financial age
         Plan plan;
     }
 
@@ -444,7 +446,7 @@ contract ForgePool is ReentrancyGuardTransient {
         _owners[id][p.transfers++] = Ownership(seller, uint40(block.timestamp));
         _rewriteActive(id, p, 100 - P.DEED_HEAT_CARRY_PCT, 100, type(uint256).max);
         (p.owner, p.streakStart, p.ordinaryBonus) = (buyer, uint40(block.timestamp), 0);
-        (p.founder, p.headStart) = (false, 0);
+        (p.founder, p.headStartActive) = (false, false);
         delete p.plan;
         unchecked {
             ++p.listing;
