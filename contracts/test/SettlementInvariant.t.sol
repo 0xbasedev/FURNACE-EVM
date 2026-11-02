@@ -135,11 +135,12 @@ contract SettlementHandler is Test {
     /// The ledgers' consumers pull what they are owed.
     function take(uint256 seed, uint256 which) external {
         (, uint256 poolIdx, uint256 id,) = _pick(seed);
-        which %= 3;
-        vm.prank(actors[1 + which]);
+        which %= 4;
+        vm.prank(actors[1 + (which == 3 ? 0 : which)]); // the Capstone also takes for Stokes
         if (which == 0) emissions.takeCapstone(poolIdx, id);
         else if (which == 1) emissions.takeMatchReserve();
-        else emissions.takeSealedPot(poolIdx);
+        else if (which == 2) emissions.takeSealedPot(poolIdx);
+        else emissions.takeUnclaimed(poolIdx, id);
     }
 
     function seal(uint256 seed, uint256 track) external {

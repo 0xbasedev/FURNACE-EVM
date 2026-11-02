@@ -95,6 +95,12 @@ library FurnaceParams {
     uint256 internal constant PYRE_TIER_2_BURN = 6250000000000000000000; // conflagration: 6250 EMBER burned
     uint256 internal constant PYRE_TIER_2_UNITS = 5000;
     uint256 internal constant PYRE_MAX_BOOST_UNITS = 15000;
+    uint256 internal constant AUTO_STOKE_TIP_MIN_BPS = 10; // 0.1% of a keeper Stoke
+    uint256 internal constant AUTO_STOKE_TIP_DEFAULT_BPS = 50; // 0.5% (the UI's default)
+    uint256 internal constant AUTO_STOKE_TIP_MAX_BPS = 100; // 1%
+    uint256 internal constant AUTO_STOKE_MIN_INTERVAL = 86400; // 24h between keeper Stokes
+    uint256 internal constant AUTO_STOKE_DEFAULT_INTERVAL = 604800; // 168h (the UI's default)
+    uint256 internal constant AUTO_STOKE_MIN_SIZE = 100000000000000000000; // 100 EMBER: [P] the floor of a position's keeper minimum
 
     // ── Base epoch settlement: pools, pages, claims (spec v5.5 §4, §10, §11) ──
     uint256 internal constant SETTLEMENT_MAX_LOTS_PER_PAGE = 32;

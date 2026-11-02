@@ -190,6 +190,7 @@ contract ForgeEmissions is ReentrancyGuardTransient {
     event AshfallRolled(uint256 indexed epoch, uint256 indexed pool, uint256 amount);
     event ForfeitsBurned(uint256 amount);
     event LedgerTaken(address indexed consumer, uint256 indexed pool, uint256 id, uint256 amount);
+    event UnclaimedTaken(uint256 indexed pool, uint256 indexed id, uint256 amount);
     event ClaimRequested(uint256 indexed pool, uint256 indexed id, uint256 amount, uint256 maturesAt);
     event ClaimPaid(uint256 indexed pool, uint256 indexed id, address to, uint256 amount);
 
@@ -527,6 +528,18 @@ contract ForgeEmissions is ReentrancyGuardTransient {
         amount = capstoneOwed[pool][id];
         capstoneOwed[pool][id] = 0;
         _hand(pool, id, amount);
+    }
+
+    /// @notice The Capstone takes a position's credited, unclaimed rewards for a Stoke (spec §6).
+    ///         A pending Claim keeps its snapshot. [P] The Capstone is the only consumer of
+    ///         unclaimed rewards besides Claim itself (ADR 0013).
+    function takeUnclaimed(uint256 pool, uint256 id) external nonReentrant returns (uint256 amount) {
+        if (msg.sender != CAPSTONE) revert NotConsumer(msg.sender);
+        poolAt(pool);
+        amount = unclaimed[pool][id];
+        unclaimed[pool][id] = 0;
+        emit UnclaimedTaken(pool, id, amount);
+        if (amount != 0) EMBER.safeTransfer(msg.sender, amount);
     }
 
     /// @notice The match reserve pulls its share of forfeited escrow.

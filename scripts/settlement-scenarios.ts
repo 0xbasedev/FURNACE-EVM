@@ -13,7 +13,7 @@ const HOUR = 3_600n;
 
 export enum K {
   Open, Deposit, Request, Execute, Cancel, Emergency, Poke, Finalize, OpenEpoch, Advance, RequestClaim, ExecuteClaim, Seal, SettleSeal,
-  Burn, BurnForfeits, TakeCapstone, TakeMatchReserve, TakeSealedPot, Boost,
+  Burn, BurnForfeits, TakeCapstone, TakeMatchReserve, TakeSealedPot, Boost, TakeUnclaimed,
 }
 export interface Act { kind: K; time: bigint; pool: number; pos: number; arg: bigint }
 
@@ -82,6 +82,7 @@ function apply(m: SettlementModel, a: Act): { model: SettlementModel; reverted: 
       case K.TakeMatchReserve: x.takeMatchReserve(); break;
       case K.TakeSealedPot: x.takeSealedPot(a.pool); break;
       case K.Boost: pool.setBonus(a.pos, a.arg, a.time); break;
+      case K.TakeUnclaimed: x.takeUnclaimed(a.pool, a.pos); break;
     }
     return { model: x, reverted: false };
   } catch (e) {
@@ -196,6 +197,22 @@ const scripted: Scenario[] = [
     A(K.RequestClaim, at(2n, 1n), 2, 1),
     A(K.ExecuteClaim, at(3n, 1n), 2, 1),
     A(K.RequestClaim, at(3n, 2n), 2, 1), // nothing left
+  ] },
+  { name: 'stokeTakesUnclaimed', positions: 2, actions: [
+    // The Capstone's Stoke pull (ADR 0013): it takes only what is unclaimed, never a pending
+    // Claim's snapshot, and credits after it accrue again.
+    A(K.Open, at(0n), 0, 1, 100n * E),
+    A(K.Open, at(0n), 0, 2, 300n * E),
+    ...settle(at(1n), 0, 3, [0]),
+    A(K.RequestClaim, at(1n, 1n), 0, 1), // position 1 snapshots epoch 0
+    ...settle(at(2n), 1, 3, [0]),
+    A(K.TakeUnclaimed, at(2n, 1n), 0, 1), // takes epoch 1 only; the snapshot stays
+    A(K.TakeUnclaimed, at(2n, 1n), 0, 2), // all of position 2's
+    A(K.TakeUnclaimed, at(2n, 1n), 0, 2), // nothing left: takes 0
+    A(K.TakeUnclaimed, at(2n, 1n), 4, 1), // unknown pool
+    A(K.ExecuteClaim, at(2n, 2n), 0, 1), // the snapshot pays in full
+    ...settle(at(3n), 2, 3, [0]),
+    A(K.TakeUnclaimed, at(3n, 1n), 0, 1),
   ] },
 ];
 // ── Seals (ADR 0006) ─────────────────────────────────────────────────────
