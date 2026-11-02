@@ -60,7 +60,7 @@ The engine tests (`apps/forge-sim/test`) check each projection against direct ca
 - **Canonical package:** all 54 files match `SHA256SUMS.json`, and they still match after the package's own build. Its 75 tests pass. The economics gate reports no diagnostics. Its deployment gate fails, by design, until real operators are supplied.
 - **Config hash:** v5.5.0 is `0x24f38f4aa11919503354bb5f8263978c7b3edc29723760928cb1eecdbafbe5ae` (31,451 bytes). This repo reproduces it independently with noble Keccak and its own serializer, and it equals the package manifest.
 - **CREATE3:** the 9 mined addresses re-derive from their salts; they are provisional because the deployer is still the placeholder. Seven modules are unmined by design: Mantle, BlastPool, SmelterPool, Flow, GenesisFeeEscrow, TreasuryVesting and Timelock.
-- **Forge tests, 240/240:**
+- **Forge tests, 243/243:**
   - The integer ports equal `canonical/accounting.ts` **exactly** on generated vectors. A deliberate 1-wei rounding change fails the suite.
   - The emission schedule is exact on every day from 0 to 1700 plus far-out days (ADR 0002). Day 365 is exactly 10,800 EMBER, and the floor is first reached on day 1,619.
   - The Heat integral telescopes exactly under checkpoint subdivision (fuzzed). The Heat² primitive (`squaredHeatPrimitive`, the Ashfall weight) is exact as well, including its ~280-bit square root.
@@ -103,7 +103,7 @@ The engine tests (`apps/forge-sim/test`) check each projection against direct ca
   - **Ordinary-bonus mutations:** 15 planted bugs (the authority, the ceiling, the rewrite order, the bonus in W, the sealed W and Ashfall, dilution, the record limit), each caught. The 17 Ashfall mutations were re-run on this code and are still caught; see ADR 0008.
   - **Deed mutations:** 34 planted bugs (the settlement order, nonce and parity, the carry and resets, the ownership log, the lock and its exits, the `list` preconditions, the new decoding offsets, the Claim and Capstone locks, Boost's ownership reset), each caught; see ADR 0011.
   - **Stoke mutations:** 22 planted bugs (the consumer, the Claim snapshot, the Stoke's lock, fee and rationing, the keeper's tip, interval, minimum, bounds and sale reset), each caught; see ADR 0013.
-  - **Taps mutations:** 30 planted bugs, run in progress; see ADR 0014.
+  - **Taps mutations:** 30 planted bugs (the haircut-free, Streak-keeping execution and the Seal forfeit, youngest-first and its ties, every tier edge, the window, the quota and its base, the plan, the cancel, the flag and its decoding), each caught; see ADR 0014.
   - **CI gate:** `pnpm forge:gate` proves that a failing test fails the build. The upstream npm wrapper did not propagate forge's exit status.
   - **Size gate:** `pnpm forge:sizes` fails the build if any contract exceeds the EIP-170 runtime limit (24,576 bytes). ForgePool had been 806 bytes over. The measure path now lives in the external library `ForgeMeasures`, and optimizer runs are 500. With Seals, the Streak anchors and the ordinary bonus, ForgePool reached 24,474 bytes (102 under); its two `mulDiv` calls had become plain arithmetic to fit the bonus hook (ADR 0008). Its sixteen views then moved into `ForgeView` behind one `extsload`, which left 20,681 bytes (ADR 0010). The Deed hook took it to 22,398 bytes (ADR 0011). Its cold paths then moved into an annex it delegatecalls, which left 19,825 bytes (ADR 0012). Taps take it to **20,973 bytes (3,603 under)**; the annex stays at 12,226 bytes (ADR 0014).
 
