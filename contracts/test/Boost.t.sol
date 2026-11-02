@@ -6,11 +6,14 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {EmberToken} from "../src/EmberToken.sol";
 import {Mantle, IEmberMintBurn} from "../src/Mantle.sol";
 import {ForgePool} from "../src/forge/ForgePool.sol";
+import {ForgeView} from "../src/forge/ForgeView.sol";
 import {ForgeEmissions, IMantleDistribution} from "../src/forge/ForgeEmissions.sol";
 import {Boost, IValuation, IPyreLedger} from "../src/forge/Boost.sol";
 import {FurnaceParams as P} from "../src/generated/FurnaceParams.sol";
 import {MockERC20} from "./utils/MockERC20.sol";
 import {OracleVectors} from "./utils/OracleVectors.sol";
+
+using ForgeView for ForgePool;
 
 /// @dev Test valuation: a settable RAY rate per pool, or a revert.
 contract MockValuation is IValuation {

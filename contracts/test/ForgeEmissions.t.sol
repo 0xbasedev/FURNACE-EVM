@@ -6,9 +6,12 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {EmberToken} from "../src/EmberToken.sol";
 import {Mantle, IEmberMintBurn} from "../src/Mantle.sol";
 import {ForgePool} from "../src/forge/ForgePool.sol";
+import {ForgeView} from "../src/forge/ForgeView.sol";
 import {ForgeEmissions, IMantleDistribution} from "../src/forge/ForgeEmissions.sol";
 import {FurnaceParams as P} from "../src/generated/FurnaceParams.sol";
 import {MockERC20} from "./utils/MockERC20.sol";
+
+using ForgeView for ForgePool;
 
 /// @dev EMBER, the Mantle and ForgeEmissions reference one another: predict the CREATE
 ///      addresses. Stake assets are MOCK tokens in every pool, including ember-single

@@ -8,7 +8,10 @@ import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/Reentrancy
 import {FurnaceParams as P} from "../generated/FurnaceParams.sol";
 import {EmissionMath} from "../libraries/EmissionMath.sol";
 import {ForgePool} from "./ForgePool.sol";
+import {ForgeView} from "./ForgeView.sol";
 import {Seal, SealStatus, SlotMeasure, ForgeMeasures} from "./ForgeMeasures.sol";
+
+using ForgeView for ForgePool;
 
 /// @notice The Mantle surface the distributor uses.
 interface IMantleDistribution {
@@ -285,6 +288,7 @@ contract ForgeEmissions is ReentrancyGuardTransient {
         uint256 budget = SEGMENTS_PER_PAGE;
         uint256 unit = pe.ashfall != 0 ? ASHFALL_SEGMENT_UNITS : 1;
         uint256 slots;
+        (uint32 mask, uint256 maskOf) = (0, 0); // the position's history mask, read once per page
         while (budget != 0) {
             if (pr.id == 0) {
                 if (pe.cursor == pe.positions || slots == P.SETTLEMENT_MAX_LOTS_PER_PAGE) break;
@@ -295,7 +299,7 @@ contract ForgeEmissions is ReentrancyGuardTransient {
                 pool.poke(next); // resolve lapses due by now: their records are back-dated
                 pr.id = uint32(next);
             }
-            uint32 mask = pool.historyMaskOf(pr.id);
+            if (maskOf != pr.id) (mask, maskOf) = (pool.historyMaskOf(pr.id), pr.id);
             uint256 j = pr.slot;
             while (j < 32 && mask & (1 << j) == 0) ++j;
             if (j == 32) {
@@ -443,7 +447,7 @@ contract ForgeEmissions is ReentrancyGuardTransient {
     function _creditAshfall(uint256 epoch, uint256 i, PoolEpoch storage pe, uint256 id) internal returns (uint256 amount) {
         uint256 q = _measures[epoch][i][id].ashfallWeight;
         if (q == 0) return 0;
-        if (poolAt(i).positionOf(id).ashfallForfeited) return 0;
+        if (poolAt(i).ashfallForfeitedOf(id)) return 0;
         amount = Math.mulDiv(pe.ashfall, q, pe.ashfallWeight);
         unclaimed[i][id] += amount;
         emit AshfallCredited(epoch, i, id, amount);
@@ -640,7 +644,7 @@ contract ForgeEmissions is ReentrancyGuardTransient {
     }
 
     function _onlyOwner(uint256 pool, uint256 id) internal view returns (address owner) {
-        owner = poolAt(pool).positionOf(id).owner;
+        owner = poolAt(pool).ownerOf(id);
         if (owner != msg.sender) revert NotOwner(pool, id);
     }
 }

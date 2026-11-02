@@ -3,10 +3,13 @@ pragma solidity 0.8.28;
 
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {ForgePool} from "../src/forge/ForgePool.sol";
+import {ForgeView} from "../src/forge/ForgeView.sol";
 import {ForgeEmissions} from "../src/forge/ForgeEmissions.sol";
 import {Seal, SealStatus} from "../src/forge/ForgeMeasures.sol";
 import {FurnaceParams as P} from "../src/generated/FurnaceParams.sol";
 import {SettlementFixture} from "./ForgeEmissions.t.sol";
+
+using ForgeView for ForgePool;
 
 /// @notice Seals (ADR 0006): custody transitions in ForgePool and escrow in ForgeEmissions.
 contract SealsTest is SettlementFixture {

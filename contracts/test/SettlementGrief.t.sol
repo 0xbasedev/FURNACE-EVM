@@ -2,7 +2,11 @@
 pragma solidity 0.8.28;
 
 import {ForgeEmissions} from "../src/forge/ForgeEmissions.sol";
+import {ForgePool} from "../src/forge/ForgePool.sol";
+import {ForgeView} from "../src/forge/ForgeView.sol";
 import {SettlementFixture} from "./ForgeEmissions.t.sol";
+
+using ForgeView for ForgePool;
 
 /// @notice Record spam: one owner stacks many records in one slot within one epoch
 ///         (request 1 wei, cancel; a capped lot merges back each time). Resumable pages

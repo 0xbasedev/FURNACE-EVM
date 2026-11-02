@@ -5,8 +5,11 @@ import {Test} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Mantle} from "../src/Mantle.sol";
 import {ForgePool} from "../src/forge/ForgePool.sol";
+import {ForgeView} from "../src/forge/ForgeView.sol";
 import {ForgeEmissions} from "../src/forge/ForgeEmissions.sol";
 import {SettlementFixture} from "./ForgeEmissions.t.sol";
+
+using ForgeView for ForgePool;
 
 contract SettlementHandler is Test {
     ForgePool[4] internal pools;
