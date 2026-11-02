@@ -31,7 +31,7 @@ The spec (§8, §12) and config (`emissions.ashfall`, `execution.ashfall`) defin
 - `Record` gains `streak`, the position's Streak start while that head was current. It stays one storage slot (248 bits). The head's own anchor is the position's current `streakStart`.
 - **Why it is exact.** A Streak resets only on an executed withdrawal, and `_haircut` rewrites every active head at that instant, before `streakStart` moves. So an active record segment never spans a reset, and its anchor is constant over it.
 - **Invariant.** `invariant_streakAnchorsAlignWithRecords` checks that every active segment's anchor is at or before its start, and that the next segment's anchor is either the same or a reset at the boundary.
-- **Any future Streak reset** (a Deed sale, a Tap rule) must rewrite the active heads first, or this guarantee breaks.
+- **Any future Streak reset** (a Deed sale, a Tap rule) must rewrite the active heads first, or this guarantee breaks. ADR 0008 applies the same rule to the ordinary bonus, through the shared `_rewriteActive`.
 
 **3. The Ashfall weight.**
 - Per record segment `[a, b]`, eligibility starts at `e = max(a, anchor + 30d, a + (30d − participation at a))`. Participation grows 1:1 while the lot is active, so one start time suffices.
@@ -73,7 +73,7 @@ The spec (§8, §12) and config (`emissions.ashfall`, `execution.ashfall`) defin
 ## Still required before any deployment
 
 These were found or confirmed here and are **not built**:
-- **The Capstone Heat bonus.** It is ordinary Heat (up to +0.5) and must enter W and the Ashfall weight. ForgePool's measures take no ordinary bonus today. ForgePool is immutable and about 0.7 KB under the size limit, so the hook needs a structural change before deployment.
+- ~~**The Capstone Heat bonus.**~~ The hook is built in [ADR 0008](0008-ordinary-bonus.md): ForgePool's records carry an ordinary bonus (Capstone + Pyre) that `BOOST` sets. The Boost and Capstone contracts are still required.
 - **The Capstone, the matching and match-reserve contracts, and the Sealed-pot stream contract,** at mined addresses.
 - **The emergency exit's "stayers" share** (25% of the 8% fee) still goes to `FEE_COLLECTOR` with the rest of the fee.
 - **Relic perks** (shorter claim timers), **Quote yield** and **Pyre**.

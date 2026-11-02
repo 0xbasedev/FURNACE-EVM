@@ -20,6 +20,10 @@ contract ForgeHandler is Test {
     bool public monotoneBroken;
     mapping(uint256 id => uint256) internal lastS;
     mapping(uint256 id => uint256) internal lastW;
+    /// Ghost log of each position's ordinary-bonus changes (BOOST or a diluting top-up).
+    mapping(uint256 id => uint256[]) internal bonusTimes;
+    mapping(uint256 id => uint256[]) internal bonusUnits;
+    mapping(uint256 id => uint256) internal lastBonus;
 
     constructor(ForgePool pool_, MockERC20 token_, address collector_) {
         (pool, token, collector) = (pool_, token_, collector_);
@@ -111,6 +115,29 @@ contract ForgeHandler is Test {
         _after();
     }
 
+    function boost(uint256 seed, uint256 units) external {
+        if (ids.length == 0) return;
+        uint256 id = ids[seed % ids.length];
+        vm.prank(pool.BOOST());
+        try pool.setOrdinaryBonus(id, bound(units, 0, P.MAX_ORDINARY_BONUS_UNITS + 1)) {} catch {}
+        _after();
+    }
+
+    /// The bonus in effect at `t`: the last change at or before it.
+    function bonusAt(uint256 id, uint256 t) external view returns (uint256 units) {
+        uint256[] storage times = bonusTimes[id];
+        for (uint256 k; k < times.length && times[k] <= t; ++k) units = bonusUnits[id][k];
+    }
+
+    /// Whether the bonus changed strictly inside (a, b).
+    function bonusChangedWithin(uint256 id, uint256 a, uint256 b) external view returns (bool) {
+        uint256[] storage times = bonusTimes[id];
+        for (uint256 k; k < times.length; ++k) {
+            if (times[k] > a && times[k] < b) return true;
+        }
+        return false;
+    }
+
     function poke(uint256 seed) external {
         if (ids.length == 0) return;
         pool.poke(ids[seed % ids.length]);
@@ -134,6 +161,12 @@ contract ForgeHandler is Test {
                 pool.epochMeasure(ids[i], 0, pool.positionOf(ids[i]).lastCheckpoint);
             if (s < lastS[ids[i]] || w < lastW[ids[i]] || ss > s || sw > w) monotoneBroken = true;
             (lastS[ids[i]], lastW[ids[i]]) = (s, w);
+            uint256 bonus = pool.positionOf(ids[i]).ordinaryBonus; // every change happens at now
+            if (bonus != lastBonus[ids[i]]) {
+                bonusTimes[ids[i]].push(block.timestamp);
+                bonusUnits[ids[i]].push(bonus);
+                lastBonus[ids[i]] = bonus;
+            }
         }
         uint256 occ = pool.occupiedSecondsAt(block.timestamp);
         if (occ < lastOccupied) monotoneBroken = true;
@@ -154,11 +187,12 @@ contract ForgePoolInvariantTest is Test {
     ForgePool pool;
     MockERC20 token;
     address collector = makeAddr("feeRouter");
+    address boost = makeAddr("boost");
 
     function setUp() public {
         vm.warp(1_700_000_000);
         token = new MockERC20("Receipt", "RCPT");
-        pool = new ForgePool(IERC20(address(token)), true, collector);
+        pool = new ForgePool(IERC20(address(token)), true, collector, boost);
         handler = new ForgeHandler(pool, token, collector);
         targetContract(address(handler));
     }
@@ -262,6 +296,29 @@ contract ForgePoolInvariantTest is Test {
                     if (nextStreak != r.streak && p.closedAt == 0) {
                         assertGe(nextStreak, nextSince, "no Streak reset inside an active segment");
                     }
+                }
+            }
+        }
+    }
+
+    /// Each active record segment has one ordinary bonus (ADR 0008): the one in effect when it
+    /// began, with no change strictly inside it. An open active head began at or after the
+    /// last change, so the current bonus is its own.
+    function invariant_bonusAnchorsAlignWithRecords() public view {
+        for (uint256 i; i < handler.idCount(); ++i) {
+            uint256 id = handler.ids(i);
+            ForgePool.Position memory p = pool.positionOf(id);
+            for (uint256 j; j < 32; ++j) {
+                Lot memory head = pool.lotOf(id, j);
+                if (head.amount != 0 && p.closedAt == 0) {
+                    assertFalse(handler.bonusChangedWithin(id, head.since, type(uint256).max), "bonus changed under a head");
+                }
+                for (uint256 k; k < head.records; ++k) {
+                    Record memory r = pool.historyAt(id, j, k);
+                    if (r.amount == 0) continue;
+                    uint256 end = k + 1 < head.records ? pool.historyAt(id, j, k + 1).since : head.since;
+                    assertEq(r.ordinaryBonus, handler.bonusAt(id, r.since), "record carries the bonus of its start");
+                    assertFalse(handler.bonusChangedWithin(id, r.since, end), "no bonus change inside a segment");
                 }
             }
         }

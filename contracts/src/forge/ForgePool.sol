@@ -7,7 +7,6 @@ import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 import {FurnaceParams as P} from "../generated/FurnaceParams.sol";
-import {HeatMath} from "../libraries/HeatMath.sol";
 import {LapseHeap} from "./LapseHeap.sol";
 import {Lot, Record, Seal, SealStatus, SlotMeasure, ForgeMeasures} from "./ForgeMeasures.sol";
 
@@ -36,6 +35,11 @@ import {Lot, Record, Seal, SealStatus, SlotMeasure, ForgeMeasures} from "./Forge
 ///         pauses it and extends the term; an executed withdrawal or emergency exit
 ///         forfeits it; completion is back-dated to its due time. None of this adds an
 ///         external call to any exit.
+///
+///         Ordinary bonus (ADR 0008): the immutable BOOST contract sets each position's
+///         Capstone + Pyre Heat bonus (≤ 0.65). It enters W, the sealed W and the Ashfall
+///         weight through the records, segment by segment. A top-up dilutes it until
+///         BOOST refreshes it; exits never call BOOST.
 contract ForgePool is ReentrancyGuardTransient {
     using SafeERC20 for IERC20;
     using SafeCast for uint256;
@@ -46,6 +50,9 @@ contract ForgePool is ReentrancyGuardTransient {
     uint256 internal constant MAX_LOTS = 32;
     /// @notice [P] Concurrent cooling tickets per position (not in the canonical config).
     uint256 public constant MAX_PENDING_TICKETS = 8;
+    /// @notice [P] A BOOST rewrite reverts once an active slot holds this many records, so
+    ///         the rest of the uint24 record counter stays with the owner's own actions.
+    uint256 public constant BOOST_RECORD_LIMIT = 1 << 23;
 
     enum Status {
         None,
@@ -86,6 +93,7 @@ contract ForgePool is ReentrancyGuardTransient {
         address owner;
         uint40 lastCheckpoint;
         uint40 streakStart;
+        uint16 ordinaryBonus; // Capstone + Pyre, units of ORDINARY_BONUS_UNIT_RAY (ADR 0008)
         uint8 reservedSlots;
         uint8 pendingCount;
         uint32 usedMask; // slot j in use ⇔ amount > 0 or heldBy != 0
@@ -108,6 +116,8 @@ contract ForgePool is ReentrancyGuardTransient {
     IERC20 public immutable STAKE_TOKEN;
     bool public immutable IS_LP;
     address public immutable FEE_COLLECTOR;
+    /// @notice The only caller of `setOrdinaryBonus` (Capstone + Pyre; ADR 0008).
+    address public immutable BOOST;
 
     uint256 public positionCount;
     /// @notice Principal that earns now. Lapsed slices not yet processed are still
@@ -137,6 +147,7 @@ contract ForgePool is ReentrancyGuardTransient {
     event SealPaused(uint256 indexed id, uint256 indexed k, uint256 at);
     event SealResumed(uint256 indexed id, uint256 indexed k, uint256 at);
     event SealEnded(uint256 indexed id, uint256 indexed k, SealStatus status, uint256 at);
+    event OrdinaryBonusSet(uint256 indexed id, uint256 units);
 
     error ZeroAddress();
     error UnknownPosition(uint256 id);
@@ -164,13 +175,17 @@ contract ForgePool is ReentrancyGuardTransient {
     error SealGap(uint256 readyAt);
     error SealLimit(uint256 id);
     error NothingToSeal(uint256 id);
+    error NotBoost();
+    error BonusAboveCeiling(uint256 units);
+    error RecordLimit(uint256 id, uint256 slot);
 
-    constructor(IERC20 stakeToken, bool isLp, address feeCollector) {
-        if (address(stakeToken) == address(0) || feeCollector == address(0)) revert ZeroAddress();
+    constructor(IERC20 stakeToken, bool isLp, address feeCollector, address boost) {
+        if (address(stakeToken) == address(0) || feeCollector == address(0) || boost == address(0)) revert ZeroAddress();
         if (P.MAX_LOTS_PER_POSITION != MAX_LOTS || P.WITHDRAW_TIER_COUNT != 5) revert ConfigMismatch();
         STAKE_TOKEN = stakeToken;
         IS_LP = isLp;
         FEE_COLLECTOR = feeCollector;
+        BOOST = boost;
     }
 
     // ── principal paths ───────────────────────────────────────────────────
@@ -189,11 +204,16 @@ contract ForgePool is ReentrancyGuardTransient {
         _addLot(id, p, _pull(amount), now_);
     }
 
-    /// @notice Add a new lot (age 0) to an open position.
+    /// @notice Add a new lot (age 0) to an open position. [P] A bonus is diluted by
+    ///         custody before/after: exact for Capstone's linear part, below the true value
+    ///         otherwise, until BOOST refreshes it (ADR 0008).
     function deposit(uint256 id, uint256 amount) external nonReentrant {
         Position storage p = _touchOwned(id);
         if (p.closedAt != 0) revert Closed(id);
-        _addLot(id, p, _pull(amount), uint40(block.timestamp));
+        uint256 units = p.ordinaryBonus;
+        uint256 custody = units == 0 ? 0 : _activeOf(id, p) + _frozenOf(id, p);
+        uint256 net = _addLot(id, p, _pull(amount), uint40(block.timestamp));
+        if (units != 0) _setBonus(id, p, units * custody / (custody + net), type(uint256).max);
     }
 
     /// @notice Freeze `amount` pro-rata across the active lots and start its timer.
@@ -322,6 +342,17 @@ contract ForgePool is ReentrancyGuardTransient {
         emit Sealed(id, k, track, p.usedMask);
     }
 
+    /// @notice BOOST sets a position's ordinary bonus in units of ORDINARY_BONUS_UNIT_RAY.
+    ///         The position syncs and every active lot is rewritten at now first, so each
+    ///         record segment keeps one bonus. A closed position keeps its last bonus: its
+    ///         measures end at the exit.
+    function setOrdinaryBonus(uint256 id, uint256 units) external nonReentrant {
+        if (msg.sender != BOOST) revert NotBoost();
+        if (units > P.MAX_ORDINARY_BONUS_UNITS) revert BonusAboveCeiling(units);
+        if (_positions[id].closedAt != 0) return;
+        _setBonus(id, _touch(id), units, BOOST_RECORD_LIMIT);
+    }
+
     /// @notice Bring a position up to date: resolve due lapses (back-dated) and move its
     ///         checkpoint to now. Permissionless; settlement calls it before measuring.
     function poke(uint256 id) external nonReentrant {
@@ -361,6 +392,13 @@ contract ForgePool is ReentrancyGuardTransient {
         return (lot.amount, age, participated, lot.heldBy);
     }
 
+    /// @notice A position's custody principal, active plus frozen (zero once closed). Lapses
+    ///         move principal between the two, so it needs no sync.
+    function custodyOf(uint256 id) external view returns (uint256) {
+        Position storage p = _positions[id];
+        return _activeOf(id, p) + _frozenOf(id, p);
+    }
+
     function historyLength(uint256 id, uint256 slot) external view returns (uint256) {
         return _lots[id][slot].records;
     }
@@ -384,7 +422,7 @@ contract ForgePool is ReentrancyGuardTransient {
         t1 = _measurable(id, t0, t1);
         Position storage p = _positions[id];
         SlotMeasure memory m = ForgeMeasures.positionMeasure(
-            _history[id], _lots[id], _seals[id], p.streakStart, p.historyMask, t0, t1
+            _history[id], _lots[id], _seals[id], _anchor(p), p.historyMask, t0, t1
         );
         return (m.stakeSeconds, m.heatSeconds, m.sealedStakeSeconds, m.sealedHeatSeconds, m.ashfallQuotient);
     }
@@ -405,7 +443,7 @@ contract ForgePool is ReentrancyGuardTransient {
             return m;
         }
         return ForgeMeasures.slotMeasure(
-            _history[id][slot], _lots[id][slot], _seals[id], _positions[id].streakStart, ashfall, t0, t1, from, maxSegs
+            _history[id][slot], _lots[id][slot], _seals[id], _anchor(_positions[id]), ashfall, t0, t1, from, maxSegs
         );
     }
 
@@ -486,9 +524,9 @@ contract ForgePool is ReentrancyGuardTransient {
         return amount;
     }
 
-    function _addLot(uint256 id, Position storage p, uint256 amount, uint40 now_) internal {
+    function _addLot(uint256 id, Position storage p, uint256 amount, uint40 now_) internal returns (uint256 net) {
         uint256 fee = (amount * P.FORGE_DEPOSIT_FEE_PCT) / 100;
-        uint256 net = amount - fee;
+        net = amount - fee;
         if (IS_LP ? net < P.MIN_STAKE_LP : net == 0) revert BelowMinimum(net);
         if (_popcount(p.usedMask) + p.reservedSlots >= MAX_LOTS) revert LotCapacity(id);
         uint256 slot = _firstFree(p.usedMask);
@@ -684,8 +722,9 @@ contract ForgePool is ReentrancyGuardTransient {
         next.records = head.records;
         next.seal = _tag(id, p, slot);
         if (p.historyMask & bit != 0 && head.since != next.since) {
-            _history[id][slot][head.records] =
-                Record(head.since, head.amount, head.age, head.participated, head.seal, p.streakStart);
+            _history[id][slot][head.records] = Record(
+                head.since, head.amount, head.age, uint24(head.participated), head.seal, p.streakStart, p.ordinaryBonus
+            );
             next.records = head.records + 1;
         }
         _lots[id][slot] = next;
@@ -804,22 +843,42 @@ contract ForgePool is ReentrancyGuardTransient {
     /// @dev Scale every surviving lot's capped age, and every other pending slice's,
     ///      by the surviving fraction (balance − w) / balance.
     function _haircut(uint256 id, Position storage p, uint256 w, uint256 balance) internal {
-        Lot[MAX_LOTS] storage lots = _lots[id];
-        for (uint256 j; j < MAX_LOTS; ++j) {
-            Lot memory lot = lots[j];
-            if (lot.amount == 0) continue;
-            (uint256 age, uint256 part) = _lotAt(lot, block.timestamp);
-            _setHead(id, p, j, _head(block.timestamp, lot.amount, HeatMath.cooledAge(age, w, balance), part, 0));
-        }
+        _rewriteActive(id, p, w, balance, type(uint256).max);
         for (uint256 k; k < p.pendingCount; ++k) {
             uint32 other = _pending[id][k];
             uint32 otherMask = _tickets[id][other].sliceMask;
             for (uint256 j; j < MAX_LOTS; ++j) {
                 if (otherMask & (1 << j) == 0) continue;
                 Slice storage s = _slices[id][other][j];
-                s.age = uint32(HeatMath.cooledAge(s.age, w, balance));
+                s.age = uint32(_cooled(s.age, w, balance));
             }
         }
+    }
+
+    /// @dev Rewrite every active head at now with its capped age scaled by (balance − w) /
+    ///      balance (w = 0: unchanged), so a change of the position's anchors starts new
+    ///      record segments. Reverts at a slot holding `limit` records.
+    function _rewriteActive(uint256 id, Position storage p, uint256 w, uint256 balance, uint256 limit) internal {
+        for (uint256 j; j < MAX_LOTS; ++j) {
+            Lot memory lot = _lots[id][j];
+            if (lot.amount == 0) continue;
+            if (lot.records >= limit) revert RecordLimit(id, j);
+            (uint256 age, uint256 part) = _lotAt(lot, block.timestamp);
+            age = _cooled(age, w, balance);
+            _setHead(id, p, j, _head(block.timestamp, lot.amount, age, part, 0));
+        }
+    }
+
+    /// @dev Change the position's ordinary bonus after closing every active segment at now.
+    function _setBonus(uint256 id, Position storage p, uint256 units, uint256 limit) internal {
+        if (units == p.ordinaryBonus) return;
+        _rewriteActive(id, p, 0, 1, limit);
+        p.ordinaryBonus = uint16(units);
+        emit OrdinaryBonusSet(id, units);
+    }
+
+    function _anchor(Position storage p) internal view returns (uint256) {
+        return ForgeMeasures.anchorOf(p.streakStart, p.ordinaryBonus);
     }
 
     /// @dev Freeze `take` of slot j at its current age; true if the lot keeps a remainder.
@@ -850,7 +909,7 @@ contract ForgePool is ReentrancyGuardTransient {
         for (uint256 j; j < MAX_LOTS; ++j) {
             if (mask & (1 << j) == 0) continue;
             have[j] = lots[j].amount;
-            take[j] = Math.mulDiv(have[j], amount, active);
+            take[j] = have[j] * amount / active; // < 2^96 · 2^101: exact without mulDiv
             sum += take[j];
         }
         uint256 dust = amount - sum;
@@ -859,6 +918,12 @@ contract ForgePool is ReentrancyGuardTransient {
             take[j] += add;
             dust -= add;
         }
+    }
+
+    /// @dev HeatMath.cooledAge for the pool's own operands: ages are already capped and
+    ///      0 ≤ w ≤ balance < 2^130, so the product fits and plain division is exact.
+    function _cooled(uint256 age, uint256 w, uint256 balance) internal pure returns (uint256) {
+        return age * (balance - w) / balance;
     }
 
     function _activeOf(uint256 id, Position storage p) internal view returns (uint256 total) {

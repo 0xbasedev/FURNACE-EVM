@@ -3,7 +3,13 @@
 // environments, so this wraps solc-js (npm `solc`, pinned in package.json).
 // Supports `--version` and `--standard-json` (stdin → stdout), which is all
 // forge uses. Forge inlines every source's content, so no import callback.
+//
+// The input goes to solc on the wasm HEAP. solc-js's own `compile` passes it as a cwrap
+// `string` argument, which emscripten copies onto the wasm STACK (4 bytes per character
+// reserved): an input past ~1.2 MB overflows the stack and solc dies with "memory access
+// out of bounds" before compiling anything. The full test set crosses that size.
 const solc = require('solc');
+const soljson = require('solc/soljson.js');
 const args = process.argv.slice(2);
 if (args.includes('--version')) {
   process.stdout.write(`solc, the solidity compiler commandline interface\nVersion: ${solc.version()}\n`);
@@ -13,7 +19,20 @@ if (!args.includes('--standard-json')) {
   process.stderr.write('tools/solc: only --version and --standard-json are supported\n');
   process.exit(1);
 }
+
+function compileStandard(input) {
+  const size = soljson.lengthBytesUTF8(input) + 1;
+  const ptr = soljson._malloc(size);
+  soljson.stringToUTF8(input, ptr, size);
+  try {
+    return soljson.UTF8ToString(soljson._solidity_compile(ptr, 0, 0)); // no import callback, no context
+  } finally {
+    soljson._free(ptr);
+    soljson._solidity_reset();
+  }
+}
+
 let input = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (d) => (input += d));
-process.stdin.on('end', () => process.stdout.write(solc.compile(input)));
+process.stdin.on('end', () => process.stdout.write(compileStandard(input)));

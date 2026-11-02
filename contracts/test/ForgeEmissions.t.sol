@@ -20,6 +20,7 @@ abstract contract SettlementFixture is Test {
     Mantle mantle;
     ForgeEmissions emissions;
     address feeRouter = makeAddr("feeRouter");
+    address boost = makeAddr("boost");
     address capstone = makeAddr("capstone");
     address matchReserveSink = makeAddr("matchReserve");
     address sealedPotStream = makeAddr("sealedPot");
@@ -32,7 +33,7 @@ abstract contract SettlementFixture is Test {
         bool[4] memory lp = [true, true, false, false];
         for (uint256 i; i < 4; ++i) {
             stake[i] = new MockERC20("Stake", "STK");
-            pools[i] = new ForgePool(IERC20(address(stake[i])), lp[i], feeRouter);
+            pools[i] = new ForgePool(IERC20(address(stake[i])), lp[i], feeRouter, boost);
         }
         uint256 nonce = vm.getNonce(address(this));
         address mantleAt = vm.computeCreateAddress(address(this), nonce + 1);
@@ -91,7 +92,8 @@ contract ForgeEmissionsDifferentialTest is SettlementFixture {
         BurnForfeits,
         TakeCapstone,
         TakeMatchReserve,
-        TakeSealedPot
+        TakeSealedPot,
+        Boost
     }
 
     string json;
@@ -115,12 +117,13 @@ contract ForgeEmissionsDifferentialTest is SettlementFixture {
     function test_settle_sealForfeitRouted() public { _replay("sealForfeitRouted"); }
     function test_settle_sealPausedInEpoch() public { _replay("sealPausedInEpoch"); }
     function test_settle_ashfallHeatSquared() public { _replay("ashfallHeatSquared"); }
+    function test_settle_boostedHeat() public { _replay("boostedHeat"); }
     function test_settle_random0() public { _replay("random0"); }
     function test_settle_random1() public { _replay("random1"); }
     function test_settle_random2() public { _replay("random2"); }
 
     function test_everySettlementScenarioIsReplayed() public view {
-        assertEq(vm.parseJsonStringArray(json, ".names").length, 18, "add a test_settle_* for each new scenario");
+        assertEq(vm.parseJsonStringArray(json, ".names").length, 19, "add a test_settle_* for each new scenario");
     }
 
     function _uints(string memory key) internal view returns (uint256[] memory out) {
@@ -176,6 +179,9 @@ contract ForgeEmissionsDifferentialTest is SettlementFixture {
         } else if (kind == K.TakeSealedPot) {
             vm.prank(sealedPotStream);
             emissions.takeSealedPot(poolIdx);
+        } else if (kind == K.Boost) {
+            vm.prank(boost);
+            pool.setOrdinaryBonus(pos, arg);
         } else {
             vm.prank(_user(pos));
             if (kind == K.Open) assertEq(pool.open(arg), pos, "position id");

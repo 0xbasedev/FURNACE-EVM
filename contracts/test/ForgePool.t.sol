@@ -2,6 +2,7 @@
 pragma solidity 0.8.28;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {ForgePool} from "../src/forge/ForgePool.sol";
 import {Seal} from "../src/forge/ForgeMeasures.sol";
 import {HeatMath} from "../src/libraries/HeatMath.sol";
@@ -9,12 +10,18 @@ import {FurnaceParams as P} from "../src/generated/FurnaceParams.sol";
 import {ForgeVectors} from "./utils/ForgeVectors.sol";
 import {MockERC20, FeeOnTransferERC20} from "./utils/MockERC20.sol";
 
-/// @dev Test-only subclass: jumps a position's ticket counter to its uint24 limit.
+/// @dev Test-only subclass: jumps a position's ticket or record counter towards its limit.
 contract ForgePoolHarness is ForgePool {
-    constructor(IERC20 stakeToken, bool isLp, address feeCollector) ForgePool(stakeToken, isLp, feeCollector) {}
+    constructor(IERC20 stakeToken, bool isLp, address feeCollector, address boost)
+        ForgePool(stakeToken, isLp, feeCollector, boost)
+    {}
 
     function setNextTicketIdForTest(uint256 id, uint32 value) external {
         _positions[id].nextTicketId = value;
+    }
+
+    function setRecordsForTest(uint256 id, uint256 slot, uint24 n) external {
+        _lots[id][slot].records = n;
     }
 }
 
@@ -22,12 +29,13 @@ abstract contract ForgeFixture is ForgeVectors {
     MockERC20 token;
     ForgePool pool;
     address collector = makeAddr("feeRouter");
+    address boost = makeAddr("boost");
 
     uint256 constant FUND = 1e30;
 
     function _deploy(bool lp) internal {
         token = new MockERC20("Receipt", "RCPT");
-        pool = new ForgePool(IERC20(address(token)), lp, collector);
+        pool = new ForgePool(IERC20(address(token)), lp, collector, boost);
     }
 
     function _user(uint256 pos) internal pure returns (address) {
@@ -54,7 +62,8 @@ contract ForgePoolDifferentialTest is ForgeFixture {
         Emergency,
         Poke,
         Collect,
-        Seal
+        Seal,
+        Boost
     }
 
     function setUp() public {
@@ -77,6 +86,8 @@ contract ForgePoolDifferentialTest is ForgeFixture {
     function test_scenario_sealForfeitExecute() public { _replay("sealForfeitExecute"); }
     function test_scenario_sealCohortJoin() public { _replay("sealCohortJoin"); }
     function test_scenario_sealEmergency() public { _replay("sealEmergency"); }
+    function test_scenario_boostCycle() public { _replay("boostCycle"); }
+    function test_scenario_boostSealDeposit() public { _replay("boostSealDeposit"); }
     function test_scenario_random0() public { _replay("random0"); }
     function test_scenario_random1() public { _replay("random1"); }
     function test_scenario_random2() public { _replay("random2"); }
@@ -86,7 +97,7 @@ contract ForgePoolDifferentialTest is ForgeFixture {
 
     /// Every generated scenario has a test above; a new one fails this until added.
     function test_everyScenarioIsReplayed() public view {
-        assertEq(vm.parseJsonStringArray(forgeJson, ".names").length, 22, "add a test_scenario_* for each new scenario");
+        assertEq(vm.parseJsonStringArray(forgeJson, ".names").length, 24, "add a test_scenario_* for each new scenario");
     }
 
     function test_provisionalConstantsMatchModel() public {
@@ -136,6 +147,11 @@ contract ForgePoolDifferentialTest is ForgeFixture {
             pool.collectFees();
             return;
         }
+        if (kind == Kind.Boost) {
+            vm.prank(boost);
+            pool.setOrdinaryBonus(pos, arg);
+            return;
+        }
         vm.prank(_user(pos));
         if (kind == Kind.Open) assertEq(pool.open(arg), pos, "position id");
         else if (kind == Kind.Deposit) pool.deposit(pos, arg);
@@ -158,6 +174,7 @@ contract ForgePoolDifferentialTest is ForgeFixture {
             n = _pushHead(w, n, id, m[0], m[1]);
             n = _pushSeal(w, n, id, m[2], m[3]);
             w[n++] = m[4]; // Ashfall weight from records; the model accrues it independently
+            w[n++] = pool.positionOf(id).ordinaryBonus;
             for (uint256 j; j < 32; ++j) {
                 n = _pushLot(w, n, id, j);
             }
@@ -255,14 +272,16 @@ contract ForgePoolTest is ForgeFixture {
 
     function test_constructorRejectsZeroAddresses() public {
         vm.expectRevert(ForgePool.ZeroAddress.selector);
-        new ForgePool(IERC20(address(0)), true, collector);
+        new ForgePool(IERC20(address(0)), true, collector, boost);
         vm.expectRevert(ForgePool.ZeroAddress.selector);
-        new ForgePool(IERC20(address(token)), true, address(0));
+        new ForgePool(IERC20(address(token)), true, address(0), boost);
+        vm.expectRevert(ForgePool.ZeroAddress.selector);
+        new ForgePool(IERC20(address(token)), true, collector, address(0));
     }
 
     function test_feeOnTransferTokenIsRejected() public {
         FeeOnTransferERC20 skim = new FeeOnTransferERC20();
-        ForgePool skimPool = new ForgePool(IERC20(address(skim)), false, collector);
+        ForgePool skimPool = new ForgePool(IERC20(address(skim)), false, collector, boost);
         skim.mint(alice, 1e18);
         vm.startPrank(alice);
         skim.approve(address(skimPool), type(uint256).max);
@@ -364,7 +383,7 @@ contract ForgePoolTest is ForgeFixture {
 
     function test_emergencyExitIgnoresTheFeeCollector() public {
         // Exits never call the fee collector, so one that always reverts cannot block them.
-        ForgePool hostile = new ForgePool(IERC20(address(token)), true, address(new Reverter()));
+        ForgePool hostile = new ForgePool(IERC20(address(token)), true, address(new Reverter()), boost);
         vm.startPrank(alice);
         token.approve(address(hostile), type(uint256).max);
         uint256 id = hostile.open(100e18);
@@ -378,7 +397,7 @@ contract ForgePoolTest is ForgeFixture {
     }
 
     function test_ticketIdsStopAtTheHeldByWidth() public {
-        ForgePoolHarness h = new ForgePoolHarness(IERC20(address(token)), true, collector);
+        ForgePoolHarness h = new ForgePoolHarness(IERC20(address(token)), true, collector, boost);
         vm.startPrank(alice);
         token.approve(address(h), type(uint256).max);
         uint256 id = h.open(100e18);
@@ -391,6 +410,106 @@ contract ForgePoolTest is ForgeFixture {
         uint256 net = h.emergencyExit(id); // principal still leaves
         vm.stopPrank();
         assertEq(net, 99e18 - (99e18 * 8) / 100);
+    }
+
+    // ── ordinary bonus (ADR 0008) ────────────────────────────────────────
+
+    function test_onlyBoostSetsTheBonusWithinTheCeiling() public {
+        vm.prank(alice);
+        uint256 id = pool.open(100e18);
+        vm.prank(alice);
+        vm.expectRevert(ForgePool.NotBoost.selector);
+        pool.setOrdinaryBonus(id, 1);
+        vm.startPrank(boost);
+        uint256 max = P.MAX_ORDINARY_BONUS_UNITS;
+        assertEq(max * P.ORDINARY_BONUS_UNIT_RAY, P.MAX_ORDINARY_BONUS_RAY);
+        vm.expectRevert(abi.encodeWithSelector(ForgePool.BonusAboveCeiling.selector, max + 1));
+        pool.setOrdinaryBonus(id, max + 1);
+        vm.expectRevert(abi.encodeWithSelector(ForgePool.UnknownPosition.selector, id + 1));
+        pool.setOrdinaryBonus(id + 1, 1);
+        vm.expectEmit(address(pool));
+        emit ForgePool.OrdinaryBonusSet(id, max);
+        pool.setOrdinaryBonus(id, max);
+        assertEq(pool.positionOf(id).ordinaryBonus, max);
+        skip(1 days);
+        vm.recordLogs();
+        pool.setOrdinaryBonus(id, max); // unchanged: syncs, but no rewrite and no event
+        vm.stopPrank();
+        assertEq(vm.getRecordedLogs().length, 0);
+        assertEq(pool.historyLength(id, 0), 0);
+        assertEq(pool.positionOf(id).lastCheckpoint, block.timestamp);
+    }
+
+    function test_bonusEntersHeatAndAshfallAtItsRate() public {
+        vm.prank(alice);
+        uint256 id = pool.open(100e18); // net 99
+        uint256 t0 = block.timestamp;
+        vm.prank(boost);
+        pool.setOrdinaryBonus(id, 65_000); // same instant as the head: overwritten, no record
+        assertEq(pool.historyLength(id, 0), 0);
+        skip(10 days);
+        vm.prank(boost);
+        pool.setOrdinaryBonus(id, 50_000);
+        assertEq(pool.historyLength(id, 0), 1);
+        skip(90 days);
+        pool.poke(id);
+        (uint256 s, uint256 w,,, uint256 q) = pool.epochMeasure(id, t0, block.timestamp);
+        assertEq(s, 99e18 * 100 days);
+        uint256 h = HeatMath.integrateHeat(0, 10 days, 0.65e27) + HeatMath.integrateHeat(10 days, 90 days, 0.5e27);
+        assertEq(w, 99e18 * h);
+        // Ashfall from day 30 (Streak and participation), Heat² with the bonus of the day.
+        assertEq(q, Math.mulDiv(99e18, HeatMath.integrateSquaredHeat(30 days, 70 days, 0.5e27), P.RAY));
+    }
+
+    function test_closedPositionKeepsItsBonus() public {
+        vm.prank(alice);
+        uint256 id = pool.open(100e18);
+        vm.prank(boost);
+        pool.setOrdinaryBonus(id, 20_000);
+        skip(1 days);
+        vm.prank(alice);
+        pool.emergencyExit(id);
+        skip(1 days);
+        vm.recordLogs();
+        vm.prank(boost);
+        pool.setOrdinaryBonus(id, 0); // no revert, no sync, no event: measures ended at the exit
+        assertEq(vm.getRecordedLogs().length, 0);
+        assertEq(pool.positionOf(id).ordinaryBonus, 20_000);
+        assertEq(pool.positionOf(id).lastCheckpoint, block.timestamp - 1 days);
+    }
+
+    function test_topUpDilutesTheBonusByCustody() public {
+        vm.prank(alice);
+        uint256 id = pool.open(100e18); // net 99
+        vm.prank(boost);
+        pool.setOrdinaryBonus(id, 50_000);
+        skip(1 days);
+        vm.startPrank(alice);
+        pool.requestCooling(id, 9e18); // a frozen slice is still custody
+        vm.expectEmit(address(pool));
+        emit ForgePool.OrdinaryBonusSet(id, 12_500); // 50000 · 99 / (99 + 297)
+        pool.deposit(id, 300e18);
+        vm.stopPrank();
+        assertEq(pool.positionOf(id).ordinaryBonus, 12_500);
+    }
+
+    function test_boostCannotExhaustTheRecordCounter() public {
+        ForgePoolHarness h = new ForgePoolHarness(IERC20(address(token)), true, collector, boost);
+        vm.startPrank(alice);
+        token.approve(address(h), type(uint256).max);
+        uint256 id = h.open(100e18);
+        vm.stopPrank();
+        h.setRecordsForTest(id, 0, uint24(h.BOOST_RECORD_LIMIT()));
+        skip(1 days);
+        vm.prank(boost);
+        vm.expectRevert(abi.encodeWithSelector(ForgePool.RecordLimit.selector, id, 0));
+        h.setOrdinaryBonus(id, 1);
+        vm.startPrank(alice); // the owner's own actions keep the rest of the counter
+        uint32 t = h.requestCooling(id, 9e18);
+        skip(6 hours);
+        h.executeWithdrawal(id, t);
+        vm.stopPrank();
+        assertEq(h.lotOf(id, 0).records, h.BOOST_RECORD_LIMIT() + 2);
     }
 
     function test_recordsKeepPastStateAfterChanges() public {
@@ -560,6 +679,12 @@ contract ForgePoolTest is ForgeFixture {
         uint256 g = gasleft();
         pool.poke(id);
         emit log_named_uint("poke (32 lots)", g - gasleft());
+        vm.stopPrank();
+        vm.prank(boost);
+        g = gasleft();
+        pool.setOrdinaryBonus(id, 65_000);
+        emit log_named_uint("setOrdinaryBonus (32 lots)", g - gasleft());
+        vm.startPrank(alice);
         g = gasleft();
         uint32 t = pool.requestCooling(id, pool.lotOf(id, 0).amount * 32); // 100%: no splits
         emit log_named_uint("requestCooling 100% (32 lots)", g - gasleft());
