@@ -67,6 +67,19 @@ Each figure is measured before (ADR 0009) and after this change.
   - Pages over many slots got cheaper, because the history mask is cached per page.
 - **Credits and claims got cheaper**, because they read one word where the old views copied the whole position.
 
+## Verification
+
+- **`pnpm check`:** 191/191 Solidity tests, the size gate and generation freshness.
+- **`ForgeViewTest`:** the decoding invariant, the lens against the library, and a lapse due exactly at its deadline.
+- **Mutations:** 7 planted bugs in the decoding layer. **All 7 are caught.** They cover:
+  - a wrong slot constant;
+  - a wrong field offset, both for closure and for the bonus;
+  - `lotAt` without its age cap;
+  - a strict due check;
+  - custody without its tickets;
+  - a stale history-mask cache in ForgeEmissions.
+- **One gap found and closed.** The strict due check survived at first: random walks almost never check at the exact deadline second. A unit test now does.
+
 ## Consequences
 
 - **Integrators** read positions through `ForgeLens`, `ForgeView` or `eth_getStorageAt`. The pool's ABI no longer has the sixteen views.
