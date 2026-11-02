@@ -130,6 +130,17 @@ library FurnaceParams {
     uint256 internal constant SEAL_FORFEIT_MATCH_RESERVE_PCT = 25;
     uint256 internal constant SEAL_FORFEIT_SEALED_POT_PCT = 25;
 
+    // ── Taps: Relic-gated, Streak-preserving withdrawals (spec v5.5 §9) ──
+    uint256 internal constant TAP_TIER_0_STREAK = 7776000; // blaze: 90 days of Streak
+    uint256 internal constant TAP_TIER_0_MAX_PCT = 10; // of active principal [P]
+    uint256 internal constant TAP_TIER_0_EVERY = 7776000; // one Tap per 90 days
+    uint256 internal constant TAP_TIER_1_STREAK = 31536000; // eternal: 365 days of Streak
+    uint256 internal constant TAP_TIER_1_MAX_PCT = 25; // of active principal [P]
+    uint256 internal constant TAP_TIER_1_EVERY = 7776000; // one Tap per 90 days
+    uint256 internal constant TAP_TIER_2_STREAK = 63072000; // bedrock: 730 days of Streak
+    uint256 internal constant TAP_TIER_2_MAX_PCT = 25; // of active principal [P]
+    uint256 internal constant TAP_TIER_2_EVERY = 5184000; // one Tap per 60 days
+
     // ── Deterministic deployment registry (CREATE3). PROVISIONAL while the deployer is 0x1111111111111111111111111111111111111111 ──
     //    Only MINED entries become constants; unmined modules are constructor/initializer inputs.
     address internal constant CREATEX = 0xba5Ed099633D3B313e4D5F7bdc1305d3c28ba5Ed;

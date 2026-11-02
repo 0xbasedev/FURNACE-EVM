@@ -56,6 +56,7 @@ abstract contract ForgePoolBase is ReentrancyGuardTransient {
         Status status;
         bool poolApplied;
         uint32 sliceMask;
+        bool tap; // a Tap: executes with no age haircut and no Streak reset (ADR 0014)
     }
 
     struct Plan {
@@ -87,6 +88,7 @@ abstract contract ForgePoolBase is ReentrancyGuardTransient {
         bool founder; // First Flame's 15-day floor applies
         bool headStartActive; // the head start applies
         uint32 headStart; // the head start, in seconds of financial age
+        uint40 lastTapAt; // the last Tap request (spec §9)
         Plan plan;
     }
 
@@ -131,7 +133,7 @@ abstract contract ForgePoolBase is ReentrancyGuardTransient {
 
     event Opened(uint256 indexed id, address indexed owner);
     event Deposited(uint256 indexed id, uint256 slot, uint256 net, uint256 fee);
-    event CoolingRequested(uint256 indexed id, uint32 indexed ticketId, uint256 amount, uint256 maturity);
+    event CoolingRequested(uint256 indexed id, uint32 indexed ticketId, uint256 amount, uint256 maturity, bool tap);
     event WithdrawalExecuted(uint256 indexed id, uint32 indexed ticketId, uint256 net, uint256 fee);
     event CoolingResumed(uint256 indexed id, uint32 indexed ticketId, Status status, uint256 at);
     event EmergencyExited(uint256 indexed id, uint256 net, uint256 fee);
@@ -176,6 +178,9 @@ abstract contract ForgePoolBase is ReentrancyGuardTransient {
     error NotDeeds();
     error Listed(uint256 id);
     error NotListed(uint256 id);
+    error NoTap(uint256 id);
+    error TapTooSoon(uint256 readyAt);
+    error TapQuotaExceeded(uint256 amount, uint256 quota);
 
     constructor(IERC20 stakeToken, bool isLp, address feeCollector, address boost, address deeds) {
         if (
@@ -502,6 +507,22 @@ abstract contract ForgePoolBase is ReentrancyGuardTransient {
         p.reservedSlots += uint8(splits);
     }
 
+    /// @dev `_freeze` for a new request. The first pending ticket pauses a running Seal, before the
+    ///      freeze so its heads drop the tag, then retags the cohort's remaining lots.
+    function _freezePausing(uint256 id, Position storage p, uint32 ticketId, uint256[MAX_LOTS] memory take)
+        internal
+        returns (uint32 sliceMask)
+    {
+        Seal storage seal_ = _seals[id][p.sealCount];
+        bool pauses = p.pendingCount == 0 && seal_.status == SealStatus.Active;
+        if (pauses) seal_.pausedAt = uint40(block.timestamp);
+        sliceMask = _freeze(id, p, ticketId, take);
+        if (pauses) {
+            _retag(id, p, seal_.cohortMask, block.timestamp);
+            emit SealPaused(id, p.sealCount, block.timestamp);
+        }
+    }
+
     /// @dev An executed ticket frees the slots its slices held or reserved.
     function _releaseSlots(uint256 id, Position storage p, uint32 ticketId, uint32 mask) internal {
         Lot[MAX_LOTS] storage lots = _lots[id];
@@ -571,6 +592,51 @@ abstract contract ForgePoolBase is ReentrancyGuardTransient {
         lot.heldBy = lot.amount == 0 ? uint24(ticketId) : 0;
         _setHead(id, p, j, lot);
         return lot.amount != 0;
+    }
+
+    /// @dev A Tap's quota (spec §9): the position's Streak picks the highest Relic tier with a Tap;
+    ///      the request takes at most that tier's share of active principal, once per its window.
+    ///      [P] The quota is used at request, and the share is of active principal.
+    function _chargeTap(uint256 id, Position storage p, uint256 amount, uint256 active) internal {
+        uint256 streak = block.timestamp - p.streakStart;
+        (uint256 maxPct, uint256 every) = streak >= P.TAP_TIER_2_STREAK
+            ? (P.TAP_TIER_2_MAX_PCT, P.TAP_TIER_2_EVERY)
+            : streak >= P.TAP_TIER_1_STREAK
+                ? (P.TAP_TIER_1_MAX_PCT, P.TAP_TIER_1_EVERY)
+                : streak >= P.TAP_TIER_0_STREAK ? (P.TAP_TIER_0_MAX_PCT, P.TAP_TIER_0_EVERY) : (0, 0);
+        if (maxPct == 0) revert NoTap(id);
+        uint256 last = p.lastTapAt;
+        if (last != 0 && block.timestamp < last + every) revert TapTooSoon(last + every);
+        if (amount * 100 > active * maxPct) revert TapQuotaExceeded(amount, (active * maxPct) / 100);
+        p.lastTapAt = uint40(block.timestamp);
+    }
+
+    /// @dev Youngest lots first (spec §9): ascending financial age at now, ties by slot; only the
+    ///      last lot drawn is partial. Sums exactly to `amount` (≤ active).
+    function _youngestFirst(uint256 id, Position storage p, uint256 amount)
+        internal
+        view
+        returns (uint256[MAX_LOTS] memory take)
+    {
+        uint256[MAX_LOTS] memory age;
+        uint256[MAX_LOTS] memory have;
+        uint32 left;
+        for (uint256 j; j < MAX_LOTS; ++j) {
+            Lot memory lot = _lots[id][j];
+            if (p.usedMask & (1 << j) == 0 || lot.amount == 0) continue;
+            (age[j],) = _lotAt(lot, block.timestamp);
+            have[j] = lot.amount;
+            left |= uint32(1 << j);
+        }
+        while (amount != 0) {
+            uint256 best = MAX_LOTS;
+            for (uint256 j; j < MAX_LOTS; ++j) {
+                if (left & (1 << j) != 0 && (best == MAX_LOTS || age[j] < age[best])) best = j;
+            }
+            left &= ~uint32(1 << best);
+            take[best] = Math.min(amount, have[best]);
+            amount -= take[best];
+        }
     }
 
     /// @dev floor(a_j·amount/active) per active lot in slot order; the floor dust goes

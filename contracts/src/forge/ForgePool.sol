@@ -97,31 +97,40 @@ contract ForgePool is ForgePoolBase {
     ///         The tier follows the plan's cumulative request against its frozen
     ///         reference, so splitting a large exit cannot buy short timers.
     function requestCooling(uint256 id, uint256 amount) external nonReentrant returns (uint32 ticketId) {
+        return _request(id, amount, false);
+    }
+
+    /// @notice Tap: a Relic-gated partial withdrawal (spec §9; ADR 0014). It freezes the youngest
+    ///         lots first and executes with no age haircut and no Streak reset, but pays the normal
+    ///         fee and timer (the cooling plan's), and its execution forfeits a running Seal. The
+    ///         Streak picks the tier: 10% every 90 days from 90 days, 25% every 90 days from 365, 25%
+    ///         every 60 days from 730, of active principal. Cancel and lapse work as for cooling.
+    function requestTap(uint256 id, uint256 amount) external nonReentrant returns (uint32 ticketId) {
+        return _request(id, amount, true);
+    }
+
+    function _request(uint256 id, uint256 amount, bool tap) internal returns (uint32 ticketId) {
         Position storage p = _touchOwned(id);
         if (p.closedAt != 0) revert Closed(id);
         if (amount == 0) revert ZeroAmount();
         uint256 active = _activeOf(id, p);
         if (amount > active) revert ExceedsActive(amount, active);
+        if (tap) _chargeTap(id, p, amount, active);
         uint256 maturity = block.timestamp + _chargePlan(id, p, amount, active);
 
         ticketId = ++p.nextTicketId;
         if (ticketId > type(uint24).max) revert TicketIdOverflow(id);
-        Seal storage seal_ = _seals[id][p.sealCount];
-        bool pauses = p.pendingCount == 0 && seal_.status == SealStatus.Active;
-        if (pauses) seal_.pausedAt = uint40(block.timestamp); // before the freeze: its heads drop the tag
-        uint32 sliceMask = _freeze(id, p, ticketId, _proRata(_lots[id], p.usedMask, amount, active));
-        if (pauses) {
-            _retag(id, p, seal_.cohortMask, block.timestamp);
-            emit SealPaused(id, p.sealCount, block.timestamp);
-        }
-        _tickets[id][ticketId] = Ticket(uint128(amount), uint40(maturity), Status.Pending, false, sliceMask);
+        uint32 sliceMask = _freezePausing(
+            id, p, ticketId, tap ? _youngestFirst(id, p, amount) : _proRata(_lots[id], p.usedMask, amount, active)
+        );
+        _tickets[id][ticketId] = Ticket(uint128(amount), uint40(maturity), Status.Pending, false, sliceMask, tap);
         _pending[id][p.pendingCount++] = ticketId;
 
         activePrincipal -= amount;
         frozenPrincipal += amount;
         _lapses.push(maturity + P.WITHDRAW_EXECUTION_WINDOW, _key(id, ticketId));
         _afterDecrease(uint40(block.timestamp));
-        emit CoolingRequested(id, ticketId, amount, maturity);
+        emit CoolingRequested(id, ticketId, amount, maturity, tap);
     }
 
     /// @notice Pay out a matured ticket in kind (1% fee). Every surviving lot, and
@@ -137,9 +146,12 @@ contract ForgePool is ForgePoolBase {
 
         _endSeal(id, p, SealStatus.Forfeited, block.timestamp);
         _releaseSlots(id, p, ticketId, t.sliceMask);
+        bool tap = t.tap;
         _dropPending(id, p, ticketId, Status.Executed);
-        _haircut(id, p, w, balance);
-        p.streakStart = uint40(block.timestamp);
+        if (!tap) {
+            _haircut(id, p, w, balance);
+            p.streakStart = uint40(block.timestamp);
+        }
 
         uint256 fee = (w * P.FORGE_WITHDRAW_FEE_PCT) / 100;
         net = w - fee;

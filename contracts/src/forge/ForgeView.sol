@@ -76,6 +76,7 @@ library ForgeView {
         p.founder = _bits(w2, 10, 1) != 0;
         p.headStartActive = _bits(w2, 11, 1) != 0;
         p.headStart = uint32(_bits(w2, 12, 4));
+        p.lastTapAt = uint40(_bits(w2, 16, 5));
         p.plan = ForgePoolBase.Plan(uint40(_bits(w3, 0, 5)), uint128(_bits(w3, 5, 16)), uint128(_bits(w4, 0, 16)));
     }
 
@@ -231,6 +232,7 @@ library ForgeView {
         t.status = ForgePoolBase.Status(_bits(w, 21, 1));
         t.poolApplied = _bits(w, 22, 1) != 0;
         t.sliceMask = uint32(_bits(w, 23, 4));
+        t.tap = _bits(w, 27, 1) != 0;
     }
 
     function sliceOf(ForgePool pool, uint256 id, uint32 ticketId, uint256 slot)

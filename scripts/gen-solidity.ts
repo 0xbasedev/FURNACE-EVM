@@ -290,6 +290,26 @@ c('uint256', 'SEAL_FORFEIT_BURN_PCT', fr.burnPct);
 c('uint256', 'SEAL_FORFEIT_MATCH_RESERVE_PCT', fr.matchReservePct);
 c('uint256', 'SEAL_FORFEIT_SEALED_POT_PCT', fr.sealedPotPct);
 
+section('Taps: Relic-gated, Streak-preserving withdrawals (spec v5.5 §9)');
+// A Tap draws the youngest lots first with no age haircut or Streak reset, pays the normal fee and
+// timer, and forfeits a running Seal. The position's Streak picks the highest Relic tier with a Tap.
+if (f.heat.tapDrawdownMode !== 'youngestFirst') throw new Error(`ForgePool draws Taps youngest-first, config has ${f.heat.tapDrawdownMode}`);
+const tapTiers = f.relics.filter((r) => r.perks.tap).map((r) => ({ key: r.key, days: r.days, ...r.perks.tap! }));
+if (tapTiers.length !== 3) throw new Error('ForgePool._tapTier unrolls exactly 3 Tap tiers');
+tapTiers.forEach((t, i) => {
+  if (i > 0 && !(t.days > tapTiers[i - 1].days)) throw new Error('Tap tiers must ascend by Streak days');
+  if (!(t.maxPct > 0 && t.maxPct <= 100 && Number.isInteger(t.maxPct))) throw new Error(`${t.key}: Tap share must be a whole percent in (0, 100]`);
+  if (!(t.everyDays > 0 && Number.isInteger(t.everyDays))) throw new Error(`${t.key}: Tap interval must be whole days`);
+});
+// A Deed resets the Streak and keeps lastTapAt (ADR 0011, ADR 0014): safe only while the first tier's
+// Streak outlasts every Tap interval, so a buyer can never Tap inside the seller's window.
+if (tapTiers[0].days < Math.max(...tapTiers.map((t) => t.everyDays))) throw new Error('the first Tap tier must take at least as long as the longest Tap interval');
+tapTiers.forEach((t, i) => {
+  c('uint256', `TAP_TIER_${i}_STREAK`, BigInt(t.days) * DAY_N, `${t.key}: ${t.days} days of Streak`);
+  c('uint256', `TAP_TIER_${i}_MAX_PCT`, t.maxPct, `of active principal [P]`);
+  c('uint256', `TAP_TIER_${i}_EVERY`, BigInt(t.everyDays) * DAY_N, `one Tap per ${t.everyDays} days`);
+});
+
 section(`Deterministic deployment registry (CREATE3). PROVISIONAL while the deployer is ${cfg.deployment.evm.deployer}`);
 lines.push('    //    Only MINED entries become constants; unmined modules are constructor/initializer inputs.');
 c('address', 'CREATEX', CREATEX_FACTORY);
