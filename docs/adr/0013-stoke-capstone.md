@@ -89,7 +89,14 @@ A manual `stoke` follows the same path without the tip transfer.
   - settings ending at a sale, and a buyer's first settings surviving;
   - the listing lock on keepers.
 - **Boost's invariant handler** now Stokes and keeper-Stokes, so the Capstone backing (tips leave both sides) and the bonus ceiling hold across them.
-- **Mutations:** 22 planted bugs on these paths. Results are in the PR.
+- **`pnpm check`:** 224/224 Solidity tests.
+- **Mutations:** 22 planted bugs on these paths. **All 22 are caught.** They cover:
+  - the consumer check, the ledger, the Claim snapshot and the pool check;
+  - the Stoke's lock, closure, fee, empty-Stoke check and rationing;
+  - the shared allowance;
+  - the keeper's owner tip, interval, minimum, last-Stoke time and lock;
+  - settings surviving a sale, a missing sync, the bound edges and the owner check.
+- **One gap found and closed.** A keeper's raise that read the owner's allowance survived at first. A test now shows that a spent owner side does not hold back the keeper's raise.
 
 ## Consequences
 
