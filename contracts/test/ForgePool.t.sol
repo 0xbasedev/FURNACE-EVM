@@ -912,6 +912,18 @@ contract ForgePoolTest is ForgeFixture {
         vm.stopPrank();
     }
 
+    /// The share is of active principal: principal already cooling does not count.
+    function test_tapQuotaIsOfActivePrincipal() public {
+        vm.startPrank(alice);
+        uint256 id = pool.open(1000e18); // 990
+        skip(P.TAP_TIER_0_STREAK);
+        pool.requestCooling(id, 90e18); // 900 active, 90 frozen
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.TapQuotaExceeded.selector, 90e18 + 1, 90e18));
+        pool.requestTap(id, 90e18 + 1);
+        pool.requestTap(id, 90e18); // 10% of 900
+        vm.stopPrank();
+    }
+
     /// Lots past the age cap tie: the Tap draws the lower slot first.
     function test_tapTiesGoToTheLowerSlot() public {
         vm.startPrank(alice);
