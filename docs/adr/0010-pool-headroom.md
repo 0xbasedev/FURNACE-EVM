@@ -5,7 +5,7 @@ Status: accepted for this repository. Not audited, not deployed.
 ## Context
 
 - **ForgePool is immutable**, and it was 102 bytes under EIP-170 after ADR 0008 and ADR 0009.
-- **An inventory of the canonical package** found that at least five features still need entry points inside the pool. A later contract cannot add them.
+- **An inventory of the canonical package** found that at least six features still need entry points or state inside the pool. A later contract cannot add them.
 
 | Feature | Canonical source | What the pool must do |
 |---|---|---|
@@ -14,8 +14,9 @@ Status: accepted for this repository. Not audited, not deployed.
 | Source-lot compounding / Casting | Spec §4, §6, §7; `DECISIONS.md` | Add principal to an existing lot at that lot's age, from an authorized caller |
 | Kindling positions | Spec §2–§3 | Open contributor positions for the Kindling contract, on demand |
 | First Flame | Spec §2 | A wallet-bound 15-day financial-Heat floor in the measures, which never transfers through a Deed |
+| Keystone | Spec §5, §11 | Evidence of continuous ownership for a Seal's whole completed term: an `ownedSince`, written at open and at Deed settlement. `streakStart` cannot serve, because a withdrawal after the Seal completes also resets it and would erase ownership that was in fact continuous |
 
-- **The budget.** These need roughly 2–2.5 KB together. Lowering optimizer runs frees at most about 500 bytes (24,474 → 23,985 at 1 run).
+- **The budget.** These need roughly 2–2.5 KB together, by estimate, not measurement. Lowering optimizer runs frees at most about 500 bytes (24,474 → 23,985 at 1 run).
 
 ## Decision
 
@@ -62,7 +63,7 @@ Each figure is measured before (ADR 0009) and after this change.
 | Capstone deposit, raising 32 lots | 1,267,271 | 1,306,066 |
 | Capstone withdrawal execution | 65,554 | 57,976 |
 
-- **Pages are within ±3%.**
+- **Pages change by about 3% at most** (the 32-position page by +3.1%).
   - The 32-position page costs about 3.5k more per position: `dueLapses` is now one `extsload` call instead of a view call.
   - Pages over many slots got cheaper, because the history mask is cached per page.
 - **Credits and claims got cheaper**, because they read one word where the old views copied the whole position.
@@ -83,5 +84,16 @@ Each figure is measured before (ADR 0009) and after this change.
 ## Consequences
 
 - **Integrators** read positions through `ForgeLens`, `ForgeView` or `eth_getStorageAt`. The pool's ABI no longer has the sixteen views.
-- **The next PRs** add the inventory's hooks within the freed 3.9 KB, one per PR: Deeds first, then Taps, source-lot additions, Kindling positions and the First Flame floor. Each must leave room for the rest.
+- **The next PRs** add the inventory's hooks within the freed 3.9 KB, one per PR.
+- **Deed settlement is the single place where all owner-bound state changes.** The spec requires each to change "exactly once":
+  - the owner;
+  - 80% of capped age;
+  - the Streak;
+  - the bonus, which becomes zero because Pyre stays with the seller;
+  - `ownedSince`;
+  - the listing nonce;
+  - the First Flame flag, which is wallet-bound.
+
+  So the founder flag and `ownedSince` land with the Deed PR, and settlement is written once.
+- **Budget tracking.** Each hook PR records the bytes it used and the bytes left against the estimates for the hooks still to come. If a hook overshoots its share, the next lever comes first: lower optimizer runs (about 500 bytes), or `seal()` and the plan logic moved into the library.
 - **Not audited or deployed.**
