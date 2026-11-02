@@ -897,6 +897,21 @@ contract ForgePoolTest is ForgeFixture {
         vm.stopPrank();
     }
 
+    /// The tier follows the Streak, not the position's age: an ordinary execution ends the perk.
+    function test_tapNeedsTheStreakNotTheAge() public {
+        vm.startPrank(alice);
+        uint256 id = pool.open(1000e18);
+        skip(100 days);
+        uint32 t = pool.requestCooling(id, 10e18);
+        skip(P.WITHDRAW_TIER_0_SECONDS);
+        pool.executeWithdrawal(id, t); // the Streak restarts
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.NoTap.selector, id));
+        pool.requestTap(id, 1e18);
+        vm.warp(pool.positionOf(id).streakStart + P.TAP_TIER_0_STREAK);
+        pool.requestTap(id, 1e18);
+        vm.stopPrank();
+    }
+
     function test_tapExecutesWithoutHaircutOrStreakReset() public {
         vm.prank(alice);
         uint256 id = pool.open(1000e18);
