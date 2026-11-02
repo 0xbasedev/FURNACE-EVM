@@ -115,6 +115,20 @@ contract ForgeViewTest is Test {
         assertEq(p.lapseQueueLength(), pool.rawLapses(), "lapses");
     }
 
+    /// A lapse is due at its deadline itself, as the pool's sync resolves it (`<=`).
+    function test_lapseDueAtItsDeadline() public {
+        handler.request(0, 1_000); // ≤10%: 6h, lapses at +30h
+        ForgePool p = ForgePool(address(pool));
+        uint256 id = handler.ids(0);
+        uint32 t = p.pendingTickets(id)[0];
+        uint256 deadline = uint256(p.ticketOf(id, t).maturity) + P.WITHDRAW_EXECUTION_WINDOW;
+        vm.warp(deadline - 1);
+        assertEq(p.dueLapses(id), 0);
+        vm.warp(deadline);
+        assertEq(p.dueLapses(id), 1);
+        assertEq(p.dueLapses(id), pool.rawDue(id));
+    }
+
     /// The lens is the same library behind external calls.
     function test_lensMatchesTheLibrary() public {
         ForgeLens lens = new ForgeLens();
