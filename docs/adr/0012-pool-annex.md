@@ -73,7 +73,7 @@ Status: accepted for this repository. Not audited, not deployed.
 
 ## Verification
 
-- **Behaviour is unchanged.** Every differential replay passes against the same vectors, with the same state hash after every step. All 215 tests pass.
+- **Behaviour is unchanged.** Every differential replay passes against the same vectors, with the same state hash after every step. `pnpm check` passes, with all 215 tests and the layout check.
 - **New tests:**
   - the annex's immutables equal the pool's;
   - a delegated call returns the annex's values (the Seal index, the listing nonce, all three fee figures), reverts with the annex's exact error data, and emits from the pool;
@@ -81,7 +81,7 @@ Status: accepted for this repository. Not audited, not deployed.
 - **Mutations:**
   - the 24 earlier mutants whose code moved into the annex (Seals, the bonus authority, ceiling and sync, every Deed path) re-run against `ForgePoolAnnex.sol`;
   - two new mutants plant a stub that reports success on failure and a stub that drops the return data.
-  - Results: see the PR.
+  - **All 26 are caught.** The stub mutants fail the passthrough test and, through it, every suite that reads a delegated result.
 
 ## Consequences
 
