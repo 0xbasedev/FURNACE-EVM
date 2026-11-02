@@ -171,6 +171,25 @@ contract ForgeViewTest is Test {
         assertEq(p.listingOf(id), 3, "listing");
     }
 
+    /// A Tap's flag and the position's lastTapAt decode at non-zero values beside non-zero
+    /// neighbours (the slice mask; the head start).
+    function test_tapFieldsDecode() public {
+        ForgePool p = ForgePool(address(pool));
+        uint256 id = handler.ids(0);
+        pool.setPhantomForTest(id, false, false, 0xabcdef12);
+        vm.warp(block.timestamp + 91 days);
+        handler.tap(0, 800);
+        ForgePoolBase.Position memory raw = pool.rawPosition(id);
+        assertEq(raw.lastTapAt, block.timestamp, "a Tap was requested");
+        assertEq(abi.encode(p.positionOf(id)), abi.encode(raw), "position");
+        uint32 t = raw.nextTicketId;
+        ForgePoolBase.Ticket memory ticket = pool.rawTicket(id, t);
+        assertTrue(ticket.tap && ticket.sliceMask != 0, "a Tap ticket");
+        assertEq(abi.encode(p.ticketOf(id, t)), abi.encode(ticket), "ticket");
+        pool.setPhantomForTest(id, true, true, 0); // the flags beside lastTapAt, amount zero
+        assertEq(abi.encode(p.positionOf(id)), abi.encode(pool.rawPosition(id)), "flags beside lastTapAt");
+    }
+
     /// The lens is the same library behind external calls.
     function test_lensMatchesTheLibrary() public {
         ForgeLens lens = new ForgeLens();

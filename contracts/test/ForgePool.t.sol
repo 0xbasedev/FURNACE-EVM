@@ -829,6 +829,105 @@ contract ForgePoolTest is ForgeFixture {
         assertEq(pool.listingOf(id), 0);
     }
 
+    // ── Taps (ADR 0014) ───────────────────────────────────────────────────
+
+    function test_tapTiersFollowTheStreak() public {
+        vm.prank(alice);
+        uint256 id = pool.open(1000e18); // 990 active
+        skip(P.TAP_TIER_0_STREAK - 1);
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.NoTap.selector, id));
+        vm.prank(alice);
+        pool.requestTap(id, 1e18);
+        skip(1); // Blaze: 10%
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.TapQuotaExceeded.selector, 99e18 + 1, 99e18));
+        vm.prank(alice);
+        pool.requestTap(id, 99e18 + 1);
+        vm.expectEmit(address(pool));
+        emit ForgePoolBase.CoolingRequested(id, 1, 99e18, block.timestamp + P.WITHDRAW_TIER_0_SECONDS, true);
+        vm.prank(alice);
+        uint32 t = pool.requestTap(id, 99e18); // exactly 10%
+        assertTrue(pool.ticketOf(id, t).tap);
+        assertEq(pool.positionOf(id).lastTapAt, block.timestamp);
+        vm.prank(alice);
+        pool.cancelCooling(id, t); // the quota stays used
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.TapTooSoon.selector, block.timestamp + P.TAP_TIER_0_EVERY));
+        vm.prank(alice);
+        pool.requestTap(id, 1e18);
+        vm.warp(pool.positionOf(id).streakStart + P.TAP_TIER_1_STREAK); // Eternal: 25%, 90 days after the last
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.TapQuotaExceeded.selector, 247.5e18 + 1, 247.5e18));
+        vm.prank(alice);
+        pool.requestTap(id, 247.5e18 + 1);
+        vm.prank(alice);
+        t = pool.requestTap(id, 247.5e18);
+        vm.prank(alice);
+        pool.cancelCooling(id, t);
+        vm.warp(pool.positionOf(id).streakStart + P.TAP_TIER_2_STREAK); // Bedrock: every 60 days
+        vm.prank(alice);
+        pool.requestTap(id, 1e18);
+        uint256 last = block.timestamp;
+        vm.prank(alice);
+        pool.cancelCooling(id, 3);
+        vm.warp(last + P.TAP_TIER_2_EVERY - 1);
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.TapTooSoon.selector, last + P.TAP_TIER_2_EVERY));
+        vm.prank(alice);
+        pool.requestTap(id, 1e18);
+        skip(1);
+        vm.prank(alice);
+        pool.requestTap(id, 1e18);
+    }
+
+    function test_tapExecutesWithoutHaircutOrStreakReset() public {
+        vm.prank(alice);
+        uint256 id = pool.open(1000e18);
+        skip(50 days);
+        vm.prank(alice);
+        pool.deposit(id, 100e18); // the younger lot: 99
+        skip(50 days);
+        uint256 streak = pool.positionOf(id).streakStart;
+        vm.prank(alice);
+        uint32 t = pool.requestTap(id, 99e18); // all of the younger lot, none of the older
+        assertEq(pool.lotOf(id, 1).heldBy, t, "the younger lot drawn whole");
+        assertEq(pool.lotOf(id, 0).amount, 990e18, "the older lot untouched");
+        skip(P.WITHDRAW_TIER_0_SECONDS);
+        uint256 before = token.balanceOf(alice);
+        vm.prank(alice);
+        uint256 net = pool.executeWithdrawal(id, t);
+        assertEq(net, 99e18 - 99e18 / 100, "the normal fee");
+        assertEq(token.balanceOf(alice) - before, net);
+        (, uint256 age,,) = pool.lotAt(id, 0);
+        assertEq(age, 100 days + P.WITHDRAW_TIER_0_SECONDS, "no haircut");
+        assertEq(pool.positionOf(id).streakStart, streak, "the Streak stays");
+    }
+
+    function test_tapIsLockedWhileListed() public {
+        vm.prank(alice);
+        uint256 id = pool.open(1000e18);
+        skip(100 days);
+        vm.prank(deeds);
+        pool.list(id, alice);
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.Listed.selector, id));
+        vm.prank(alice);
+        pool.requestTap(id, 1e18);
+    }
+
+    function test_gas_tap() public {
+        vm.startPrank(alice);
+        uint256 id = pool.open(10e18);
+        for (uint256 i = 1; i < 32; ++i) {
+            skip(1 hours);
+            pool.deposit(id, 10e18);
+        }
+        skip(400 days); // Eternal: 25%
+        uint256 g = gasleft();
+        uint32 t = pool.requestTap(id, 7 * 9.9e18); // the 7 youngest lots, whole (32 lots leave no slot to split)
+        emit log_named_uint("requestTap, youngest-first over 32 lots (7 drawn)", g - gasleft());
+        skip(P.WITHDRAW_TIER_2_SECONDS);
+        g = gasleft();
+        pool.executeWithdrawal(id, t);
+        emit log_named_uint("executeWithdrawal of a Tap (no haircut)", g - gasleft());
+        vm.stopPrank();
+    }
+
     // ── Deeds (ADR 0011) ──────────────────────────────────────────────────
 
     function _listed(uint256 amount) internal returns (uint256 id, uint32 listing) {
