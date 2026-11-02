@@ -319,10 +319,12 @@ contract ForgePool is ForgePoolBase {
 
     /// @dev Run this call's calldata in the annex, in this contract's storage, and return or
     ///      revert with exactly what it returned. The annex functions hold the reentrancy
-    ///      guard; the stubs do not, since its transient slot is this contract's.
+    ///      guard; the stubs do not, since its transient slot is this contract's. Not
+    ///      memory-safe: the copies start at offset 0, which is fine only because the block
+    ///      always ends in `return` or `revert`.
     function _annex() private {
         address annex = ANNEX;
-        assembly ("memory-safe") {
+        assembly {
             calldatacopy(0, 0, calldatasize())
             let ok := delegatecall(gas(), annex, 0, calldatasize(), 0, 0)
             returndatacopy(0, 0, returndatasize())
