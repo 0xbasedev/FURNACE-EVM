@@ -14,6 +14,8 @@ optimizer = true
 # `pnpm forge:sizes` fails the build if any contract in contracts/src exceeds it.
 optimizer_runs = 500
 bytecode_hash = "none"
+# Storage layouts in the artifacts: `pnpm check:layout` compares ForgePool and its annex (ADR 0012).
+extra_output = ["storageLayout"]
 # Differential replays snapshot the full state (lots, slices, Seals, tags) after every step;
 # the longest custody walk needs more than the default 2^30 test gas.
 gas_limit = 4_294_967_296

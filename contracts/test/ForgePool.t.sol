@@ -4,6 +4,8 @@ pragma solidity 0.8.28;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {ForgePool} from "../src/forge/ForgePool.sol";
+import {ForgePoolBase} from "../src/forge/ForgePoolBase.sol";
+import {ForgePoolAnnex} from "../src/forge/ForgePoolAnnex.sol";
 import {ForgeView} from "../src/forge/ForgeView.sol";
 import {Lot, Record, Seal} from "../src/forge/ForgeMeasures.sol";
 import {HeatMath} from "../src/libraries/HeatMath.sol";
@@ -254,7 +256,7 @@ contract ForgePoolDifferentialTest is ForgeFixture {
         view
         returns (uint256)
     {
-        ForgePool.Position memory p = pool.positionOf(id);
+        ForgePoolBase.Position memory p = pool.positionOf(id);
         n = _put4(w, n, sm, wm, pool.lotCount(id), p.reservedSlots);
         n = _put4(w, n, p.pendingCount, p.coolingPausedSeconds, p.streakStart, p.lastCheckpoint);
         n = _put4(w, n, p.closedAt != 0 ? 1 : 0, p.ashfallForfeited ? 1 : 0, p.plan.start, p.plan.referenceBalance);
@@ -265,9 +267,9 @@ contract ForgePoolDifferentialTest is ForgeFixture {
 
     /// @dev Owner wallet, listing, sales, tenure start and the latest previous owner (ADR 0011).
     function _pushOwnership(uint256[] memory w, uint256 n, uint256 id) internal view returns (uint256) {
-        ForgePool.Position memory p = pool.positionOf(id);
+        ForgePoolBase.Position memory p = pool.positionOf(id);
         n = _put4(w, n, _wallet(p.owner), p.listing, p.transfers, pool.ownedSince(id));
-        ForgePool.Ownership memory prev;
+        ForgePoolBase.Ownership memory prev;
         if (p.transfers != 0) prev = pool.ownershipAt(id, p.transfers - 1);
         (w[n], w[n + 1]) = (_wallet(prev.owner), prev.until);
         return n + 2;
@@ -289,7 +291,7 @@ contract ForgePoolDifferentialTest is ForgeFixture {
         view
         returns (uint256)
     {
-        ForgePool.Position memory p = pool.positionOf(id);
+        ForgePoolBase.Position memory p = pool.positionOf(id);
         Seal memory s = pool.sealOf(id, p.sealCount);
         n = _put4(w, n, ss, sw, p.sealCount, s.track);
         n = _put4(w, n, uint256(s.status), s.start, s.pausedAt, s.pausedSeconds);
@@ -298,11 +300,11 @@ contract ForgePoolDifferentialTest is ForgeFixture {
     }
 
     function _pushTicket(uint256[] memory w, uint256 n, uint256 id, uint32 ticketId) internal view returns (uint256) {
-        ForgePool.Ticket memory t = pool.ticketOf(id, ticketId);
+        ForgePoolBase.Ticket memory t = pool.ticketOf(id, ticketId);
         n = _put4(w, n, ticketId, t.amount, t.maturity, uint256(t.status));
         w[n++] = t.poolApplied ? 1 : 0;
         for (uint256 j; j < 32; ++j) {
-            ForgePool.Slice memory s = pool.sliceOf(id, ticketId, j);
+            ForgePoolBase.Slice memory s = pool.sliceOf(id, ticketId, j);
             (w[n], w[n + 1], w[n + 2]) = (s.amount, s.age, s.participated);
             n += 3;
         }
@@ -332,13 +334,13 @@ contract ForgePoolTest is ForgeFixture {
     }
 
     function test_constructorRejectsZeroAddresses() public {
-        vm.expectRevert(ForgePool.ZeroAddress.selector);
+        vm.expectRevert(ForgePoolBase.ZeroAddress.selector);
         new ForgePool(IERC20(address(0)), true, collector, boost, deeds);
-        vm.expectRevert(ForgePool.ZeroAddress.selector);
+        vm.expectRevert(ForgePoolBase.ZeroAddress.selector);
         new ForgePool(IERC20(address(token)), true, address(0), boost, deeds);
-        vm.expectRevert(ForgePool.ZeroAddress.selector);
+        vm.expectRevert(ForgePoolBase.ZeroAddress.selector);
         new ForgePool(IERC20(address(token)), true, collector, address(0), deeds);
-        vm.expectRevert(ForgePool.ZeroAddress.selector);
+        vm.expectRevert(ForgePoolBase.ZeroAddress.selector);
         new ForgePool(IERC20(address(token)), true, collector, boost, address(0));
     }
 
@@ -348,7 +350,7 @@ contract ForgePoolTest is ForgeFixture {
         skim.mint(alice, 1e18);
         vm.startPrank(alice);
         skim.approve(address(skimPool), type(uint256).max);
-        vm.expectRevert(ForgePool.NonStandardToken.selector);
+        vm.expectRevert(ForgePoolBase.NonStandardToken.selector);
         skimPool.open(1e18);
         vm.stopPrank();
     }
@@ -357,11 +359,11 @@ contract ForgePoolTest is ForgeFixture {
         vm.prank(alice);
         uint256 id = pool.open(100e18);
         vm.startPrank(bob);
-        vm.expectRevert(abi.encodeWithSelector(ForgePool.NotOwner.selector, id));
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.NotOwner.selector, id));
         pool.requestCooling(id, 1e18);
-        vm.expectRevert(abi.encodeWithSelector(ForgePool.NotOwner.selector, id));
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.NotOwner.selector, id));
         pool.emergencyExit(id);
-        vm.expectRevert(abi.encodeWithSelector(ForgePool.NotOwner.selector, id));
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.NotOwner.selector, id));
         pool.deposit(id, 1e18);
         vm.stopPrank();
         pool.poke(id); // permissionless sync is fine
@@ -425,7 +427,7 @@ contract ForgePoolTest is ForgeFixture {
         vm.startPrank(alice);
         uint32 t = pool.requestCooling(id, 99e18);
         pool.cancelCooling(id, t);
-        vm.expectRevert(abi.encodeWithSelector(ForgePool.PlanQuotaExceeded.selector, 99e18 + 1, 99e18));
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.PlanQuotaExceeded.selector, 99e18 + 1, 99e18));
         pool.requestCooling(id, 1);
         skip(P.COOLING_PLAN_HORIZON);
         pool.requestCooling(id, 1); // horizon passed with nothing pending: new plan
@@ -468,7 +470,7 @@ contract ForgePoolTest is ForgeFixture {
         uint32 last = h.requestCooling(id, 1e18); // the final representable id
         assertEq(last, type(uint24).max);
         h.cancelCooling(id, last);
-        vm.expectRevert(abi.encodeWithSelector(ForgePool.TicketIdOverflow.selector, id));
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.TicketIdOverflow.selector, id));
         h.requestCooling(id, 1e18);
         uint256 net = h.emergencyExit(id); // principal still leaves
         vm.stopPrank();
@@ -481,17 +483,17 @@ contract ForgePoolTest is ForgeFixture {
         vm.prank(alice);
         uint256 id = pool.open(100e18);
         vm.prank(alice);
-        vm.expectRevert(ForgePool.NotBoost.selector);
+        vm.expectRevert(ForgePoolBase.NotBoost.selector);
         pool.setOrdinaryBonus(id, 1);
         vm.startPrank(boost);
         uint256 max = P.MAX_ORDINARY_BONUS_UNITS;
         assertEq(max * P.ORDINARY_BONUS_UNIT_RAY, P.MAX_ORDINARY_BONUS_RAY);
-        vm.expectRevert(abi.encodeWithSelector(ForgePool.BonusAboveCeiling.selector, max + 1));
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.BonusAboveCeiling.selector, max + 1));
         pool.setOrdinaryBonus(id, max + 1);
-        vm.expectRevert(abi.encodeWithSelector(ForgePool.UnknownPosition.selector, id + 1));
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.UnknownPosition.selector, id + 1));
         pool.setOrdinaryBonus(id + 1, 1);
         vm.expectEmit(address(pool));
-        emit ForgePool.OrdinaryBonusSet(id, max);
+        emit ForgePoolBase.OrdinaryBonusSet(id, max);
         pool.setOrdinaryBonus(id, max);
         assertEq(pool.positionOf(id).ordinaryBonus, max);
         skip(1 days);
@@ -550,7 +552,7 @@ contract ForgePoolTest is ForgeFixture {
         vm.startPrank(alice);
         pool.requestCooling(id, 9e18); // a frozen slice is still custody
         vm.expectEmit(address(pool));
-        emit ForgePool.OrdinaryBonusSet(id, 12_500); // 50000 · 99 / (99 + 297)
+        emit ForgePoolBase.OrdinaryBonusSet(id, 12_500); // 50000 · 99 / (99 + 297)
         pool.deposit(id, 300e18);
         vm.stopPrank();
         assertEq(pool.positionOf(id).ordinaryBonus, 12_500);
@@ -565,7 +567,7 @@ contract ForgePoolTest is ForgeFixture {
         h.setRecordsForTest(id, 0, uint24(h.BOOST_RECORD_LIMIT()));
         skip(1 days);
         vm.prank(boost);
-        vm.expectRevert(abi.encodeWithSelector(ForgePool.RecordLimit.selector, id, 0));
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.RecordLimit.selector, id, 0));
         h.setOrdinaryBonus(id, 1);
         vm.startPrank(alice); // the owner's own actions keep the rest of the counter
         uint32 t = h.requestCooling(id, 9e18);
@@ -614,7 +616,7 @@ contract ForgePoolTest is ForgeFixture {
     function test_onlyCollectorCollects() public {
         vm.prank(alice);
         pool.open(100e18);
-        vm.expectRevert(ForgePool.NotCollector.selector);
+        vm.expectRevert(ForgePoolBase.NotCollector.selector);
         pool.collectFees();
         vm.prank(collector);
         (uint256 dep,,) = pool.collectFees();
@@ -636,12 +638,12 @@ contract ForgePoolTest is ForgeFixture {
         uint256 lapse = frozenAt + 72 hours + P.WITHDRAW_EXECUTION_WINDOW;
         assertEq(pool.occupiedSecondsAt(block.timestamp), 1 days + (block.timestamp - lapse));
         pool.poke(id);
-        assertEq(uint256(pool.ticketOf(id, t).status), uint256(ForgePool.Status.Lapsed));
+        assertEq(uint256(pool.ticketOf(id, t).status), uint256(ForgePoolBase.Status.Lapsed));
         assertEq(pool.occupiedSecondsAt(block.timestamp), 1 days + (block.timestamp - lapse));
     }
 
     function test_futureOccupancyQueryReverts() public {
-        vm.expectRevert(abi.encodeWithSelector(ForgePool.FutureTime.selector, block.timestamp + 1));
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.FutureTime.selector, block.timestamp + 1));
         pool.occupiedSecondsAt(block.timestamp + 1);
     }
 
@@ -706,7 +708,7 @@ contract ForgePoolTest is ForgeFixture {
         for (uint256 i = 1; i < 17; ++i) pool.deposit(id, 100e18);
         skip(400 days); // all 17 lots capped
         pool.poke(id);
-        vm.expectRevert(abi.encodeWithSelector(ForgePool.LotCapacity.selector, id));
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.LotCapacity.selector, id));
         pool.requestCooling(id, 17e18);
         uint32 t = pool.requestCooling(id, 99e18 * 17); // 100%: no splits, always allowed
         pool.cancelCooling(id, t);
@@ -758,6 +760,63 @@ contract ForgePoolTest is ForgeFixture {
         vm.stopPrank();
     }
 
+    // ── the annex (ADR 0012) ──────────────────────────────────────────────
+
+    /// The annex reads its own immutables when the pool runs it: they must be the pool's.
+    function test_annexSharesThePoolsConfiguration() public view {
+        ForgePoolAnnex annex = ForgePoolAnnex(pool.ANNEX());
+        assertGt(address(annex).code.length, 0);
+        assertEq(address(annex.STAKE_TOKEN()), address(pool.STAKE_TOKEN()));
+        assertEq(annex.IS_LP(), pool.IS_LP());
+        assertEq(annex.FEE_COLLECTOR(), pool.FEE_COLLECTOR());
+        assertEq(annex.BOOST(), pool.BOOST());
+        assertEq(annex.DEEDS(), pool.DEEDS());
+    }
+
+    /// Every delegated function returns the annex's values and reverts with the annex's exact
+    /// error data; its state changes and events happen in the pool.
+    function test_annexStubsPassResultsAndErrorsThrough() public {
+        vm.prank(alice);
+        uint256 id = pool.open(100e18);
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.UnknownTrack.selector, 7));
+        vm.prank(alice);
+        pool.seal(id, 7);
+        vm.expectEmit(address(pool)); // the pool emits, not the annex
+        emit ForgePoolBase.Sealed(id, 1, 0, 1);
+        vm.prank(alice);
+        assertEq(pool.seal(id, 0), 1, "seal returns its index");
+        assertEq(pool.positionOf(id).sealCount, 1, "in the pool's storage");
+        vm.prank(deeds);
+        assertEq(pool.list(id, alice), 1, "list returns the listing");
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.Listed.selector, id));
+        vm.prank(deeds);
+        pool.list(id, alice);
+        vm.prank(collector);
+        (uint256 dep, uint256 wd, uint256 em) = pool.collectFees();
+        assertEq(abi.encode(dep, wd, em), abi.encode(1e18, 0, 0), "collectFees returns all three");
+        vm.expectRevert(ForgePoolBase.NotBoost.selector);
+        pool.setOrdinaryBonus(id, 1);
+    }
+
+    /// Called directly, the annex acts on its own empty storage: nothing in the pool changes.
+    function test_annexCalledDirectlyTouchesNothing() public {
+        vm.prank(alice);
+        uint256 id = pool.open(100e18);
+        ForgePoolAnnex annex = ForgePoolAnnex(pool.ANNEX());
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.UnknownPosition.selector, id));
+        vm.prank(deeds);
+        annex.list(id, alice);
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.UnknownPosition.selector, id));
+        vm.prank(alice);
+        annex.seal(id, 0);
+        vm.prank(collector);
+        (uint256 dep,,) = annex.collectFees();
+        assertEq(dep, 0, "the annex holds no fees");
+        assertEq(pool.feesOwed(0), 1e18, "the pool's fees are untouched");
+        assertEq(token.balanceOf(address(annex)), 0);
+        assertEq(pool.listingOf(id), 0);
+    }
+
     // ── Deeds (ADR 0011) ──────────────────────────────────────────────────
 
     function _listed(uint256 amount) internal returns (uint256 id, uint32 listing) {
@@ -770,22 +829,22 @@ contract ForgePoolTest is ForgeFixture {
     function test_deedAccessAndPreconditions() public {
         vm.prank(alice);
         uint256 id = pool.open(100e18);
-        vm.expectRevert(ForgePool.NotDeeds.selector);
+        vm.expectRevert(ForgePoolBase.NotDeeds.selector);
         vm.prank(alice);
         pool.list(id, alice); // only the market lists
         vm.startPrank(deeds);
-        vm.expectRevert(abi.encodeWithSelector(ForgePool.NotOwner.selector, id));
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.NotOwner.selector, id));
         pool.list(id, bob);
-        vm.expectRevert(abi.encodeWithSelector(ForgePool.UnknownPosition.selector, 9));
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.UnknownPosition.selector, 9));
         pool.list(9, alice);
-        vm.expectRevert(abi.encodeWithSelector(ForgePool.NotListed.selector, id));
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.NotListed.selector, id));
         pool.settle(id, bob, 0); // never listed
-        vm.expectRevert(abi.encodeWithSelector(ForgePool.NotListed.selector, id));
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.NotListed.selector, id));
         pool.unlist(id);
         vm.stopPrank();
         vm.prank(alice);
         pool.requestCooling(id, 10e18);
-        vm.expectRevert(abi.encodeWithSelector(ForgePool.CoolingPending.selector, id));
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.CoolingPending.selector, id));
         vm.prank(deeds);
         pool.list(id, alice);
         vm.prank(alice);
@@ -795,19 +854,19 @@ contract ForgePoolTest is ForgeFixture {
         uint32 listing = pool.list(id, alice);
         assertEq(listing, 1);
         vm.startPrank(deeds);
-        vm.expectRevert(abi.encodeWithSelector(ForgePool.Listed.selector, id));
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.Listed.selector, id));
         pool.list(id, alice);
-        vm.expectRevert(ForgePool.ZeroAddress.selector);
+        vm.expectRevert(ForgePoolBase.ZeroAddress.selector);
         pool.settle(id, address(0), listing);
-        vm.expectRevert(abi.encodeWithSelector(ForgePool.NotListed.selector, id));
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.NotListed.selector, id));
         pool.settle(id, bob, listing + 1);
-        vm.expectRevert(abi.encodeWithSelector(ForgePool.NotListed.selector, id));
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.NotListed.selector, id));
         pool.settle(id, bob, listing - 1);
         vm.stopPrank();
-        vm.expectRevert(ForgePool.NotDeeds.selector);
+        vm.expectRevert(ForgePoolBase.NotDeeds.selector);
         vm.prank(alice);
         pool.settle(id, bob, listing);
-        vm.expectRevert(abi.encodeWithSelector(ForgePool.NotOwner.selector, id));
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.NotOwner.selector, id));
         vm.prank(bob);
         pool.unlist(id); // a stranger cannot end it
     }
@@ -815,11 +874,11 @@ contract ForgePoolTest is ForgeFixture {
     function test_deedListingLocksOwnerButNotExits() public {
         (uint256 id, uint32 listing) = _listed(100e18);
         vm.startPrank(alice);
-        vm.expectRevert(abi.encodeWithSelector(ForgePool.Listed.selector, id));
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.Listed.selector, id));
         pool.deposit(id, 1e18);
-        vm.expectRevert(abi.encodeWithSelector(ForgePool.Listed.selector, id));
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.Listed.selector, id));
         pool.requestCooling(id, 1e18);
-        vm.expectRevert(abi.encodeWithSelector(ForgePool.Listed.selector, id));
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.Listed.selector, id));
         pool.seal(id, 0);
         vm.stopPrank();
         vm.prank(boost);
@@ -828,7 +887,7 @@ contract ForgePoolTest is ForgeFixture {
 
         // The owner ends the listing directly, without the market.
         vm.expectEmit(address(pool));
-        emit ForgePool.ListingChanged(id, listing + 1);
+        emit ForgePoolBase.ListingChanged(id, listing + 1);
         vm.prank(alice);
         pool.unlist(id);
         vm.prank(alice);
@@ -840,7 +899,7 @@ contract ForgePoolTest is ForgeFixture {
         vm.prank(alice);
         pool.emergencyExit(id);
         assertEq(pool.listingOf(id), listing + 1, "the exit ended the listing");
-        vm.expectRevert(abi.encodeWithSelector(ForgePool.NotListed.selector, id));
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.NotListed.selector, id));
         vm.prank(deeds);
         pool.settle(id, bob, listing);
     }
@@ -863,11 +922,11 @@ contract ForgePoolTest is ForgeFixture {
         skip(1 days);
 
         vm.expectEmit(address(pool));
-        emit ForgePool.DeedSettled(id, alice, bob);
+        emit ForgePoolBase.DeedSettled(id, alice, bob);
         vm.prank(deeds);
         pool.settle(id, bob, listing);
 
-        ForgePool.Position memory p = pool.positionOf(id);
+        ForgePoolBase.Position memory p = pool.positionOf(id);
         assertEq(p.owner, bob);
         assertEq(p.streakStart, block.timestamp, "a new Streak");
         assertEq(p.ordinaryBonus, 0, "Pyre stays with the seller");
@@ -875,7 +934,7 @@ contract ForgePoolTest is ForgeFixture {
         assertEq(p.listing, listing + 1, "the listing is spent");
         assertEq(p.transfers, 1);
         assertEq(pool.ownedSince(id), block.timestamp);
-        ForgePool.Ownership memory o = pool.ownershipAt(id, 0);
+        ForgePoolBase.Ownership memory o = pool.ownershipAt(id, 0);
         assertEq(o.owner, alice);
         assertEq(o.until, block.timestamp);
         for (uint256 j; j < 32; ++j) {
@@ -894,7 +953,7 @@ contract ForgePoolTest is ForgeFixture {
         assertEq(oldest, 292 days);
 
         // The buyer owns every path now; the seller none.
-        vm.expectRevert(abi.encodeWithSelector(ForgePool.NotOwner.selector, id));
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.NotOwner.selector, id));
         vm.prank(alice);
         pool.deposit(id, 1e18);
         _fund(bob);
@@ -914,7 +973,7 @@ contract ForgePoolTest is ForgeFixture {
         assertTrue(h.positionOf(id).founder && h.positionOf(id).headStartActive);
         vm.prank(deeds);
         h.settle(id, bob, listing);
-        ForgePool.Position memory p = h.positionOf(id);
+        ForgePoolBase.Position memory p = h.positionOf(id);
         assertFalse(p.founder, "First Flame stays with its wallet");
         assertFalse(p.headStartActive, "the head start is never sold");
         assertEq(p.headStart, 3 days, "its amount stays for the seller's records");

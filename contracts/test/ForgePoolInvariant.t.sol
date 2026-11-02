@@ -4,6 +4,7 @@ pragma solidity 0.8.28;
 import {Test} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ForgePool} from "../src/forge/ForgePool.sol";
+import {ForgePoolBase} from "../src/forge/ForgePoolBase.sol";
 import {ForgeView} from "../src/forge/ForgeView.sol";
 import {Lot, Record, Seal, SealStatus} from "../src/forge/ForgeMeasures.sol";
 import {FurnaceParams as P} from "../src/generated/FurnaceParams.sol";
@@ -282,7 +283,7 @@ contract ForgePoolInvariantTest is Test {
             }
             uint32[] memory pend = pool.pendingTickets(id);
             for (uint256 k; k < pend.length; ++k) {
-                ForgePool.Ticket memory t = pool.ticketOf(id, pend[k]);
+                ForgePoolBase.Ticket memory t = pool.ticketOf(id, pend[k]);
                 sum += t.amount;
                 if (!t.poolApplied) ++queued;
             }
@@ -295,7 +296,7 @@ contract ForgePoolInvariantTest is Test {
     function invariant_slotsAndAgesBounded() public view {
         for (uint256 i; i < handler.idCount(); ++i) {
             uint256 id = handler.ids(i);
-            ForgePool.Position memory p = pool.positionOf(id);
+            ForgePoolBase.Position memory p = pool.positionOf(id);
             assertLe(pool.lotCount(id) + p.reservedSlots, 32);
             assertLe(p.pendingCount, pool.MAX_PENDING_TICKETS());
             for (uint256 j; j < 32; ++j) {
@@ -320,7 +321,7 @@ contract ForgePoolInvariantTest is Test {
     function invariant_sealStateConsistent() public view {
         for (uint256 i; i < handler.idCount(); ++i) {
             uint256 id = handler.ids(i);
-            ForgePool.Position memory p = pool.positionOf(id);
+            ForgePoolBase.Position memory p = pool.positionOf(id);
             Seal memory s = pool.sealOf(id, p.sealCount);
             if (s.status == SealStatus.Active) {
                 assertEq(s.pausedAt != 0, p.pendingCount != 0, "paused exactly while cooling is pending");
@@ -344,7 +345,7 @@ contract ForgePoolInvariantTest is Test {
     function invariant_streakAnchorsAlignWithRecords() public view {
         for (uint256 i; i < handler.idCount(); ++i) {
             uint256 id = handler.ids(i);
-            ForgePool.Position memory p = pool.positionOf(id);
+            ForgePoolBase.Position memory p = pool.positionOf(id);
             for (uint256 j; j < 32; ++j) {
                 Lot memory head = pool.lotOf(id, j);
                 if (head.amount != 0 && p.closedAt == 0) assertLe(p.streakStart, head.since, "active head after its anchor");
@@ -369,7 +370,7 @@ contract ForgePoolInvariantTest is Test {
     function invariant_bonusAnchorsAlignWithRecords() public view {
         for (uint256 i; i < handler.idCount(); ++i) {
             uint256 id = handler.ids(i);
-            ForgePool.Position memory p = pool.positionOf(id);
+            ForgePoolBase.Position memory p = pool.positionOf(id);
             for (uint256 j; j < 32; ++j) {
                 Lot memory head = pool.lotOf(id, j);
                 if (head.amount != 0 && p.closedAt == 0) {
@@ -397,7 +398,7 @@ contract ForgePoolInvariantTest is Test {
     function invariant_listedPositionsAreQuiet() public view {
         for (uint256 i; i < handler.idCount(); ++i) {
             uint256 id = handler.ids(i);
-            ForgePool.Position memory p = pool.positionOf(id);
+            ForgePoolBase.Position memory p = pool.positionOf(id);
             if (p.listing & 1 == 0) continue;
             assertEq(p.closedAt, 0, "a listed position is open");
             assertEq(p.pendingCount, 0, "a listed position has no cooling pending");
@@ -409,13 +410,13 @@ contract ForgePoolInvariantTest is Test {
     function invariant_ownershipLogMatchesSales() public view {
         for (uint256 i; i < handler.idCount(); ++i) {
             uint256 id = handler.ids(i);
-            ForgePool.Position memory p = pool.positionOf(id);
+            ForgePoolBase.Position memory p = pool.positionOf(id);
             uint256 n = handler.soldCount(id);
             assertEq(p.transfers, n, "one log entry per sale");
             uint256 since = p.openedAt;
             for (uint256 k; k < n; ++k) {
                 (address seller, uint256 at) = handler.soldBy(id, k);
-                ForgePool.Ownership memory o = pool.ownershipAt(id, k);
+                ForgePoolBase.Ownership memory o = pool.ownershipAt(id, k);
                 assertEq(o.owner, seller, "the seller");
                 assertEq(o.until, at, "the sale instant");
                 since = at;
@@ -428,7 +429,7 @@ contract ForgePoolInvariantTest is Test {
     function invariant_emergencyExitAlwaysAvailable() public {
         for (uint256 i; i < handler.idCount(); ++i) {
             uint256 id = handler.ids(i);
-            ForgePool.Position memory p = pool.positionOf(id);
+            ForgePoolBase.Position memory p = pool.positionOf(id);
             if (p.closedAt != 0) continue;
             uint256 snap = vm.snapshotState();
             pool.poke(id);

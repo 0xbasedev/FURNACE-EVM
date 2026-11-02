@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {ForgePool} from "../src/forge/ForgePool.sol";
+import {ForgePoolBase} from "../src/forge/ForgePoolBase.sol";
 import {ForgeView} from "../src/forge/ForgeView.sol";
 import {ForgeLens} from "../src/forge/ForgeLens.sol";
 import {Lot, Record, Seal} from "../src/forge/ForgeMeasures.sol";
@@ -124,7 +125,7 @@ contract ForgeViewTest is Test {
                 assertEq(abi.encode(p.sealOf(id, k)), abi.encode(pool.rawSeal(id, k)), "seal");
             }
         }
-        ForgePool.Occupancy[] memory occ = pool.rawOccupancy();
+        ForgePoolBase.Occupancy[] memory occ = pool.rawOccupancy();
         assertEq(p.occupancyLength(), occ.length, "occupancy length");
         for (uint256 i; i < occ.length; ++i) assertEq(abi.encode(p.occupancyAt(i)), abi.encode(occ[i]), "occupancy");
         assertEq(p.lapseQueueLength(), pool.rawLapses(), "lapses");
@@ -154,7 +155,7 @@ contract ForgeViewTest is Test {
         assertEq(abi.encode(p.positionOf(id)), abi.encode(pool.rawPosition(id)), "head start only");
         pool.setPhantomForTest(id, true, false, 0xabcdef13);
         handler.list(0, 1);
-        ForgePool.Position memory raw = pool.rawPosition(id);
+        ForgePoolBase.Position memory raw = pool.rawPosition(id);
         assertTrue(raw.founder && !raw.headStartActive && raw.headStart == 0xabcdef13 && raw.listing == 1, "set up");
         assertEq(abi.encode(p.positionOf(id)), abi.encode(raw), "listed, founder only");
         pool.setPhantomForTest(id, true, true, 0xabcdef13);
@@ -212,7 +213,7 @@ contract ForgeViewTest is Test {
     }
 
     function _ownership(ForgePool p, uint256 id) internal view {
-        ForgePool.Position memory raw = pool.rawPosition(id);
+        ForgePoolBase.Position memory raw = pool.rawPosition(id);
         uint256 since = raw.openedAt;
         for (uint256 k; k < raw.transfers; ++k) {
             assertEq(abi.encode(p.ownershipAt(id, k)), abi.encode(pool.rawOwnership(id, k)), "ownership");

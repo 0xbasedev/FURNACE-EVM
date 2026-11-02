@@ -19,6 +19,7 @@ EVM workspace for **FURNACE Protocol**, a loyalty-staking protocol built on EMBE
 | **Seals** (`seal`, `settleSeal`) | **Conviction tracks:** 30/90/180/365-day terms at +0.15/.25/.35/.50. The cohort is fixed at sealing. Pending cooling pauses a Seal and extends its term; an executed withdrawal or emergency exit forfeits it; completion is back-dated. Lots are tagged in their records, and escrow is `min(⌊bucket·C_i/C⌋, ⌊L·B_i/W⌋)`. Escrow stays locked until the Seal ends, then goes to a held Capstone ledger, or is split 50/25/25 into forfeit ledgers if forfeited. The burn lane is burned (no Ashfall credit); the Capstone, match reserve and Sealed-pot stream pull theirs from addresses fixed at deployment. See [ADR 0006](docs/adr/0006-seals.md) and [ADR 0007](docs/adr/0007-ashfall-and-handoffs.md). |
 | **Deeds** (`list`, `unlist`, `settle`) | **The custody side of a Deed sale.** The immutable `DEEDS` market lists a quiet position for its owner, which locks the owner's deposits, cooling, Seals, Claims and Capstone mutations; emergency exit still works and ends the listing, and the owner can unlist without the market. One settlement, with no external call: the seller's segments close under its anchors, the buyer gets 80% of capped age, a new Streak, a zero bonus, a fresh cooling plan and no wallet-bound terms, and an ownership log records each tenure for Keystone. The auction itself is not built. See [ADR 0011](docs/adr/0011-deeds-hook.md). |
 | `contracts/src/forge/Boost.sol` | **Capstone and the ordinary bonus**: every pool's `BOOST`, ForgeEmissions' `CAPSTONE` and a Protocol burn registrar in one contract. Owners keep EMBER in a position's Capstone (1% fees, burned) for up to +0.5 Heat against the custody's EMBER value; Pyre adds up to +0.15. Withdrawals run on Forge's cumulative timers and never read a price; only raising does. The valuation source and the Pyre ledger are immutable interfaces, not built. See [ADR 0009](docs/adr/0009-capstone-boost.md). |
+| `contracts/src/forge/ForgePoolBase.sol`, `ForgePoolAnnex.sol` | ForgePool's storage, configuration and internal logic (`ForgePoolBase`), shared with the annex each pool deploys and runs by DELEGATECALL for its cold paths: Seals, BOOST's bonus, Deed listing and settlement, and fee collection. Principal paths, exits and views stay in the pool. `pnpm check:layout` proves that both contracts have the same storage layout. See [ADR 0012](docs/adr/0012-pool-annex.md). |
 | `contracts/src/forge/ForgeView.sol`, `ForgeLens.sol` | ForgePool's read API (positions, lots, records, tickets, slices, Seals, occupancy), decoded from its raw storage through `extsload`. `using ForgeView for ForgePool;` keeps `pool.positionOf(id)`; `ForgeLens` serves the same reads as external calls for frontends. The views left the pool to make room for its remaining hooks. See [ADR 0010](docs/adr/0010-pool-headroom.md). |
 | `contracts/src/forge/ForgeMeasures.sol` | External library: exact slot and position measures (S, W, their sealed parts, and the Ashfall weight) read from the pool's records by DELEGATECALL. It keeps ForgePool under the EIP-170 size limit. |
 | `contracts/test/` | Exact differential tests against BigInt vectors, fuzz properties, and invariants. |
@@ -32,11 +33,12 @@ EVM workspace for **FURNACE Protocol**, a loyalty-staking protocol built on EMBE
 ```sh
 git submodule update --init   # lib/forge-std
 pnpm install
-pnpm check          # typecheck, canonical checksums, config hash, CREATE3, gen freshness, simulator tests + build, forge exit gate, contract size gate, forge tests
+pnpm check          # typecheck, canonical checksums, config hash, CREATE3, gen freshness, simulator tests + build, forge exit gate, contract size gate, pool and annex storage layouts, forge tests
 pnpm canonical:test # the canonical package's own tests + economics gate (pinned TypeScript 5.8.3)
 pnpm check:all      # both (CI runs both)
 pnpm gen            # regenerate FurnaceParams.sol, ScheduleTable.sol, oracle vectors, Forge + settlement scenarios
 pnpm gas            # gas report: every call its own transaction (forge test --isolate)
+pnpm check:layout   # ForgePool and its annex share one storage layout, at the slots ForgeView decodes
 pnpm config:hash
 pnpm sim:dev        # the Forge simulator on localhost (sim:test, sim:build for its checks and static build)
 ```
@@ -57,7 +59,7 @@ The engine tests (`apps/forge-sim/test`) check each projection against direct ca
 - **Canonical package:** all 54 files match `SHA256SUMS.json`, and they still match after the package's own build. Its 75 tests pass. The economics gate reports no diagnostics. Its deployment gate fails, by design, until real operators are supplied.
 - **Config hash:** v5.5.0 is `0x24f38f4aa11919503354bb5f8263978c7b3edc29723760928cb1eecdbafbe5ae` (31,451 bytes). This repo reproduces it independently with noble Keccak and its own serializer, and it equals the package manifest.
 - **CREATE3:** the 9 mined addresses re-derive from their salts; they are provisional because the deployer is still the placeholder. Seven modules are unmined by design: Mantle, BlastPool, SmelterPool, Flow, GenesisFeeEscrow, TreasuryVesting and Timelock.
-- **Forge tests, 212/212:**
+- **Forge tests, 215/215:**
   - The integer ports equal `canonical/accounting.ts` **exactly** on generated vectors. A deliberate 1-wei rounding change fails the suite.
   - The emission schedule is exact on every day from 0 to 1700 plus far-out days (ADR 0002). Day 365 is exactly 10,800 EMBER, and the floor is first reached on day 1,619.
   - The Heat integral telescopes exactly under checkpoint subdivision (fuzzed). The Heat² primitive (`squaredHeatPrimitive`, the Ashfall weight) is exact as well, including its ~280-bit square root.
@@ -100,7 +102,7 @@ The engine tests (`apps/forge-sim/test`) check each projection against direct ca
   - **Ordinary-bonus mutations:** 15 planted bugs (the authority, the ceiling, the rewrite order, the bonus in W, the sealed W and Ashfall, dilution, the record limit), each caught. The 17 Ashfall mutations were re-run on this code and are still caught; see ADR 0008.
   - **Deed mutations:** 34 planted bugs (the settlement order, nonce and parity, the carry and resets, the ownership log, the lock and its exits, the `list` preconditions, the new decoding offsets, the Claim and Capstone locks, Boost's ownership reset), each caught; see ADR 0011.
   - **CI gate:** `pnpm forge:gate` proves that a failing test fails the build. The upstream npm wrapper did not propagate forge's exit status.
-  - **Size gate:** `pnpm forge:sizes` fails the build if any contract exceeds the EIP-170 runtime limit (24,576 bytes). ForgePool had been 806 bytes over. The measure path now lives in the external library `ForgeMeasures`, and optimizer runs are 500. With Seals, the Streak anchors and the ordinary bonus, ForgePool reached 24,474 bytes (102 under); its two `mulDiv` calls had become plain arithmetic to fit the bonus hook (ADR 0008). Its sixteen views then moved into `ForgeView` behind one `extsload`, which left 20,681 bytes (ADR 0010). The Deed hook takes it to **22,398 bytes (2,178 under)**; cold paths move into a delegatecalled library before the next hook (ADR 0011).
+  - **Size gate:** `pnpm forge:sizes` fails the build if any contract exceeds the EIP-170 runtime limit (24,576 bytes). ForgePool had been 806 bytes over. The measure path now lives in the external library `ForgeMeasures`, and optimizer runs are 500. With Seals, the Streak anchors and the ordinary bonus, ForgePool reached 24,474 bytes (102 under); its two `mulDiv` calls had become plain arithmetic to fit the bonus hook (ADR 0008). Its sixteen views then moved into `ForgeView` behind one `extsload`, which left 20,681 bytes (ADR 0010). The Deed hook took it to 22,398 bytes (ADR 0011). Its cold paths then moved into an annex it delegatecalls, which leaves **19,825 bytes (4,751 under)**; the annex is 12,226 bytes (ADR 0012).
 
 ## Toolchain
 
@@ -119,6 +121,7 @@ EVM target: `cancun`.
 - A mined address for Boost: each `ForgePool` takes it as `BOOST`, `ForgeEmissions` as `CAPSTONE`, and the Mantle lists it as a Protocol-category burn registrar (ADR 0008, ADR 0009).
 - The protected valuation source behind `IValuation` and the Relics contract behind `IPyreLedger` (ADR 0009).
 - The Deed market at a mined address: each `ForgePool` takes it as `DEEDS`. It must check that no Claim or Capstone withdrawal is pending before listing, settle with the nonce `list` returned, run the canonical auction, and refresh the bonus after a sale (ADR 0011).
+- Each pool's annex, verified at deployment: its runtime hash, and immutables equal to its pool's (ADR 0012).
 - Built and audited custody, settlement, escrow and auction contracts.
 
 ## Next steps (v5.5 `CONTRACTS.md`)
@@ -136,10 +139,11 @@ EVM target: `cancun`.
    - the matching/match-reserve and Sealed-pot stream contracts, at mined addresses;
    - the emergency exit's stayers' share, which today goes to the fee collector.
 
-   Next: more pool headroom (cold paths into a delegatecalled library), then Stoke.
+   Next: Stoke, then the pool's remaining hooks.
 6. **FeeRouter (Vent)**, which pulls `ForgePool.feesOwed`, with the 0.5% per-call and per-window throughput limits, plus **GenesisFeeEscrow** for Kindling.
 7. ~~The Heat² primitive (`squaredHeatPrimitive`) port and Ashfall distribution~~ (done; ADR 0007).
 8. ~~The ordinary-bonus hook in ForgePool~~ (done; ADR 0008): `BOOST`, bonus-carrying records, dilution on top-ups, and a record limit for Boost rewrites.
 9. ~~Capstone and Boost~~ (done; ADR 0009): the Capstone ledger, vested escrow, Forge-timed withdrawals that never read a price, and the Capstone + Pyre bonus.
 10. ~~ForgePool headroom~~ (done; ADR 0010): the views move into `ForgeView` and `ForgeLens`, freeing 3.9 KB for the pool's remaining hooks.
 11. ~~The Deed hook~~ (done; ADR 0011): the listing lock, one settlement, the ownership log, and the lock in ForgeEmissions and Boost.
+12. ~~ForgePool's annex~~ (done; ADR 0012): the cold paths run in a delegatecalled annex built from the same source, freeing 2.6 KB; principal paths and exits stay in the pool.
