@@ -487,6 +487,24 @@ contract BoostTest is BoostFixture {
         assertEq(_bonus(2, id), 20_000);
     }
 
+    /// The owner's Stoke spends the owner's allowance and a keeper's the public one: a spent owner
+    /// side does not hold back the keeper's raise.
+    function test_keeperRaiseSpendsThePublicAllowance() public {
+        uint256 id = _open(alice, 2, 1000e18); // 990
+        vm.prank(alice);
+        boost.setKeeper(2, id, P.AUTO_STOKE_TIP_MIN_BPS, P.AUTO_STOKE_MIN_INTERVAL, P.AUTO_STOKE_MIN_SIZE);
+        _credit(2, id, 99e18);
+        vm.prank(alice);
+        boost.stoke(2, id);
+        assertEq(_bonus(2, id), 10_000, "the owner's raise");
+        assertEq(boost.accountOf(2, id).ownerRaiseAt, block.timestamp);
+        _credit(2, id, 100e18);
+        vm.prank(bob);
+        boost.keeperStoke(2, id); // 0.1% tip: the Capstone holds 99 + 99.9
+        assertEq(_bonus(2, id), uint256(198.9e18) * 50_000 / 495e18, "the keeper's raise, same epoch");
+        assertEq(boost.accountOf(2, id).publicRaiseAt, block.timestamp);
+    }
+
     function test_keeperIsOffUntilTheOwnerOptsIn() public {
         uint256 id = _open(alice, 2, 1000e18);
         _credit(2, id, 500e18);
