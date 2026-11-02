@@ -34,6 +34,11 @@ contract ForgeHandler is Test {
     mapping(uint256 id => address[]) internal sellers;
     mapping(uint256 id => uint256[]) internal soldAt;
     uint256 public sales;
+    /// Taps (ADR 0014): a ghost flag set if a Tap ever haircut a survivor, reset the Streak, or
+    /// drew a lot whole while leaving a younger one untouched.
+    bool public tapBroken;
+    uint256 public taps;
+    uint256 public tapExecutions;
 
     constructor(ForgePool pool_, MockERC20 token_, address collector_) {
         (pool, token, collector) = (pool_, token_, collector_);
@@ -95,8 +100,50 @@ contract ForgeHandler is Test {
         uint32 t = pend[pick % pend.length];
         uint256 maturity = pool.ticketOf(id, t).maturity;
         if (maturity > block.timestamp) vm.warp(maturity + bound(late, 0, 2 hours));
+        bool tap = pool.ticketOf(id, t).tap;
+        if (tap) pool.poke(id); // so the ages compared below are the execution's own
+        uint256[32] memory before;
+        for (uint256 j; j < 32; ++j) (, before[j],,) = pool.lotAt(id, j);
+        uint256 streak = pool.positionOf(id).streakStart;
         vm.prank(pool.positionOf(id).owner);
-        try pool.executeWithdrawal(id, t) {} catch {}
+        try pool.executeWithdrawal(id, t) {
+            if (tap) {
+                ++tapExecutions;
+                if (pool.positionOf(id).streakStart != streak) tapBroken = true;
+                for (uint256 j; j < 32; ++j) {
+                    (uint256 amount, uint256 age,,) = pool.lotAt(id, j);
+                    if (amount != 0 && age != before[j]) tapBroken = true;
+                }
+            }
+        } catch {}
+        _after();
+    }
+
+    function tap(uint256 seed, uint256 bps) external {
+        if (ids.length == 0) return;
+        uint256 id = ids[seed % ids.length];
+        pool.poke(id);
+        uint256 active;
+        uint256[32] memory age;
+        for (uint256 j; j < 32; ++j) {
+            uint256 a;
+            (a, age[j],,) = pool.lotAt(id, j);
+            active += a;
+        }
+        vm.prank(pool.positionOf(id).owner);
+        try pool.requestTap(id, (active * bound(bps, 1, 1_200)) / 10_000) returns (uint32 t) {
+            ++taps;
+            // Every lot drawn whole is no older than any lot left untouched.
+            uint32 mask = pool.ticketOf(id, t).sliceMask;
+            uint256 oldestWhole;
+            uint256 youngestUntouched = type(uint256).max;
+            for (uint256 j; j < 32; ++j) {
+                (uint256 amount,,, uint256 heldBy) = pool.lotAt(id, j);
+                if (mask & (1 << j) != 0 && heldBy == t && age[j] > oldestWhole) oldestWhole = age[j];
+                if (mask & (1 << j) == 0 && amount != 0 && age[j] < youngestUntouched) youngestUntouched = age[j];
+            }
+            if (oldestWhole > youngestUntouched) tapBroken = true;
+        } catch {}
         _after();
     }
 
@@ -392,6 +439,11 @@ contract ForgePoolInvariantTest is Test {
         if (handler.firstOpen() != 0) {
             assertLe(pool.occupiedSecondsAt(block.timestamp), block.timestamp - handler.firstOpen());
         }
+    }
+
+    /// A Tap never haircuts a survivor or resets the Streak, and draws the youngest lots first.
+    function invariant_tapsKeepAgeAndStreak() public view {
+        assertFalse(handler.tapBroken());
     }
 
     /// A listing exists only on an open position with no cooling pending (ADR 0011).

@@ -78,7 +78,8 @@ contract ForgePoolDifferentialTest is ForgeFixture {
         Boost,
         List,
         Unlist,
-        Settle
+        Settle,
+        Tap
     }
 
     /// @dev Wallets beyond the openers, which only buy Deeds (scripts/forge-scenarios.ts BUYERS).
@@ -124,10 +125,19 @@ contract ForgePoolDifferentialTest is ForgeFixture {
     function test_scenario_deeds1() public { _replay("deeds1"); }
     function test_scenario_deeds2() public { _replay("deeds2"); }
     function test_scenario_deeds3() public { _replay("deeds3"); }
+    function test_scenario_tapCycle() public { _replay("tapCycle"); }
+    function test_scenario_tapYoungestFirst() public { _replay("tapYoungestFirst"); }
+    function test_scenario_tapSealForfeit() public { _replay("tapSealForfeit"); }
+    function test_scenario_tapStreakResetBetween() public { _replay("tapStreakResetBetween"); }
+    function test_scenario_tapAfterDeed() public { _replay("tapAfterDeed"); }
+    function test_scenario_tapLotCapacity() public { _replay("tapLotCapacity"); }
+    function test_scenario_taps0() public { _replay("taps0"); }
+    function test_scenario_taps1() public { _replay("taps1"); }
+    function test_scenario_taps2() public { _replay("taps2"); }
 
     /// Every generated scenario has a test above; a new one fails this until added.
     function test_everyScenarioIsReplayed() public view {
-        assertEq(vm.parseJsonStringArray(forgeJson, ".names").length, 34, "add a test_scenario_* for each new scenario");
+        assertEq(vm.parseJsonStringArray(forgeJson, ".names").length, 43, "add a test_scenario_* for each new scenario");
     }
 
     function test_provisionalConstantsMatchModel() public {
@@ -208,6 +218,7 @@ contract ForgePoolDifferentialTest is ForgeFixture {
         else if (kind == Kind.Cancel) pool.cancelCooling(pos, uint32(arg));
         else if (kind == Kind.Emergency) pool.emergencyExit(pos);
         else if (kind == Kind.Seal) pool.seal(pos, arg);
+        else if (kind == Kind.Tap) pool.requestTap(pos, arg);
         else pool.poke(pos);
     }
 
@@ -271,8 +282,8 @@ contract ForgePoolDifferentialTest is ForgeFixture {
         n = _put4(w, n, _wallet(p.owner), p.listing, p.transfers, pool.ownedSince(id));
         ForgePoolBase.Ownership memory prev;
         if (p.transfers != 0) prev = pool.ownershipAt(id, p.transfers - 1);
-        (w[n], w[n + 1]) = (_wallet(prev.owner), prev.until);
-        return n + 2;
+        (w[n], w[n + 1], w[n + 2]) = (_wallet(prev.owner), prev.until, p.lastTapAt);
+        return n + 3;
     }
 
     function _wallet(address who) internal pure returns (uint256) {
@@ -302,7 +313,8 @@ contract ForgePoolDifferentialTest is ForgeFixture {
     function _pushTicket(uint256[] memory w, uint256 n, uint256 id, uint32 ticketId) internal view returns (uint256) {
         ForgePoolBase.Ticket memory t = pool.ticketOf(id, ticketId);
         n = _put4(w, n, ticketId, t.amount, t.maturity, uint256(t.status));
-        w[n++] = t.poolApplied ? 1 : 0;
+        (w[n], w[n + 1]) = (t.poolApplied ? 1 : 0, t.tap ? 1 : 0);
+        n += 2;
         for (uint256 j; j < 32; ++j) {
             ForgePoolBase.Slice memory s = pool.sliceOf(id, ticketId, j);
             (w[n], w[n + 1], w[n + 2]) = (s.amount, s.age, s.participated);
@@ -815,6 +827,170 @@ contract ForgePoolTest is ForgeFixture {
         assertEq(pool.feesOwed(0), 1e18, "the pool's fees are untouched");
         assertEq(token.balanceOf(address(annex)), 0);
         assertEq(pool.listingOf(id), 0);
+    }
+
+    // ── Taps (ADR 0014) ───────────────────────────────────────────────────
+
+    function test_tapTiersFollowTheStreak() public {
+        vm.prank(alice);
+        uint256 id = pool.open(1000e18); // 990 active
+        skip(P.TAP_TIER_0_STREAK - 1);
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.NoTap.selector, id));
+        vm.prank(alice);
+        pool.requestTap(id, 1e18);
+        skip(1); // Blaze: 10%
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.TapQuotaExceeded.selector, 99e18 + 1, 99e18));
+        vm.prank(alice);
+        pool.requestTap(id, 99e18 + 1);
+        vm.expectEmit(address(pool));
+        emit ForgePoolBase.CoolingRequested(id, 1, 99e18, block.timestamp + P.WITHDRAW_TIER_0_SECONDS, true);
+        vm.prank(alice);
+        uint32 t = pool.requestTap(id, 99e18); // exactly 10%
+        assertTrue(pool.ticketOf(id, t).tap);
+        assertEq(pool.positionOf(id).lastTapAt, block.timestamp);
+        vm.prank(alice);
+        pool.cancelCooling(id, t); // the quota stays used
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.TapTooSoon.selector, block.timestamp + P.TAP_TIER_0_EVERY));
+        vm.prank(alice);
+        pool.requestTap(id, 1e18);
+        vm.warp(pool.positionOf(id).streakStart + P.TAP_TIER_1_STREAK); // Eternal: 25%, 90 days after the last
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.TapQuotaExceeded.selector, 247.5e18 + 1, 247.5e18));
+        vm.prank(alice);
+        pool.requestTap(id, 247.5e18 + 1);
+        vm.prank(alice);
+        t = pool.requestTap(id, 247.5e18);
+        vm.prank(alice);
+        pool.cancelCooling(id, t);
+        vm.warp(pool.positionOf(id).streakStart + P.TAP_TIER_2_STREAK); // Bedrock: every 60 days
+        vm.prank(alice);
+        pool.requestTap(id, 1e18);
+        uint256 last = block.timestamp;
+        vm.prank(alice);
+        pool.cancelCooling(id, 3);
+        vm.warp(last + P.TAP_TIER_2_EVERY - 1);
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.TapTooSoon.selector, last + P.TAP_TIER_2_EVERY));
+        vm.prank(alice);
+        pool.requestTap(id, 1e18);
+        skip(1);
+        vm.prank(alice);
+        pool.requestTap(id, 1e18);
+    }
+
+    /// The lower edges of Eternal (its 25% share) and Bedrock (its 60-day window), to the second.
+    function test_tapTierEdges() public {
+        vm.startPrank(alice);
+        uint256 id = pool.open(1000e18); // 990 active
+        uint256 start = pool.positionOf(id).streakStart;
+        vm.warp(start + P.TAP_TIER_1_STREAK - 1); // still Blaze: 10%
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.TapQuotaExceeded.selector, 99e18 + 1, 99e18));
+        pool.requestTap(id, 99e18 + 1);
+        skip(1); // Eternal: 25%
+        pool.cancelCooling(id, pool.requestTap(id, 247.5e18));
+        uint256 last = start + P.TAP_TIER_2_STREAK - P.TAP_TIER_2_EVERY - 1;
+        vm.warp(last);
+        pool.cancelCooling(id, pool.requestTap(id, 1e18));
+        vm.warp(last + P.TAP_TIER_2_EVERY); // a second before Bedrock: Eternal's 90-day window
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.TapTooSoon.selector, last + P.TAP_TIER_1_EVERY));
+        pool.requestTap(id, 1e18);
+        skip(1); // Bedrock: 60 days have passed
+        pool.requestTap(id, 1e18);
+        vm.stopPrank();
+    }
+
+    /// The tier follows the Streak, not the position's age: an ordinary execution ends the perk.
+    function test_tapNeedsTheStreakNotTheAge() public {
+        vm.startPrank(alice);
+        uint256 id = pool.open(1000e18);
+        skip(100 days);
+        uint32 t = pool.requestCooling(id, 10e18);
+        skip(P.WITHDRAW_TIER_0_SECONDS);
+        pool.executeWithdrawal(id, t); // the Streak restarts
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.NoTap.selector, id));
+        pool.requestTap(id, 1e18);
+        vm.warp(pool.positionOf(id).streakStart + P.TAP_TIER_0_STREAK);
+        pool.requestTap(id, 1e18);
+        vm.stopPrank();
+    }
+
+    /// The share is of active principal: principal already cooling does not count.
+    function test_tapQuotaIsOfActivePrincipal() public {
+        vm.startPrank(alice);
+        uint256 id = pool.open(1000e18); // 990
+        skip(P.TAP_TIER_0_STREAK);
+        pool.requestCooling(id, 90e18); // 900 active, 90 frozen
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.TapQuotaExceeded.selector, 90e18 + 1, 90e18));
+        pool.requestTap(id, 90e18 + 1);
+        pool.requestTap(id, 90e18); // 10% of 900
+        vm.stopPrank();
+    }
+
+    /// Lots past the age cap tie: the Tap draws the lower slot first.
+    function test_tapTiesGoToTheLowerSlot() public {
+        vm.startPrank(alice);
+        uint256 id = pool.open(1000e18); // slot 0: 990
+        skip(1 days);
+        pool.deposit(id, 100e18); // slot 1: 99
+        skip(P.HEAT_AGE_CAP + 1 days); // both capped
+        pool.poke(id); // lotAt reads at the last checkpoint
+        (, uint256 age0,,) = pool.lotAt(id, 0);
+        (, uint256 age1,,) = pool.lotAt(id, 1);
+        assertEq(age0, age1, "a tie");
+        pool.requestTap(id, 50e18);
+        assertEq(pool.lotOf(id, 0).amount, 940e18, "the lower slot drawn");
+        assertEq(pool.lotOf(id, 1).amount, 99e18, "the higher slot untouched");
+        vm.stopPrank();
+    }
+
+    function test_tapExecutesWithoutHaircutOrStreakReset() public {
+        vm.prank(alice);
+        uint256 id = pool.open(1000e18);
+        skip(50 days);
+        vm.prank(alice);
+        pool.deposit(id, 100e18); // the younger lot: 99
+        skip(50 days);
+        uint256 streak = pool.positionOf(id).streakStart;
+        vm.prank(alice);
+        uint32 t = pool.requestTap(id, 99e18); // all of the younger lot, none of the older
+        assertEq(pool.lotOf(id, 1).heldBy, t, "the younger lot drawn whole");
+        assertEq(pool.lotOf(id, 0).amount, 990e18, "the older lot untouched");
+        skip(P.WITHDRAW_TIER_0_SECONDS);
+        uint256 before = token.balanceOf(alice);
+        vm.prank(alice);
+        uint256 net = pool.executeWithdrawal(id, t);
+        assertEq(net, 99e18 - 99e18 / 100, "the normal fee");
+        assertEq(token.balanceOf(alice) - before, net);
+        (, uint256 age,,) = pool.lotAt(id, 0);
+        assertEq(age, 100 days + P.WITHDRAW_TIER_0_SECONDS, "no haircut");
+        assertEq(pool.positionOf(id).streakStart, streak, "the Streak stays");
+    }
+
+    function test_tapIsLockedWhileListed() public {
+        vm.prank(alice);
+        uint256 id = pool.open(1000e18);
+        skip(100 days);
+        vm.prank(deeds);
+        pool.list(id, alice);
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.Listed.selector, id));
+        vm.prank(alice);
+        pool.requestTap(id, 1e18);
+    }
+
+    function test_gas_tap() public {
+        vm.startPrank(alice);
+        uint256 id = pool.open(10e18);
+        for (uint256 i = 1; i < 32; ++i) {
+            skip(1 hours);
+            pool.deposit(id, 10e18);
+        }
+        skip(400 days); // Eternal: 25%
+        uint256 g = gasleft();
+        uint32 t = pool.requestTap(id, 7 * 9.9e18); // the 7 youngest lots, whole (32 lots leave no slot to split)
+        emit log_named_uint("requestTap, youngest-first over 32 lots (7 drawn)", g - gasleft());
+        skip(P.WITHDRAW_TIER_2_SECONDS);
+        g = gasleft();
+        pool.executeWithdrawal(id, t);
+        emit log_named_uint("executeWithdrawal of a Tap (no haircut)", g - gasleft());
+        vm.stopPrank();
     }
 
     // ── Deeds (ADR 0011) ──────────────────────────────────────────────────

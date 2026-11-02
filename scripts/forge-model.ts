@@ -36,6 +36,9 @@ export const EMERGENCY_FEE_PCT = BigInt(cfg.forge.emergencyExit.feePct);
 export const MIN_STAKE_LP = parseUnits(cfg.forge.minStakeLp, 18);
 export const SEAL_TRACKS = cfg.forge.convictionTracks.tracks.map((t) => ({ seconds: BigInt(t.days) * DAY, bonus: ray(String(t.bonus)) }));
 export const SEAL_GAP = BigInt(cfg.emissions.epochSeconds); // [P] ForgePool.seal
+/** Tap tiers (spec §9): the Relics with a Tap perk, by Streak. ADR 0014. */
+export const TAP_TIERS = cfg.forge.relics.filter((r) => r.perks.tap)
+  .map((r) => ({ streak: BigInt(r.days) * DAY, maxPct: BigInt(r.perks.tap!.maxPct), every: BigInt(r.perks.tap!.everyDays) * DAY }));
 export enum SealStatus { None, Active, Completed, Forfeited }
 export interface SealM { track: number; status: SealStatus; start: bigint; pausedAt: bigint; pausedSeconds: bigint; endedAt: bigint; cohort: number }
 /** A Seal's end: when it ended, else when it is due if it keeps running (ForgeMeasures.sealEnd). */
@@ -50,7 +53,7 @@ const min = (a: bigint, b: bigint) => (a < b ? a : b);
 export interface Lot { amount: bigint; age: bigint; part: bigint; heldBy: number }
 export interface Slice { amount: bigint; age: bigint; part: bigint }
 export type Status = 'pending' | 'executed' | 'cancelled' | 'lapsed' | 'emergency';
-export interface Ticket { id: number; amount: bigint; maturity: bigint; status: Status; poolApplied: boolean; slices: Map<number, Slice> }
+export interface Ticket { id: number; amount: bigint; maturity: bigint; status: Status; poolApplied: boolean; slices: Map<number, Slice>; tap: boolean }
 export interface Position {
   id: number; lots: Lot[]; lotCount: number; reserved: number; last: bigint; streakStart: bigint;
   /** Ordinary bonus (Capstone + Pyre) in BONUS_UNITs, set by BOOST. */
@@ -70,6 +73,8 @@ export interface Position {
   /** Deeds (ADR 0011): the owner wallet, the listing nonce (odd while listed) and each
    *  previous owner with the end of its tenure. */
   owner: number; listing: number; owners: { owner: number; until: bigint }[];
+  /** The last Tap request (ADR 0014). */
+  lastTapAt: bigint;
 }
 export interface Rec { since: bigint; amount: bigint; age: bigint; part: bigint; seal: number; streak: bigint; bonus: bigint }
 const UINT96_MAX = (1n << 96n) - 1n;
@@ -375,7 +380,7 @@ export class ForgeModel {
       epochS: new Map(), epochW: new Map(), historySlots: new Set(), openedAt: now, closedAt: 0n,
       heads: new Map(), history: new Map(),
       seals: [], SS: 0n, SW: 0n, epochSS: new Map(), epochSW: new Map(), Q: 0n, epochQ: new Map(),
-      owner, listing: 0, owners: [],
+      owner, listing: 0, owners: [], lastTapAt: 0n,
     };
     this.positions.push(p);
     this.addLot(p, amount, now);
@@ -405,28 +410,46 @@ export class ForgeModel {
     p.lots.forEach((lot, j) => { if (lot.amount !== 0n) this.recordHead(p, j); });
     p.bonus = units;
   }
-  request(id: number, r: bigint, now: bigint): number {
+  request(id: number, r: bigint, now: bigint, tap = false): number {
     const p = this.touchOwned(id, now);
     need(!p.closed, 'Closed');
     need(r > 0n, 'ZeroAmount');
     const { active } = this.custody(p);
     need(r <= active, 'ExceedsActive');
+    if (tap) {
+      // The highest tier the Streak reaches; one Tap per window; a share of active principal.
+      const tier = [...TAP_TIERS].reverse().find((t) => now - p.streakStart >= t.streak);
+      need(tier !== undefined, 'NoTap');
+      need(p.lastTapAt === 0n || now >= p.lastTapAt + tier!.every, 'TapTooSoon');
+      need(r * 100n <= active * tier!.maxPct, 'TapQuotaExceeded');
+      p.lastTapAt = now;
+    }
     if (!p.plan || (now >= p.plan.start + HORIZON && p.pending.length === 0)) p.plan = { start: now, reference: active, requested: 0n };
     const after = p.plan.requested + r;
     need(after <= p.plan.reference, 'PlanQuotaExceeded');
     need(p.pending.length < MAX_PENDING, 'TooManyPendingTickets');
     const tier = TIERS.find((t) => after * 100n <= p.plan!.reference * t.maxPct)!;
-    // Pro-rata over active lots in slot order; floor dust goes to the first lots with room.
-    const take = p.lots.map((l) => l.amount * r / active);
-    let dust = r - take.reduce((n, x) => n + x, 0n);
-    for (let j = 0; j < MAX_LOTS && dust > 0n; j++) {
-      const add = min(dust, p.lots[j].amount - take[j]);
-      take[j] += add; dust -= add;
+    let take: bigint[];
+    if (tap) {
+      // Youngest first: ascending financial age, ties by slot; only the last lot drawn is partial.
+      take = p.lots.map(() => 0n);
+      const order = p.lots.map((l, j) => j).filter((j) => p.lots[j].amount > 0n)
+        .sort((a, b) => (p.lots[a].age === p.lots[b].age ? a - b : p.lots[a].age < p.lots[b].age ? -1 : 1));
+      let left = r;
+      for (const j of order) { if (left === 0n) break; take[j] = min(left, p.lots[j].amount); left -= take[j]; }
+    } else {
+      // Pro-rata over active lots in slot order; floor dust goes to the first lots with room.
+      take = p.lots.map((l) => l.amount * r / active);
+      let dust = r - take.reduce((n, x) => n + x, 0n);
+      for (let j = 0; j < MAX_LOTS && dust > 0n; j++) {
+        const add = min(dust, p.lots[j].amount - take[j]);
+        take[j] += add; dust -= add;
+      }
     }
     const split = take.filter((x, j) => x > 0n && x < p.lots[j].amount).length;
     need(p.lotCount + p.reserved + split <= MAX_LOTS, 'LotCapacity');
     p.reserved += split;
-    const t: Ticket = { id: p.nextTicket++, amount: r, maturity: now + tier.seconds, status: 'pending', poolApplied: false, slices: new Map() };
+    const t: Ticket = { id: p.nextTicket++, amount: r, maturity: now + tier.seconds, status: 'pending', poolApplied: false, slices: new Map(), tap };
     const seal = p.pending.length === 0 && this.current(p)?.status === SealStatus.Active ? this.current(p)! : undefined;
     if (seal) seal.pausedAt = now; // before the freeze: its heads drop the tag
     take.forEach((x, j) => {
@@ -459,13 +482,15 @@ export class ForgeModel {
       if (lot.heldBy === t!.id) { lot.heldBy = 0; p.lotCount--; } else p.reserved--;
     }
     this.dropPending(p, t!, 'executed');
-    p.lots.forEach((lot, j) => {
-      if (lot.amount === 0n) return;
-      lot.age = cooledAge(lot.age, w, balance);
-      this.recordHead(p, j);
-    });
-    for (const pid of p.pending) for (const s of p.tickets.get(pid)!.slices.values()) s.age = cooledAge(s.age, w, balance);
-    p.streakStart = now;
+    if (!t!.tap) { // a Tap cools nothing and keeps the Streak (spec §9)
+      p.lots.forEach((lot, j) => {
+        if (lot.amount === 0n) return;
+        lot.age = cooledAge(lot.age, w, balance);
+        this.recordHead(p, j);
+      });
+      for (const pid of p.pending) for (const s of p.tickets.get(pid)!.slices.values()) s.age = cooledAge(s.age, w, balance);
+      p.streakStart = now;
+    }
     const fee = w * WITHDRAW_FEE_PCT / 100n;
     this.fees.withdraw += fee;
     this.frozen -= w;
