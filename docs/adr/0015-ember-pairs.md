@@ -138,7 +138,15 @@ Status: accepted for this repository. Not audited, not deployed.
   - the pairs then deploy at the predicted addresses, pool 0 takes LP, and the next epoch pays it;
   - a stranger using the same salts lands on another address (`AddressMismatch`), and a second deployment is refused (`PairsAlreadyLive`).
 - **Rehearsal.** `pnpm testnet:dry-run` with the pairs and the smoke actions, on a fork of LiteForge, ran 39 transactions; the largest was 10.2M gas (a ForgePool).
-- **Mutations:** planted bugs on these paths, each of which must be caught (see the README).
+- **Mutations:** 38 planted bugs. **All 38 are caught.** They cover:
+  - fees: each component rounding down, a rebate that skips a lane or cuts the LP fee, buys charged sell rates or booking Quote yield, a sell without Quote yield, the `TooSmall` edge;
+  - reserves: the LP fee dropped on either side, the protocol fee kept in the reserves, a sell paying the protocol fee to the trader, a buy priced on its gross input;
+  - ledgers and access: lanes mixed, collection leaving the ledger or open to anyone, the Flow check dropped or open to a zero Flow, an unbounded share, a zero guardian able to pause;
+  - pausing: redeem paused, sells left unpaused;
+  - liquidity: anyone initializing, no minimum lock, the quote unscaled, adds minting the larger share or taking quote rounded up, redeem rounding up or burning half, fee-on-transfer accepted;
+  - the oracle: the period or the window made exclusive, the cumulative not extrapolated, the ring overwriting its newest observation, the update after the reserve change;
+  - the kit: the pairs' quotes swapped, no guard against a second deployment, pools staking stand-ins.
+- **One gap found and closed.** The mutant that booked the burn fee into the liquidity ledger survived, because the config gives burn and liquidity the same rate on both sides, so their amounts are always equal. `test_eachLedgerKeepsItsLane` now books distinct amounts through a harness, and it was checked to fail against that mutant.
 
 ## Consequences
 
