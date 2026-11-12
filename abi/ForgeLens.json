@@ -1,0 +1,802 @@
+[
+  {
+    "type": "function",
+    "name": "custodyOf",
+    "inputs": [
+      {
+        "name": "pool",
+        "type": "address",
+        "internalType": "contract ForgePool"
+      },
+      {
+        "name": "id",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "dueLapses",
+    "inputs": [
+      {
+        "name": "pool",
+        "type": "address",
+        "internalType": "contract ForgePool"
+      },
+      {
+        "name": "id",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "historyAt",
+    "inputs": [
+      {
+        "name": "pool",
+        "type": "address",
+        "internalType": "contract ForgePool"
+      },
+      {
+        "name": "id",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "slot",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "i",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct Record",
+        "components": [
+          {
+            "name": "since",
+            "type": "uint40",
+            "internalType": "uint40"
+          },
+          {
+            "name": "amount",
+            "type": "uint96",
+            "internalType": "uint96"
+          },
+          {
+            "name": "age",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "participated",
+            "type": "uint24",
+            "internalType": "uint24"
+          },
+          {
+            "name": "seal",
+            "type": "uint8",
+            "internalType": "uint8"
+          },
+          {
+            "name": "streak",
+            "type": "uint40",
+            "internalType": "uint40"
+          },
+          {
+            "name": "ordinaryBonus",
+            "type": "uint16",
+            "internalType": "uint16"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "historyLength",
+    "inputs": [
+      {
+        "name": "pool",
+        "type": "address",
+        "internalType": "contract ForgePool"
+      },
+      {
+        "name": "id",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "slot",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "lapseQueueLength",
+    "inputs": [
+      {
+        "name": "pool",
+        "type": "address",
+        "internalType": "contract ForgePool"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "listingOf",
+    "inputs": [
+      {
+        "name": "pool",
+        "type": "address",
+        "internalType": "contract ForgePool"
+      },
+      {
+        "name": "id",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint32",
+        "internalType": "uint32"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "lotAt",
+    "inputs": [
+      {
+        "name": "pool",
+        "type": "address",
+        "internalType": "contract ForgePool"
+      },
+      {
+        "name": "id",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "slot",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "amount",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "age",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "participated",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "heldBy",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "lotCount",
+    "inputs": [
+      {
+        "name": "pool",
+        "type": "address",
+        "internalType": "contract ForgePool"
+      },
+      {
+        "name": "id",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "lotOf",
+    "inputs": [
+      {
+        "name": "pool",
+        "type": "address",
+        "internalType": "contract ForgePool"
+      },
+      {
+        "name": "id",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "slot",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct Lot",
+        "components": [
+          {
+            "name": "since",
+            "type": "uint40",
+            "internalType": "uint40"
+          },
+          {
+            "name": "amount",
+            "type": "uint96",
+            "internalType": "uint96"
+          },
+          {
+            "name": "age",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "participated",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "heldBy",
+            "type": "uint24",
+            "internalType": "uint24"
+          },
+          {
+            "name": "records",
+            "type": "uint24",
+            "internalType": "uint24"
+          },
+          {
+            "name": "seal",
+            "type": "uint8",
+            "internalType": "uint8"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "occupancyAt",
+    "inputs": [
+      {
+        "name": "pool",
+        "type": "address",
+        "internalType": "contract ForgePool"
+      },
+      {
+        "name": "i",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct ForgePoolBase.Occupancy",
+        "components": [
+          {
+            "name": "time",
+            "type": "uint40",
+            "internalType": "uint40"
+          },
+          {
+            "name": "cumulative",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "on",
+            "type": "bool",
+            "internalType": "bool"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "occupancyLength",
+    "inputs": [
+      {
+        "name": "pool",
+        "type": "address",
+        "internalType": "contract ForgePool"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "ownedSince",
+    "inputs": [
+      {
+        "name": "pool",
+        "type": "address",
+        "internalType": "contract ForgePool"
+      },
+      {
+        "name": "id",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "ownershipAt",
+    "inputs": [
+      {
+        "name": "pool",
+        "type": "address",
+        "internalType": "contract ForgePool"
+      },
+      {
+        "name": "id",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "n",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct ForgePoolBase.Ownership",
+        "components": [
+          {
+            "name": "owner",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "until",
+            "type": "uint40",
+            "internalType": "uint40"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "pendingTickets",
+    "inputs": [
+      {
+        "name": "pool",
+        "type": "address",
+        "internalType": "contract ForgePool"
+      },
+      {
+        "name": "id",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint32[]",
+        "internalType": "uint32[]"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "positionOf",
+    "inputs": [
+      {
+        "name": "pool",
+        "type": "address",
+        "internalType": "contract ForgePool"
+      },
+      {
+        "name": "id",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct ForgePoolBase.Position",
+        "components": [
+          {
+            "name": "owner",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "lastCheckpoint",
+            "type": "uint40",
+            "internalType": "uint40"
+          },
+          {
+            "name": "streakStart",
+            "type": "uint40",
+            "internalType": "uint40"
+          },
+          {
+            "name": "ordinaryBonus",
+            "type": "uint16",
+            "internalType": "uint16"
+          },
+          {
+            "name": "reservedSlots",
+            "type": "uint8",
+            "internalType": "uint8"
+          },
+          {
+            "name": "pendingCount",
+            "type": "uint8",
+            "internalType": "uint8"
+          },
+          {
+            "name": "usedMask",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "historyMask",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "nextTicketId",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "coolingPausedSeconds",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "ashfallForfeited",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "openedAt",
+            "type": "uint40",
+            "internalType": "uint40"
+          },
+          {
+            "name": "listing",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "closedAt",
+            "type": "uint40",
+            "internalType": "uint40"
+          },
+          {
+            "name": "sealCount",
+            "type": "uint8",
+            "internalType": "uint8"
+          },
+          {
+            "name": "transfers",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "founder",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "headStartActive",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "headStart",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "lastTapAt",
+            "type": "uint40",
+            "internalType": "uint40"
+          },
+          {
+            "name": "plan",
+            "type": "tuple",
+            "internalType": "struct ForgePoolBase.Plan",
+            "components": [
+              {
+                "name": "start",
+                "type": "uint40",
+                "internalType": "uint40"
+              },
+              {
+                "name": "referenceBalance",
+                "type": "uint128",
+                "internalType": "uint128"
+              },
+              {
+                "name": "requested",
+                "type": "uint128",
+                "internalType": "uint128"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "sealOf",
+    "inputs": [
+      {
+        "name": "pool",
+        "type": "address",
+        "internalType": "contract ForgePool"
+      },
+      {
+        "name": "id",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "k",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct Seal",
+        "components": [
+          {
+            "name": "track",
+            "type": "uint8",
+            "internalType": "uint8"
+          },
+          {
+            "name": "status",
+            "type": "uint8",
+            "internalType": "enum SealStatus"
+          },
+          {
+            "name": "start",
+            "type": "uint40",
+            "internalType": "uint40"
+          },
+          {
+            "name": "pausedAt",
+            "type": "uint40",
+            "internalType": "uint40"
+          },
+          {
+            "name": "pausedSeconds",
+            "type": "uint40",
+            "internalType": "uint40"
+          },
+          {
+            "name": "endedAt",
+            "type": "uint40",
+            "internalType": "uint40"
+          },
+          {
+            "name": "cohortMask",
+            "type": "uint32",
+            "internalType": "uint32"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "sliceOf",
+    "inputs": [
+      {
+        "name": "pool",
+        "type": "address",
+        "internalType": "contract ForgePool"
+      },
+      {
+        "name": "id",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "ticketId",
+        "type": "uint32",
+        "internalType": "uint32"
+      },
+      {
+        "name": "slot",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct ForgePoolBase.Slice",
+        "components": [
+          {
+            "name": "amount",
+            "type": "uint128",
+            "internalType": "uint128"
+          },
+          {
+            "name": "age",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "participated",
+            "type": "uint32",
+            "internalType": "uint32"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "ticketOf",
+    "inputs": [
+      {
+        "name": "pool",
+        "type": "address",
+        "internalType": "contract ForgePool"
+      },
+      {
+        "name": "id",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "ticketId",
+        "type": "uint32",
+        "internalType": "uint32"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct ForgePoolBase.Ticket",
+        "components": [
+          {
+            "name": "amount",
+            "type": "uint128",
+            "internalType": "uint128"
+          },
+          {
+            "name": "maturity",
+            "type": "uint40",
+            "internalType": "uint40"
+          },
+          {
+            "name": "status",
+            "type": "uint8",
+            "internalType": "enum ForgePoolBase.Status"
+          },
+          {
+            "name": "poolApplied",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "sliceMask",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "tap",
+            "type": "bool",
+            "internalType": "bool"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  }
+]

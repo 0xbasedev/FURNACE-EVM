@@ -21,11 +21,20 @@ extra_output = ["storageLayout"]
 gas_limit = 4_294_967_296
 # Differential tests read vectors generated from furnace.config.ts (pnpm gen); no ffi.
 ffi = false
-fs_permissions = [{ access = "read", path = "./contracts/test/fixtures" }]
+fs_permissions = [
+  { access = "read", path = "./contracts/test/fixtures" },
+  # DeployTestnet writes deployments/testnet-<chain id>.json after a broadcast.
+  { access = "read-write", path = "./deployments" },
+]
 remappings = [
   "forge-std/=lib/forge-std/src/",
   "@openzeppelin/contracts/=node_modules/@openzeppelin/contracts/",
 ]
+
+# Testnets only (docs/testnet/litvm-liteforge.md). LiteForge moved from Caldera to Zeeve:
+# the Caldera endpoints are retired.
+[rpc_endpoints]
+liteforge = "https://rpc.testnet.liteforge.zeeve.net/"
 
 [fuzz]
 runs = 512
