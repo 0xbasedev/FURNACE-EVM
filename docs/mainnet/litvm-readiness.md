@@ -1,0 +1,51 @@
+# LitVM mainnet: readiness
+
+Status: **not ready.** Nothing is deployed and nothing is audited. LitVM mainnet has not published a chain id or RPC (LitVM's docs, checked November 2026). This page lists what stands between this repository and a LitVM mainnet deployment, in the order it must be cleared.
+
+## The gate
+
+`pnpm mainnet:gate` reads [`deployments/litvm-mainnet.gate.json`](../../deployments/litvm-mainnet.gate.json) and prints every blocker. It exits 1 while any remain.
+- **Live checks.** With an RPC in the record, the gate queries the chain. It checks the chain id, CreateX's runtime hash, the Cancun opcodes, and that every module, token and the deployer have the code they should.
+- **Rehearsal.** Run against LiteForge with a scratch record, the live checks pass: the chain id, CreateX's hash, and the PUSH0, TSTORE/TLOAD and MCOPY probes.
+- **CI.** `pnpm mainnet:gate:check` runs offline in `pnpm check`. It fails if the record is malformed, or if the gate ever reports no blockers.
+- **No mainnet broadcast script exists, by design.**
+  - The testnet kit refuses every chain id outside its testnet list (4441 and 31337).
+  - A mainnet deployment also needs the canonical deployment gate (`canonical/DEPLOYMENT.md`), which is Ethereum-only today.
+
+**Fill the record only from verified sources.** The gate's live checks are not a substitute for those sources. Never put a key in it.
+
+## Blockers, in order
+
+1. **The chain.**
+   - LitVM must publish the mainnet chain id, RPC and explorer.
+   - Record them with their sources, then verify them with the gate's live run.
+   - Re-check the Orbit facts that matter here: timestamps, the per-block gas limit (the largest deployment transaction is 10.2M), and the gas token.
+2. **The canonical decision.** The canonical config's chains are Ethereum, BSC, Base, Arbitrum and Solana, and v5.5's launch gate is Ethereum-only.
+   - Adding LitVM is the project owner's decision. It changes the config hash, and every generated constant follows.
+   - Its quote asset needs the same decision. That is SmelterPool's pair asset: bridged WETH or wrapped zkLTC.
+3. **The factory and the opcodes.**
+   - CreateX must be at `0xba5E…ba5Ed` with the known runtime hash.
+   - PUSH0, TSTORE/TLOAD and MCOPY must execute. The pools' and pairs' reentrancy guards use transient storage.
+4. **The modules the testnet hands to an operator wallet.** Each must be a contract at a mined address:
+   - Treasury (a 3-of-5 Safe with real owners) and the guardian;
+   - Kindling (each pair's initializer) and the fee router (the Vent);
+   - Flow (rebates and the Compound waiver) and the Deed market;
+   - the match reserve and the Sealed-pot stream;
+   - the protected valuation source and the Relics (Pyre) ledger.
+   Of these, only the pairs' side is built ([ADR 0015](../adr/0015-ember-pairs.md)).
+5. **The pairs' trust window** (ADR 0015). A CREATE3 address does not commit to code. The pairs must therefore deploy in the same broadcast as the core, or move to CreateX's CREATE2, which is a change to §23.
+6. **The pools' remaining hooks.** They are needed before an immutable mainnet deployment:
+   - Kindling positions with the First Flame floor;
+   - source-lot additions (Casting, Stoke into LP).
+   The pools cannot gain them later without a migration.
+7. **The deployer.** It must be a real key holder's EOA, not the canonical placeholder, and the record must name it. Every mined salt binds it.
+8. **Audits.** The spec requires at least two independent audits before activation. Each must cover the exact commit to be deployed.
+
+## What is ready
+
+- **The testnet kit:**
+  - the built core and the EMBER pairs, wired and tested offline against CreateX's real runtime;
+  - rehearsed on a fork of LiteForge (39 transactions, the largest 10.2M gas);
+  - the pairs deployable later, as an add-on.
+  See [`docs/testnet/litvm-liteforge.md`](../testnet/litvm-liteforge.md).
+- **The mainnet watch.** It reports the chain's facts once LitVM publishes them; that is blocker 1's input.

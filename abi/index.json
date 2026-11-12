@@ -23,6 +23,10 @@
     "file": "ForgeLens.json",
     "testnetOnly": false
   },
+  "EmberPair": {
+    "file": "EmberPair.json",
+    "testnetOnly": false
+  },
   "TestnetToken": {
     "file": "TestnetToken.json",
     "testnetOnly": true

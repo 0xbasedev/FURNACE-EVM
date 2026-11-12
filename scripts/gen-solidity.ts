@@ -6,6 +6,7 @@
 //   contracts/test/fixtures/oracle-vectors.json  reference values
 //   contracts/test/fixtures/forge-vectors.json   ForgePool scenarios (scripts/forge-scenarios.ts)
 //   contracts/test/fixtures/settlement-vectors.json  settlement scenarios (scripts/settlement-scenarios.ts)
+//   contracts/test/fixtures/pair-vectors.json    EmberPair scenarios (scripts/pair-model.ts)
 // Integer references (accounting.ts, BigInt) are matched EXACTLY by the Solidity
 // ports; the float display helper heatMultiplier within 1e-12.
 // pnpm gen --check exits non-zero if either output is stale (CI gate).
@@ -21,6 +22,7 @@ import { canonicalize, keccakHex } from './canonical';
 import { forgeVectors } from './forge-scenarios';
 import { settlementVectors } from './settlement-scenarios';
 import { capstoneUnits, pyreUnits, checkAgainstCanonical, PYRE_TIERS, RATIO_FOR_MAX } from './boost-model';
+import { pairVectors, LP_PPM, BUY, SELL, D as PPM_ONE } from './pair-model';
 import { keccak_256 } from '@noble/hashes/sha3.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
 
@@ -29,6 +31,7 @@ const SCHEDULE = 'contracts/src/generated/ScheduleTable.sol';
 const VECTORS = 'contracts/test/fixtures/oracle-vectors.json';
 const FORGE_VECTORS = 'contracts/test/fixtures/forge-vectors.json';
 const SETTLEMENT_VECTORS = 'contracts/test/fixtures/settlement-vectors.json';
+const PAIR_VECTORS = 'contracts/test/fixtures/pair-vectors.json';
 const DAY = 86_400n;
 
 /** Exact decimal → fixed-point integer string (shortest round-trip, never toFixed noise). */
@@ -310,6 +313,42 @@ tapTiers.forEach((t, i) => {
   c('uint256', `TAP_TIER_${i}_EVERY`, BigInt(t.everyDays) * DAY_N, `one Tap per ${t.everyDays} days`);
 });
 
+section('EMBER pairs: Flow swap fees in ppm, the oracle window (spec v5.5 §13, §14; ADR 0015)');
+// Both pairs take every fee in the quote asset: a buy's from its input, a sell's from its output.
+// The LP fee stays in the reserves; the protocol parts are booked per lane for the Vent to pull.
+const swapCfg = cfg.fees.swap;
+const swapPolicy: [string, unknown, unknown][] = [
+  ['swap.amm', cfg.swap.amm, 'protocol-cpmm'],
+  ['fees.swap.buy.treasuryBps', swapCfg.buy.treasuryBps, 0],
+  ['fees.swap.sell.treasuryBps', swapCfg.sell.treasuryBps, 0],
+  ['fees.quoteYield.enabled', cfg.fees.quoteYield.enabled, true],
+  ['fees.quoteYield.asset', cfg.fees.quoteYield.asset, 'quoteAsset'],
+  ['fees.liquidityLane.permanentMustBeFullRange', cfg.fees.liquidityLane.permanentMustBeFullRange, true],
+  ['security.pausable.swaps', cfg.security.pausable.swaps, true],
+  ['security.pausable.withdrawalsNever', cfg.security.pausable.withdrawalsNever, true],
+];
+for (const [path, got, want] of swapPolicy) if (got !== want) throw new Error(`EmberPair implements ${path} = ${String(want)}, config has ${String(got)}`);
+if (swapCfg.buy.lpBps !== swapCfg.sell.lpBps) throw new Error('EmberPair charges one LP fee on both sides');
+const ppmOf = (bps: number) => parseUnits(String(bps), 2);
+const buyTotal = LP_PPM + BUY.burn + BUY.liquidity, sellTotal = LP_PPM + SELL.burn + SELL.liquidity + SELL.quoteYield;
+if (buyTotal !== ppmOf(swapCfg.buy.totalBps)) throw new Error('buy-side swap fee parts must sum to buy.totalBps');
+if (sellTotal !== ppmOf(swapCfg.sell.totalBps)) throw new Error('sell-side swap fee parts must sum to sell.totalBps');
+const ceilingPpm = ppmOf(cfg.security.feeCeilings.swapBps);
+if (buyTotal > ceilingPpm || sellTotal > ceilingPpm) throw new Error('a swap fee exceeds security.feeCeilings.swapBps');
+if (PPM_ONE !== 1_000_000n) throw new Error('pair-model ppm scale must be 1e6');
+const twap = cfg.fees.burnLane.twapSeconds;
+if (!(Number.isInteger(twap) && twap > 0 && twap % 6 === 0)) throw new Error('the Vent TWAP must be whole seconds divisible by 6 (EmberPair observes every TWAP/6)');
+c('uint256', 'PAIR_LP_FEE_PPM', LP_PPM, `${swapCfg.buy.lpBps} bps, both sides`);
+c('uint256', 'PAIR_BUY_BURN_PPM', BUY.burn, `${swapCfg.buy.burnBps} bps`);
+c('uint256', 'PAIR_BUY_LIQUIDITY_PPM', BUY.liquidity, `${swapCfg.buy.liquidityBps} bps`);
+c('uint256', 'PAIR_SELL_BURN_PPM', SELL.burn, `${swapCfg.sell.burnBps} bps`);
+c('uint256', 'PAIR_SELL_LIQUIDITY_PPM', SELL.liquidity, `${swapCfg.sell.liquidityBps} bps`);
+c('uint256', 'PAIR_SELL_QUOTE_YIELD_PPM', SELL.quoteYield, `${swapCfg.sell.quoteYieldBps} bps, in the quote asset`);
+c('uint256', 'PAIR_BUY_TOTAL_PPM', buyTotal, `${swapCfg.buy.totalBps} bps`);
+c('uint256', 'PAIR_SELL_TOTAL_PPM', sellTotal, `${swapCfg.sell.totalBps} bps`);
+c('uint256', 'PAIR_TWAP_SECONDS', twap, 'the Vent window; the pair observes every sixth of it');
+c('address', 'BURN_ADDRESS', checksum(cfg.fees.burnAddress.evm), 'holds each pair\'s minimum liquidity');
+
 section(`Deterministic deployment registry (CREATE3). PROVISIONAL while the deployer is ${cfg.deployment.evm.deployer}`);
 lines.push('    //    Only MINED entries become constants; unmined modules are constructor/initializer inputs.');
 c('address', 'CREATEX', CREATEX_FACTORY);
@@ -452,7 +491,7 @@ vectors.squaredPrimitive.ray = vectors.squaredPrimitive.ageSeconds.map((a, i) =>
 const vectorsJson = JSON.stringify(vectors, null, 2) + '\n';
 
 // ── write or check ───────────────────────────────────────────────────────
-const outputs: [string, string][] = [[PARAMS, params], [SCHEDULE, scheduleSol], [VECTORS, vectorsJson], [FORGE_VECTORS, JSON.stringify(forgeVectors(), null, 1) + '\n'], [SETTLEMENT_VECTORS, JSON.stringify(settlementVectors(), null, 1) + '\n']];
+const outputs: [string, string][] = [[PARAMS, params], [SCHEDULE, scheduleSol], [VECTORS, vectorsJson], [FORGE_VECTORS, JSON.stringify(forgeVectors(), null, 1) + '\n'], [SETTLEMENT_VECTORS, JSON.stringify(settlementVectors(), null, 1) + '\n'], [PAIR_VECTORS, JSON.stringify(pairVectors(), null, 1) + '\n']];
 if (process.argv.includes('--check')) {
   let stale = 0;
   for (const [p, body] of outputs) {

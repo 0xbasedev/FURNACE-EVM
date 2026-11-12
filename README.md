@@ -2,7 +2,7 @@
 
 EVM workspace for **FURNACE Protocol**, a loyalty-staking protocol built on EMBER, ASH, liquidity and earned time. The canonical design is **v5.5.0**, kept unchanged in [`canonical/`](canonical/README.md). Revision history is in [`docs/REVISIONS.md`](docs/REVISIONS.md).
 
-> **Status: early implementation.** It contains math libraries, the home-chain EMBER token, the Mantle issuance ledger, Forge custody, base epoch settlement, Seals and Ashfall. Nothing is audited or deployed, and nothing here is production-ready. v5.5 requires at least two independent audits before activation. Initial launch is Ethereum-only.
+> **Status: early implementation.** It contains math libraries, the home-chain EMBER token, the Mantle issuance ledger, Forge custody, base epoch settlement, Seals, Ashfall and the two EMBER pairs. Nothing is audited or deployed, and nothing here is production-ready. v5.5 requires at least two independent audits before activation. Initial launch is Ethereum-only.
 
 ## Layout
 
@@ -23,23 +23,25 @@ EVM workspace for **FURNACE Protocol**, a loyalty-staking protocol built on EMBE
 | `contracts/src/forge/ForgePoolBase.sol`, `ForgePoolAnnex.sol` | ForgePool's storage, configuration and internal logic (`ForgePoolBase`), shared with the annex each pool deploys and runs by DELEGATECALL for its cold paths: Seals, BOOST's bonus, Deed listing and settlement, and fee collection. Principal paths, exits and views stay in the pool. `pnpm check:layout` proves that both contracts have the same storage layout. See [ADR 0012](docs/adr/0012-pool-annex.md). |
 | `contracts/src/forge/ForgeView.sol`, `ForgeLens.sol` | ForgePool's read API (positions, lots, records, tickets, slices, Seals, occupancy), decoded from its raw storage through `extsload`. `using ForgeView for ForgePool;` keeps `pool.positionOf(id)`; `ForgeLens` serves the same reads as external calls for frontends. The views left the pool to make room for its remaining hooks. See [ADR 0010](docs/adr/0010-pool-headroom.md). |
 | `contracts/src/forge/ForgeMeasures.sol` | External library: exact slot and position measures (S, W, their sealed parts, and the Ashfall weight) read from the pool's records by DELEGATECALL. It keeps ForgePool under the EIP-170 size limit. |
+| `contracts/src/pairs/EmberPair.sol` | **The EMBER pairs**, BlastPool (EMBER/USDC) and SmelterPool (EMBER/WETH): one full-range constant-product contract, deployed twice, that is its own receipt. Exact-in, pull-based swaps with no callbacks. Buys pay 25 bps and sells 35 bps, every part in ppm and in the quote asset: the LP's 20 bps stays in the reserves; burn, liquidity and Quote yield are booked by lane for the fee router to pull. Only the immutable Flow may scale the protocol share (Bedrock's 50% rebate, a Compound's waiver), never the LP fee. Kindling's slot makes the first deposit. The reserves are internal, so donations change nothing. `redeem` pays in kind and is never paused; only swaps are. A 30-minute TWAP comes from a cumulative price and 8 observations. Forge pools 0 and 1 stake the pairs' predicted addresses, so the pairs are an add-on that can deploy later. See [ADR 0015](docs/adr/0015-ember-pairs.md). |
 | `contracts/test/` | Exact differential tests against BigInt vectors, fuzz properties, and invariants. |
-| `scripts/` | Independent checks: canonical checksums, config hash, CREATE3, and `gen`. `forge-model.ts` and `settlement-model.ts` are the exact BigInt references, and `forge-scenarios.ts` and `settlement-scenarios.ts` produce the differential scenarios. |
+| `scripts/` | Independent checks: canonical checksums, config hash, CREATE3, and `gen`. `forge-model.ts`, `settlement-model.ts` and `pair-model.ts` are the exact BigInt references, and `forge-scenarios.ts`, `settlement-scenarios.ts` and `pair-model.ts` produce the differential scenarios. |
 | `apps/forge-sim/` | **Forge simulator** (Vite, React, GSAP): Heat, exit tiers and age haircuts, Seal projections and a day-by-day settlement run, computed by importing the exact models above (see *Simulator*). |
 | `tools/solc`, `tools/forge.mjs` | The solc-js shim, and a forge launcher that propagates forge's exit status (see *Toolchain*). |
-| `contracts/script/` | **Testnet deployment kit**: `DeployTestnet.s.sol` deploys and wires the built core through CreateX's CREATE3, with deployer- and chain-bound salts, on testnets only. Stand-ins for unbuilt modules are in `testnet/`. Rehearsed on a fork of LitVM's LiteForge testnet (chain 4441); see [`docs/testnet/litvm-liteforge.md`](docs/testnet/litvm-liteforge.md). Not a canonical deployment. |
+| `contracts/script/` | **Testnet deployment kit**: `DeployTestnet.s.sol` deploys and wires the built core and the EMBER pairs through CreateX's CREATE3, with deployer- and chain-bound salts, on testnets only; `DeployTestnetPairs` deploys the pairs later instead, at the addresses pools 0 and 1 already stake. Stand-ins for unbuilt modules are in `testnet/`. Rehearsed on a fork of LitVM's LiteForge testnet (chain 4441); see [`docs/testnet/litvm-liteforge.md`](docs/testnet/litvm-liteforge.md). Not a canonical deployment. |
 | `abi/` | The ABIs a frontend or indexer needs, exported from the build by `pnpm abi`; `index.json` marks the testnet-only stand-ins. ForgePool's ABI includes the functions its annex runs. |
-| `docs/` | ADRs, revision log, testnet guides (`docs/testnet/`), and the original v5.3.1 sources (`docs/sources/`, historical). |
+| `deployments/` | Testnet manifests, and `litvm-mainnet.gate.json`, the record the LitVM mainnet gate reads (`scripts/mainnet-gate.ts`; all of it unset today). There is no mainnet broadcast script; see [`docs/mainnet/litvm-readiness.md`](docs/mainnet/litvm-readiness.md). |
+| `docs/` | ADRs, revision log, testnet guides (`docs/testnet/`), the LitVM mainnet readiness page (`docs/mainnet/`), and the original v5.3.1 sources (`docs/sources/`, historical). |
 
 ## Commands
 
 ```sh
 git submodule update --init   # lib/forge-std
 pnpm install
-pnpm check          # typecheck, canonical checksums, config hash, CREATE3, gen freshness, simulator tests + build, forge exit gate, contract size gate, pool and annex storage layouts, forge tests
+pnpm check          # typecheck, canonical checksums, config hash, CREATE3, gen freshness, simulator tests + build, forge exit gate, contract size gate, pool and annex storage layouts, forge tests, ABI freshness, the mainnet gate still blocked
 pnpm canonical:test # the canonical package's own tests + economics gate (pinned TypeScript 5.8.3)
 pnpm check:all      # both (CI runs both)
-pnpm gen            # regenerate FurnaceParams.sol, ScheduleTable.sol, oracle vectors, Forge + settlement scenarios
+pnpm gen            # regenerate FurnaceParams.sol, ScheduleTable.sol, oracle vectors, Forge, settlement and pair scenarios
 pnpm gas            # gas report: every call its own transaction (forge test --isolate)
 pnpm check:layout   # ForgePool and its annex share one storage layout, at the slots ForgeView decodes
 pnpm config:hash
@@ -47,6 +49,8 @@ pnpm sim:dev        # the Forge simulator on localhost (sim:test, sim:build for 
 pnpm abi            # export the ABIs a frontend needs to abi/ (abi:check fails on stale files; part of pnpm check)
 pnpm testnet:dry-run --sender <address>   # rehearse the testnet deployment on a fork of LiteForge (chain 4441)
 pnpm testnet:deploy --account <keystore> --sender <address>   # broadcast it (testnet keys only)
+pnpm testnet:pairs:deploy --account <keystore> --sender <address>   # only after FURNACE_TESTNET_PAIRS=later: the EMBER pairs
+pnpm mainnet:gate   # the LitVM mainnet readiness gate: every blocker, in order (exits 1 while blocked; mainnet:gate:check runs in pnpm check)
 ```
 
 ## Simulator
@@ -65,7 +69,7 @@ The engine tests (`apps/forge-sim/test`) check each projection against direct ca
 - **Canonical package:** all 54 files match `SHA256SUMS.json`, and they still match after the package's own build. Its 75 tests pass. The economics gate reports no diagnostics. Its deployment gate fails, by design, until real operators are supplied.
 - **Config hash:** v5.5.0 is `0x24f38f4aa11919503354bb5f8263978c7b3edc29723760928cb1eecdbafbe5ae` (31,451 bytes). This repo reproduces it independently with noble Keccak and its own serializer, and it equals the package manifest.
 - **CREATE3:** the 9 mined addresses re-derive from their salts; they are provisional because the deployer is still the placeholder. Seven modules are unmined by design: Mantle, BlastPool, SmelterPool, Flow, GenesisFeeEscrow, TreasuryVesting and Timelock.
-- **Forge tests, 248/248:**
+- **Forge tests, 279/279:**
   - The integer ports equal `canonical/accounting.ts` **exactly** on generated vectors. A deliberate 1-wei rounding change fails the suite.
   - The emission schedule is exact on every day from 0 to 1700 plus far-out days (ADR 0002). Day 365 is exactly 10,800 EMBER, and the floor is first reached on day 1,619.
   - The Heat integral telescopes exactly under checkpoint subdivision (fuzzed). The Heat² primitive (`squaredHeatPrimitive`, the Ashfall weight) is exact as well, including its ~280-bit square root.
@@ -109,9 +113,15 @@ The engine tests (`apps/forge-sim/test`) check each projection against direct ca
   - **Deed mutations:** 34 planted bugs (the settlement order, nonce and parity, the carry and resets, the ownership log, the lock and its exits, the `list` preconditions, the new decoding offsets, the Claim and Capstone locks, Boost's ownership reset), each caught; see ADR 0011.
   - **Stoke mutations:** 22 planted bugs (the consumer, the Claim snapshot, the Stoke's lock, fee and rationing, the keeper's tip, interval, minimum, bounds and sale reset), each caught; see ADR 0013.
   - **Taps mutations:** 30 planted bugs (the haircut-free, Streak-keeping execution and the Seal forfeit, youngest-first and its ties, every tier edge, the window, the quota and its base, the plan, the cancel, the flag and its decoding), each caught; see ADR 0014.
-  - **Testnet kit:** the deployment runs offline against CreateX's real runtime, with the full wiring, salts bound to deployer, chain and version, refusal off the testnet list, and a first epoch settled with every pool earning. It is rehearsed live with `pnpm testnet:dry-run` on a fork of chain 4441.
+  - **EMBER pairs** (ADR 0015):
+    - **Differential:** 8 scenarios replay `pair-model.ts` step by step, 6- and 18-decimal quotes, random walks included. Every output, every revert and the pair's state (reserves, supply, the holder's receipts, the three fee ledgers) must equal the model's after each step.
+    - **The spec's figures, exactly:** 25 and 35 bps at the full fee, 22.5 and 27.5 bps at Bedrock's rebate (2.5 bps of it Quote yield), 20 bps under the Compound waiver.
+    - **Invariants:** balances equal the reserves plus booked fees plus donations; booked fees equal what the fee rule charges on every swap; k never falls outside a redeem; k / supply² never falls; receipts stay backed by the locked minimum; a redemption that pays never reverts, paused or not; a round trip never profits; the cumulative price never falls.
+    - **Unit tests:** access, the initializer gate, decimals scaling, adds off the ratio, redeem while paused, fee-on-transfer refusal, donations, the oracle's windows and ring, collection by lane.
+    - **Mutations:** 38 planted bugs (fee roundings and lanes, the rebate's scope, reserve accounting, access, pausing, initialization and the minimum, decimals scaling, add and redeem roundings, fee-on-transfer, the oracle's period, window, extrapolation and ring, and the kit's wiring), each caught. One, a ledger mix-up hidden by equal burn and liquidity rates, needed a new test; see ADR 0015.
+  - **Testnet kit:** the deployment runs offline against CreateX's real runtime, with the full wiring, salts bound to deployer, chain and version, refusal off the testnet list, and a first epoch settled with every pool earning, the two pairs' LP included. A second test shows the add-on: before the pairs exist, pools 0 and 1 refuse deposits and an epoch settles around them; after the pairs deploy at the predicted addresses, pool 0 takes LP and earns. Anyone but the deployer lands on another address. It is rehearsed live with `pnpm testnet:dry-run` on a fork of chain 4441.
   - **CI gate:** `pnpm forge:gate` proves that a failing test fails the build. The upstream npm wrapper did not propagate forge's exit status.
-  - **Size gate:** `pnpm forge:sizes` fails the build if any contract exceeds the EIP-170 runtime limit (24,576 bytes). ForgePool had been 806 bytes over. The measure path now lives in the external library `ForgeMeasures`, and optimizer runs are 500. With Seals, the Streak anchors and the ordinary bonus, ForgePool reached 24,474 bytes (102 under); its two `mulDiv` calls had become plain arithmetic to fit the bonus hook (ADR 0008). Its sixteen views then moved into `ForgeView` behind one `extsload`, which left 20,681 bytes (ADR 0010). The Deed hook took it to 22,398 bytes (ADR 0011). Its cold paths then moved into an annex it delegatecalls, which left 19,825 bytes (ADR 0012). Taps take it to **20,973 bytes (3,603 under)**; the annex stays at 12,226 bytes (ADR 0014).
+  - **Size gate:** `pnpm forge:sizes` fails the build if any contract exceeds the EIP-170 runtime limit (24,576 bytes). ForgePool had been 806 bytes over. The measure path now lives in the external library `ForgeMeasures`, and optimizer runs are 500. With Seals, the Streak anchors and the ordinary bonus, ForgePool reached 24,474 bytes (102 under); its two `mulDiv` calls had become plain arithmetic to fit the bonus hook (ADR 0008). Its sixteen views then moved into `ForgeView` behind one `extsload`, which left 20,681 bytes (ADR 0010). The Deed hook took it to 22,398 bytes (ADR 0011). Its cold paths then moved into an annex it delegatecalls, which left 19,825 bytes (ADR 0012). Taps take it to **20,973 bytes (3,603 under)**; the annex stays at 12,226 bytes (ADR 0014). EmberPair is 11,146 bytes (ADR 0015).
 
 ## Toolchain
 
@@ -132,6 +142,7 @@ EVM target: `cancun`.
 - The Deed market at a mined address: each `ForgePool` takes it as `DEEDS`. It must check that no Claim or Capstone withdrawal is pending before listing, settle with the nonce `list` returned, run the canonical auction, and refresh the bonus after a sale (ADR 0011).
 - The consumer of unclaimed rewards for Casting and Stoke into LP: today only Claim and the Capstone take them, and the Stoke's take-all reading is provisional until Casting is designed (ADR 0013).
 - Each pool's annex, verified at deployment: its runtime hash, and immutables equal to its pool's (ADR 0012).
+- The EMBER pairs' slots: Kindling as each pair's initializer, the Vent as its fee router, Flow for rebates and the Compound waiver, and the guardian. Also a decision on the pairs' trust window: a CREATE3 address does not commit to code, so the pairs either deploy in the same broadcast as the core or move to CreateX's CREATE2, a change to §23 (ADR 0015). On LitVM, SmelterPool's quote asset (bridged WETH or wrapped zkLTC) is also undecided.
 - Built and audited custody, settlement, escrow and auction contracts.
 
 ## Next steps (v5.5 `CONTRACTS.md`)
@@ -159,3 +170,4 @@ EVM target: `cancun`.
 12. ~~ForgePool's annex~~ (done; ADR 0012): the cold paths run in a delegatecalled annex built from the same source, freeing 2.6 KB; principal paths and exits stay in the pool.
 13. ~~Stoke into the Capstone~~ (done; ADR 0013): fee-free compounding of unclaimed rewards, a rationed raise, and opt-in keepers.
 14. ~~Taps~~ (done; ADR 0014): the Relic-gated, youngest-first withdrawal with no haircut and no Streak reset.
+15. ~~The EMBER pairs~~ (done; ADR 0015): BlastPool and SmelterPool, with fees in ppm by lane, Flow-only rebates, a TWAP, and activation as an add-on. Flow, the Vent and Kindling, which they serve, are not built.

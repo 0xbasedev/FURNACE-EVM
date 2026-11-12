@@ -20,14 +20,18 @@
     "sim:dev": "pnpm --filter @furnace/forge-sim dev",
     "sim:build": "pnpm --filter @furnace/forge-sim build",
     "sim:test": "pnpm --filter @furnace/forge-sim typecheck && pnpm --filter @furnace/forge-sim test",
-    "check": "pnpm typecheck && pnpm canonical:sums && pnpm config:verify-hash && pnpm verify:create3 && pnpm gen:check && pnpm sim:test && pnpm sim:build && pnpm forge:gate && pnpm forge:sizes && pnpm check:layout && pnpm test:sol && pnpm abi:check",
+    "check": "pnpm typecheck && pnpm canonical:sums && pnpm config:verify-hash && pnpm verify:create3 && pnpm gen:check && pnpm sim:test && pnpm sim:build && pnpm forge:gate && pnpm forge:sizes && pnpm check:layout && pnpm test:sol && pnpm abi:check && pnpm mainnet:gate:check",
     "check:all": "pnpm check && pnpm canonical:test",
     "forge:gate": "node scripts/check-forge-gate.mjs",
     "check:layout": "node scripts/check-layout.mjs",
     "abi": "node scripts/export-abi.mjs",
     "abi:check": "node scripts/export-abi.mjs --check",
-    "testnet:dry-run": "node tools/forge.mjs script contracts/script/DeployTestnet.s.sol --rpc-url liteforge",
-    "testnet:deploy": "node tools/forge.mjs script contracts/script/DeployTestnet.s.sol --rpc-url liteforge --broadcast --slow"
+    "testnet:dry-run": "node tools/forge.mjs script contracts/script/DeployTestnet.s.sol:DeployTestnet --rpc-url liteforge",
+    "testnet:deploy": "node tools/forge.mjs script contracts/script/DeployTestnet.s.sol:DeployTestnet --rpc-url liteforge --broadcast --slow",
+    "testnet:pairs:dry-run": "node tools/forge.mjs script contracts/script/DeployTestnet.s.sol:DeployTestnetPairs --rpc-url liteforge",
+    "testnet:pairs:deploy": "node tools/forge.mjs script contracts/script/DeployTestnet.s.sol:DeployTestnetPairs --rpc-url liteforge --broadcast --slow",
+    "mainnet:gate": "tsx scripts/mainnet-gate.ts",
+    "mainnet:gate:check": "tsx scripts/mainnet-gate.ts --expect-blocked"
   },
   "devDependencies": {
     "@foundry-rs/forge": "1.7.1",

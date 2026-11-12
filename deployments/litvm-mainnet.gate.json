@@ -1,0 +1,25 @@
+{
+  "network": "LitVM mainnet",
+  "status": "NOT READY. Fill each field only from a verified source; pnpm mainnet:gate lists what is missing. See docs/mainnet/litvm-readiness.md.",
+  "chainId": null,
+  "rpcUrl": null,
+  "explorerUrl": null,
+  "sources": [],
+  "pairsTrustWindow": null,
+  "usdc": null,
+  "smelterQuote": null,
+  "deployer": null,
+  "modules": {
+    "Treasury": null,
+    "Guardian": null,
+    "Kindling": null,
+    "FeeRouter": null,
+    "Flow": null,
+    "Deeds": null,
+    "MatchReserve": null,
+    "SealedPot": null,
+    "Valuation": null,
+    "PyreLedger": null
+  },
+  "audits": []
+}

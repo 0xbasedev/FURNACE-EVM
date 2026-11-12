@@ -141,6 +141,18 @@ library FurnaceParams {
     uint256 internal constant TAP_TIER_2_MAX_PCT = 25; // of active principal [P]
     uint256 internal constant TAP_TIER_2_EVERY = 5184000; // one Tap per 60 days
 
+    // ── EMBER pairs: Flow swap fees in ppm, the oracle window (spec v5.5 §13, §14; ADR 0015) ──
+    uint256 internal constant PAIR_LP_FEE_PPM = 2000; // 20 bps, both sides
+    uint256 internal constant PAIR_BUY_BURN_PPM = 250; // 2.5 bps
+    uint256 internal constant PAIR_BUY_LIQUIDITY_PPM = 250; // 2.5 bps
+    uint256 internal constant PAIR_SELL_BURN_PPM = 500; // 5 bps
+    uint256 internal constant PAIR_SELL_LIQUIDITY_PPM = 500; // 5 bps
+    uint256 internal constant PAIR_SELL_QUOTE_YIELD_PPM = 500; // 5 bps, in the quote asset
+    uint256 internal constant PAIR_BUY_TOTAL_PPM = 2500; // 25 bps
+    uint256 internal constant PAIR_SELL_TOTAL_PPM = 3500; // 35 bps
+    uint256 internal constant PAIR_TWAP_SECONDS = 1800; // the Vent window; the pair observes every sixth of it
+    address internal constant BURN_ADDRESS = 0x000000000000000000000000000000000000dEaD; // holds each pair's minimum liquidity
+
     // ── Deterministic deployment registry (CREATE3). PROVISIONAL while the deployer is 0x1111111111111111111111111111111111111111 ──
     //    Only MINED entries become constants; unmined modules are constructor/initializer inputs.
     address internal constant CREATEX = 0xba5Ed099633D3B313e4D5F7bdc1305d3c28ba5Ed;

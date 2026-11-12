@@ -12,6 +12,7 @@ const CONTRACTS = [
   ['ForgeEmissions', 'ForgeEmissions.sol'],
   ['Boost', 'Boost.sol'],
   ['ForgeLens', 'ForgeLens.sol'],
+  ['EmberPair', 'EmberPair.sol'],
   // Testnet-only stand-ins (contracts/script/testnet): never part of a canonical deployment.
   ['TestnetToken', 'TestnetStandIns.sol'],
   ['TestnetValuation', 'TestnetStandIns.sol'],
