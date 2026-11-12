@@ -20,7 +20,7 @@ Values from LitVM's docs, each checked against the chain where possible (Novembe
 Orbit differences from Ethereum that could matter here:
 - **`block.number`** is an approximate L1 block number. No Furnace contract reads it.
 - **`block.timestamp`** is the sequencer's clock, kept within 24 hours behind and 1 hour ahead. Furnace's clocks are timestamps, so a testnet Streak or epoch can drift by that much.
-- **Execution gas** is effectively 32M per block. The largest deployment transaction is 10.2M (a ForgePool with its annex), and the heaviest measured settlement page is 5.4M.
+- **Execution gas** is effectively 32M per block. The largest deployment transaction is 10.44M (a ForgePool with its annex), and the heaviest measured settlement page is 5.4M.
 - **Sequencer ordering.** The pairs' 30-minute TWAP (ADR 0015) runs on the sequencer's timestamps.
 
 ## What gets deployed
@@ -39,6 +39,8 @@ Orbit differences from Ethereum that could matter here:
 | tWETH | **stand-in** (18 decimals) for SmelterPool's quote, unless `FURNACE_TESTNET_WETH` names an existing token. On LitVM mainnet that asset is undecided: bridged WETH or wrapped zkLTC |
 | TestnetValuation | **stand-in** for the protected valuation source: the operator sets each pool's rate by hand (zero gives no Capstone bonus) |
 | TestnetPyreLedger | **stand-in** for the Relics Pyre ledger: the operator records burns by hand |
+| **Flow** | built (ADR 0016): rebated swaps, zaps in and out, and `zapAndStake`, the fee-free stake of the LP a zap forms into pools 0 and 1. The pairs and the LP pools name its predicted address |
+| TestnetFeeRebate | **stand-in** for the Relics fee-rebate perk: the operator sets a wallet's percent with `setRebate`; Flow snaps it down to 25 or 50 |
 
 The stand-ins live in `contracts/script/testnet/` and never in `contracts/src`. The faucet tokens can be minted by anyone, up to 1,000,000 per call.
 
@@ -50,7 +52,8 @@ The stand-ins live in `contracts/script/testnet/` and never in `contracts/src`. 
 - is each pool's fee collector;
 - is the Deed market, the only caller of `list` and `settle`;
 - is ForgeEmissions' match reserve and Sealed-pot consumer;
-- is each pair's **initializer** (Kindling's slot: the first deposit, which sets the price), its **fee router** (the Vent's: it alone collects the booked protocol fees), **Flow** (the only caller of the rebated swaps) and its **guardian** (it can pause swaps, never redemptions).
+- is each pair's **initializer** (Kindling's slot: the first deposit, which sets the price), its **fee router** (the Vent's: it alone collects the booked protocol fees) and its **guardian** (it can pause swaps, never redemptions);
+- is Flow's **compounder**, the only caller of the Compound waiver (the Stoke-into-LP consumer is not built).
 
 On mainnet each of those is an immutable contract at a mined address. That is why this kit refuses any chain outside its testnet list (4441, and 31337 for local runs).
 
@@ -63,7 +66,7 @@ On mainnet each of those is an immutable contract at a mined address. That is wh
    cast wallet new                                    # note the address; keep the key offline
    cast wallet import furnace-liteforge --interactive # stores it encrypted in ~/.foundry/keystores
    ```
-2. **Fund it from the faucet.** The rehearsal estimated 73.7M gas over 39 transactions with the pairs and the smoke actions, about 0.0015 zkLTC at the 0.02 gwei it saw. Take a few times that for headroom.
+2. **Fund it from the faucet.** The rehearsal estimated 77.4M gas over 43 transactions with the pairs, Flow and the smoke actions, about 0.0015 zkLTC at the 0.02 gwei it saw. Take a few times that for headroom.
 3. **Dry run as your address.** Salts bind to the sender, so the addresses printed are the ones the broadcast will use:
    ```sh
    FURNACE_TESTNET_SMOKE=1 pnpm testnet:dry-run --sender <your address>
@@ -87,13 +90,14 @@ On mainnet each of those is an immutable contract at a mined address. That is wh
 - `FURNACE_TESTNET_START`: the Mantle's start; default now
 - `FURNACE_TESTNET_USDC`, `FURNACE_TESTNET_WETH`: existing testnet tokens instead of the stand-ins (the smoke actions mint them, so they must be mintable)
 - `FURNACE_TESTNET_PAIRS=later`: leave the EMBER pairs for `testnet:pairs:deploy`
-- `FURNACE_TESTNET_SMOKE=1`: first liquidity in both pairs (50,000 EMBER with 50,000 tUSDC; 20,000 EMBER with 10 tWETH), one position in each pool, a buy and a sell on BlastPool, a Capstone deposit and a cooling request
+- `FURNACE_TESTNET_SMOKE=1`: first liquidity in both pairs (50,000 EMBER with 50,000 tUSDC; 20,000 EMBER with 10 tWETH), one position in each pool, a buy and a sell on BlastPool, a 100 tUSDC zap staked fee-free through Flow into the pool-0 position, a Capstone deposit and a cooling request
 
 ## After deploying
 
 - **Settlement is permissionless and daily.** After each epoch ends: `Mantle.finalizeEpoch()`, then `ForgeEmissions.openEpoch()`, then `ForgeEmissions.advance(epoch, pool)` for each pool until its phase is `Done`. The kit's test runs exactly this, and every pool's position earns.
 - **To see Boost raise a bonus**, set a rate as the operator, for example `TestnetValuation.setRate(0, 5e26)` (0.5 EMBER per stake unit), then call `Boost.refresh(0, id)`.
 - **Test tokens**: `TestnetToken.mint(to, amount)` on tUSDC and tWETH.
+- **Through Flow.** `Flow.swap`, `zapIn`, `zapAndStake` (position 0 opens one; any other id adds to your own) and `zapOut`, each with a deadline and a minimum. To see a rebate, have the operator call `TestnetFeeRebate.setRebate(wallet, 50)`: that wallet's swaps then book half the protocol share.
 - **Trading and liquidity.** `EmberPair.buy`, `sell`, `addLiquidity` and `redeem`, with `quoteBuy` and `quoteSell` for previews. Fees are booked by lane; the operator, as fee router, pulls them with `collectProtocolFees()`. `consult(1800)` returns the 30-minute TWAP once the pair is 30 minutes old; anyone can `checkpoint()` to keep observations fresh.
 
 ## Verification of the kit
@@ -105,10 +109,11 @@ On mainnet each of those is an immutable contract at a mined address. That is wh
   - refusal off the testnet list and without the real CreateX;
   - the smoke actions, then a whole first epoch settled with every pool earning.
 - **The add-on**, offline: with the pairs left out, pools 0 and 1 refuse deposits and the first epoch settles with them empty; after the pairs deploy at the predicted addresses, pool 0 takes LP and earns. A stranger with the same salts lands on another address, and a second deployment is refused.
-- **`pnpm testnet:dry-run`**, on a fork of chain 4441, with the pairs and the smoke actions: every predicted address matched the one CreateX returned and the wiring checks passed. That was 39 transactions, the largest 10.2M gas.
+- **`pnpm testnet:dry-run`**, on a fork of chain 4441, with the pairs, Flow and the smoke actions (the zap-and-stake included): every predicted address matched the one CreateX returned and the wiring checks passed. That was 43 transactions, the largest 10.44M gas.
+- **If the dry run fails with "refused stream"**, the RPC is refusing forge's burst of requests; a single `eth_chainId` still answers. Retry a little later: the Flow rehearsal got through on its fourth attempt.
 
 ## Not shown by the testnet
 
 - Anything about mainnet economics. The stake tokens are faucet tokens, and the rates are set by hand.
-- The behaviour of unbuilt modules: Flow (routing, zaps, the Relic check behind a rebate), the Deed market, Kindling, Ignition, the fee router and the valuation source.
+- The behaviour of unbuilt modules: Relics (which decides a wallet's rebate tier), the compounder, the Deed market, Kindling, Ignition, the fee router and the valuation source.
 - Audit status. None of this is audited.

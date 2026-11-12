@@ -112,6 +112,9 @@ abstract contract ForgePoolBase is ReentrancyGuardTransient {
     address public immutable BOOST;
     /// @notice The Deed market: the only caller of `list` and `settle` (ADR 0011).
     address public immutable DEEDS;
+    /// @notice Flow: the only caller of the fee-free `openFor` / `depositFor`, for LP it formed
+    ///         in the same call (spec v5.5 §4; ADR 0016). Zero on a single-asset pool.
+    address public immutable FLOW;
 
     uint256 public positionCount;
     /// @notice Principal that earns now. Lapsed slices not yet processed are still
@@ -176,23 +179,27 @@ abstract contract ForgePoolBase is ReentrancyGuardTransient {
     error BonusAboveCeiling(uint256 units);
     error RecordLimit(uint256 id, uint256 slot);
     error NotDeeds();
+    error NotFlow();
+    error FlowNeedsLp();
     error Listed(uint256 id);
     error NotListed(uint256 id);
     error NoTap(uint256 id);
     error TapTooSoon(uint256 readyAt);
     error TapQuotaExceeded(uint256 amount, uint256 quota);
 
-    constructor(IERC20 stakeToken, bool isLp, address feeCollector, address boost, address deeds) {
+    constructor(IERC20 stakeToken, bool isLp, address feeCollector, address boost, address deeds, address flow) {
         if (
             address(stakeToken) == address(0) || feeCollector == address(0) || boost == address(0)
                 || deeds == address(0)
         ) revert ZeroAddress();
+        if (flow != address(0) && !isLp) revert FlowNeedsLp(); // the exemption is for LP formation
         if (P.MAX_LOTS_PER_POSITION != MAX_LOTS || P.WITHDRAW_TIER_COUNT != 5) revert ConfigMismatch();
         STAKE_TOKEN = stakeToken;
         IS_LP = isLp;
         FEE_COLLECTOR = feeCollector;
         BOOST = boost;
         DEEDS = deeds;
+        FLOW = flow;
     }
 
     // ── internals ─────────────────────────────────────────────────────────
@@ -204,8 +211,13 @@ abstract contract ForgePoolBase is ReentrancyGuardTransient {
         return amount;
     }
 
-    function _addLot(uint256 id, Position storage p, uint256 amount, uint40 now_) internal returns (uint256 net) {
-        uint256 fee = (amount * P.FORGE_DEPOSIT_FEE_PCT) / 100;
+    /// @dev `feeFree` only for Flow's same-route LP (ADR 0016): no fee is charged or booked, so no
+    ///      burn credit can arise from it.
+    function _addLot(uint256 id, Position storage p, uint256 amount, uint40 now_, bool feeFree)
+        internal
+        returns (uint256 net)
+    {
+        uint256 fee = feeFree ? 0 : (amount * P.FORGE_DEPOSIT_FEE_PCT) / 100;
         net = amount - fee;
         if (IS_LP ? net < P.MIN_STAKE_LP : net == 0) revert BelowMinimum(net);
         if (_popcount(p.usedMask) + p.reservedSlots >= MAX_LOTS) revert LotCapacity(id);
@@ -227,8 +239,12 @@ abstract contract ForgePoolBase is ReentrancyGuardTransient {
 
     /// @dev The owner's mutations; a listing locks them (ADR 0011).
     function _touchOwned(uint256 id) internal returns (Position storage p) {
+        return _touchOwnedBy(id, msg.sender);
+    }
+
+    function _touchOwnedBy(uint256 id, address owner) internal returns (Position storage p) {
         p = _touch(id);
-        if (p.owner != msg.sender) revert NotOwner(id);
+        if (p.owner != owner) revert NotOwner(id);
         if (p.listing & 1 != 0) revert Listed(id);
     }
 

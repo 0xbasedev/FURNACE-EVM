@@ -18,8 +18,8 @@ import {ForgePoolBase} from "./ForgePoolBase.sol";
 contract ForgePoolAnnex is ForgePoolBase {
     using SafeERC20 for IERC20;
 
-    constructor(IERC20 stakeToken, bool isLp, address feeCollector, address boost, address deeds)
-        ForgePoolBase(stakeToken, isLp, feeCollector, boost, deeds)
+    constructor(IERC20 stakeToken, bool isLp, address feeCollector, address boost, address deeds, address flow)
+        ForgePoolBase(stakeToken, isLp, feeCollector, boost, deeds, flow)
     {}
 
     /// @notice Seal the position's current lots for `track`'s term (ADR 0006). Later

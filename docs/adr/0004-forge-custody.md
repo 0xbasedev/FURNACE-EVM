@@ -152,10 +152,20 @@ Every call is its own transaction, so storage starts cold, as it does for a real
   - participation doesn't saturate.
 - **CI gate fix:** the `@foundry-rs/forge` 1.7.1 npm wrapper never propagates forge's exit status, so failing tests exited 0. `tools/forge.mjs` runs the same platform binary and forwards its status. `pnpm forge:gate` proves it on every check with a deliberately failing test (`contracts/test/meta/ExitCode.t.sol`).
 
+## Flow's fee-free stake (added with ADR 0016)
+
+- **The argument.** ForgePool takes a sixth constructor argument, an immutable `FLOW`. Only an LP pool may set it (`FlowNeedsLp`), and the annex takes the same one, so their immutables stay equal.
+- **The calls.** `openFor(owner, amount)` and `depositFor(id, owner, amount)` accept only `FLOW` as caller and pull from it.
+  - They add the lot with no deposit fee and book none, so no burn credit can arise (spec v5.5 §4).
+  - Everything else is `open` and `deposit` exactly: `MIN_STAKE_LP`, the 32-lot capacity, a closed position, the listing lock, and the bonus dilution.
+  - `depositFor` requires `owner` to own the position.
+- **Flow calls them only with LP it formed in the same call** (`zapAndStake`).
+- **Unchanged.** `open` and `deposit` themselves still charge 1%. Storage is unchanged too (`pnpm check:layout`).
+
 ## Consequences and limits
 
-- **Not yet implemented:**
-  - the authenticated Flow LP deposit-fee exemption;
+- **Not yet implemented** (as of this ADR; most of these have since landed in later ADRs):
+  - the authenticated Flow LP deposit-fee exemption (since built; see above and ADR 0016);
   - Taps (youngest-first, no haircut, quota);
   - Deeds (transfer with an 80% age carry and a Streak reset);
   - Capstone and Pyre ordinary bonuses (`integrateHeat` already takes the bonus);

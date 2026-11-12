@@ -3,6 +3,7 @@ pragma solidity 0.8.28;
 
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IValuation, IPyreLedger} from "../../src/forge/Boost.sol";
+import {IFeeRebate} from "../../src/flow/Flow.sol";
 
 // TESTNET ONLY. These contracts stand in for modules that are not built, or not deployed on the
 // target testnet, so the built core (EMBER, the Mantle, ForgePool, ForgeEmissions, Boost) can be
@@ -84,5 +85,27 @@ contract TestnetPyreLedger is IPyreLedger {
 
     function pyreBurned(address wallet) external view returns (uint256) {
         return burnedOf[wallet];
+    }
+}
+
+/// @notice Stands in for the Relics contract's fee-rebate perk, which is not built. The operator
+///         sets a wallet's rebate percent by hand; Flow snaps it down to a configured tier
+///         (25 or 50) and treats anything below the first tier as none (ADR 0016).
+contract TestnetFeeRebate is IFeeRebate {
+    address public immutable OPERATOR;
+    mapping(address wallet => uint256) public rebatePctOf;
+
+    event RebateSet(address indexed wallet, uint256 pct);
+
+    error NotOperator();
+
+    constructor(address operator) {
+        OPERATOR = operator;
+    }
+
+    function setRebate(address wallet, uint256 pct) external {
+        if (msg.sender != OPERATOR) revert NotOperator();
+        rebatePctOf[wallet] = pct;
+        emit RebateSet(wallet, pct);
     }
 }

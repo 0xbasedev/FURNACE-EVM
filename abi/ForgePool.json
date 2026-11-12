@@ -26,6 +26,11 @@
         "name": "deeds",
         "type": "address",
         "internalType": "address"
+      },
+      {
+        "name": "flow",
+        "type": "address",
+        "internalType": "address"
       }
     ],
     "stateMutability": "nonpayable"
@@ -85,6 +90,19 @@
   {
     "type": "function",
     "name": "FEE_COLLECTOR",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "FLOW",
     "inputs": [],
     "outputs": [
       {
@@ -196,6 +214,29 @@
         "name": "id",
         "type": "uint256",
         "internalType": "uint256"
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "depositFor",
+    "inputs": [
+      {
+        "name": "id",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "owner",
+        "type": "address",
+        "internalType": "address"
       },
       {
         "name": "amount",
@@ -497,6 +538,30 @@
     "type": "function",
     "name": "open",
     "inputs": [
+      {
+        "name": "amount",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "id",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "openFor",
+    "inputs": [
+      {
+        "name": "owner",
+        "type": "address",
+        "internalType": "address"
+      },
       {
         "name": "amount",
         "type": "uint256",
@@ -1132,6 +1197,11 @@
   },
   {
     "type": "error",
+    "name": "FlowNeedsLp",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "FutureTime",
     "inputs": [
       {
@@ -1203,6 +1273,11 @@
   {
     "type": "error",
     "name": "NotDeeds",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NotFlow",
     "inputs": []
   },
   {

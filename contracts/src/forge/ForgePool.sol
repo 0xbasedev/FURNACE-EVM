@@ -59,37 +59,60 @@ contract ForgePool is ForgePoolBase {
     /// @notice This pool's annex: its cold paths, run in this pool's storage (ADR 0012).
     address public immutable ANNEX;
 
-    constructor(IERC20 stakeToken, bool isLp, address feeCollector, address boost, address deeds)
-        ForgePoolBase(stakeToken, isLp, feeCollector, boost, deeds)
+    constructor(IERC20 stakeToken, bool isLp, address feeCollector, address boost, address deeds, address flow)
+        ForgePoolBase(stakeToken, isLp, feeCollector, boost, deeds, flow)
     {
-        ANNEX = address(new ForgePoolAnnex(stakeToken, isLp, feeCollector, boost, deeds));
+        ANNEX = address(new ForgePoolAnnex(stakeToken, isLp, feeCollector, boost, deeds, flow));
     }
 
     // ── principal paths ───────────────────────────────────────────────────
 
     /// @notice Open a position with its first lot. 1% deposit fee, booked here.
     function open(uint256 amount) external nonReentrant returns (uint256 id) {
-        uint40 now_ = uint40(block.timestamp);
-        _poolSync(now_);
-        id = ++positionCount;
-        Position storage p = _positions[id];
-        p.owner = msg.sender;
-        p.lastCheckpoint = now_;
-        p.streakStart = now_;
-        p.openedAt = now_;
-        emit Opened(id, msg.sender);
-        _addLot(id, p, _pull(amount), now_);
+        return _open(msg.sender, amount, false);
     }
 
     /// @notice Add a new lot (age 0) to an open position. [P] A bonus is diluted by
     ///         custody before/after: exact for Capstone's linear part, below the true value
     ///         otherwise, until BOOST refreshes it (ADR 0008).
     function deposit(uint256 id, uint256 amount) external nonReentrant {
-        Position storage p = _touchOwned(id);
+        _deposit(id, msg.sender, amount, false);
+    }
+
+    /// @notice FLOW only: open a position for `owner` with LP Flow formed in this call, pulled
+    ///         from Flow, with no deposit fee (spec v5.5 §4; ADR 0016).
+    function openFor(address owner, uint256 amount) external nonReentrant returns (uint256 id) {
+        if (msg.sender != FLOW || FLOW == address(0)) revert NotFlow();
+        if (owner == address(0)) revert ZeroAddress();
+        return _open(owner, amount, true);
+    }
+
+    /// @notice FLOW only: add a fee-free lot of same-route LP to `owner`'s own position; the
+    ///         listing lock, a closed position and the bonus dilution apply as to `deposit`.
+    function depositFor(uint256 id, address owner, uint256 amount) external nonReentrant {
+        if (msg.sender != FLOW || FLOW == address(0)) revert NotFlow();
+        _deposit(id, owner, amount, true);
+    }
+
+    function _open(address owner, uint256 amount, bool feeFree) internal returns (uint256 id) {
+        uint40 now_ = uint40(block.timestamp);
+        _poolSync(now_);
+        id = ++positionCount;
+        Position storage p = _positions[id];
+        p.owner = owner;
+        p.lastCheckpoint = now_;
+        p.streakStart = now_;
+        p.openedAt = now_;
+        emit Opened(id, owner);
+        _addLot(id, p, _pull(amount), now_, feeFree);
+    }
+
+    function _deposit(uint256 id, address owner, uint256 amount, bool feeFree) internal {
+        Position storage p = _touchOwnedBy(id, owner);
         if (p.closedAt != 0) revert Closed(id);
         uint256 units = p.ordinaryBonus;
         uint256 custody = units == 0 ? 0 : _activeOf(id, p) + _frozenOf(id, p);
-        uint256 net = _addLot(id, p, _pull(amount), uint40(block.timestamp));
+        uint256 net = _addLot(id, p, _pull(amount), uint40(block.timestamp), feeFree);
         if (units != 0) _setBonus(id, p, units * custody / (custody + net), type(uint256).max);
     }
 

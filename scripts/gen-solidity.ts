@@ -7,6 +7,7 @@
 //   contracts/test/fixtures/forge-vectors.json   ForgePool scenarios (scripts/forge-scenarios.ts)
 //   contracts/test/fixtures/settlement-vectors.json  settlement scenarios (scripts/settlement-scenarios.ts)
 //   contracts/test/fixtures/pair-vectors.json    EmberPair scenarios (scripts/pair-model.ts)
+//   contracts/test/fixtures/flow-vectors.json    Flow zap scenarios (scripts/flow-model.ts)
 // Integer references (accounting.ts, BigInt) are matched EXACTLY by the Solidity
 // ports; the float display helper heatMultiplier within 1e-12.
 // pnpm gen --check exits non-zero if either output is stale (CI gate).
@@ -23,6 +24,7 @@ import { forgeVectors } from './forge-scenarios';
 import { settlementVectors } from './settlement-scenarios';
 import { capstoneUnits, pyreUnits, checkAgainstCanonical, PYRE_TIERS, RATIO_FOR_MAX } from './boost-model';
 import { pairVectors, LP_PPM, BUY, SELL, D as PPM_ONE } from './pair-model';
+import { flowVectors } from './flow-model';
 import { keccak_256 } from '@noble/hashes/sha3.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
 
@@ -32,6 +34,7 @@ const VECTORS = 'contracts/test/fixtures/oracle-vectors.json';
 const FORGE_VECTORS = 'contracts/test/fixtures/forge-vectors.json';
 const SETTLEMENT_VECTORS = 'contracts/test/fixtures/settlement-vectors.json';
 const PAIR_VECTORS = 'contracts/test/fixtures/pair-vectors.json';
+const FLOW_VECTORS = 'contracts/test/fixtures/flow-vectors.json';
 const DAY = 86_400n;
 
 /** Exact decimal → fixed-point integer string (shortest round-trip, never toFixed noise). */
@@ -349,6 +352,19 @@ c('uint256', 'PAIR_SELL_TOTAL_PPM', sellTotal, `${swapCfg.sell.totalBps} bps`);
 c('uint256', 'PAIR_TWAP_SECONDS', twap, 'the Vent window; the pair observes every sixth of it');
 c('address', 'BURN_ADDRESS', checksum(cfg.fees.burnAddress.evm), 'holds each pair\'s minimum liquidity');
 
+section('Flow: Relic rebates of the protocol swap share, waivers (spec v5.5 §4, §14; ADR 0016)');
+// Flow passes the pairs a protocol-share scale of 10^6 − tier·10^4 for the caller's Relic tier,
+// 0 for the compounder's Compound, and stakes zap-formed LP without the deposit fee.
+if (cfg.forge.fees.waiveDepositFeeFromFlow !== true) throw new Error('ForgePool implements forge.fees.waiveDepositFeeFromFlow = true');
+if (cfg.fees.swap.waiveProtocolShareOnCompound !== true) throw new Error('Flow implements fees.swap.waiveProtocolShareOnCompound = true');
+const rebateTiers = f.relics.filter((r) => (r.perks.feeRebatePct ?? 0) > 0).map((r) => ({ key: r.key, pct: r.perks.feeRebatePct! }));
+if (rebateTiers.length !== 2) throw new Error('Flow._rebateShare unrolls exactly 2 rebate tiers');
+rebateTiers.forEach((t, i) => {
+  if (!(Number.isInteger(t.pct) && t.pct > 0 && t.pct <= 100)) throw new Error(`${t.key}: rebate must be a whole percent in (0, 100]`);
+  if (i > 0 && !(t.pct > rebateTiers[i - 1].pct)) throw new Error('rebate tiers must ascend');
+  c('uint256', `FLOW_REBATE_TIER_${i}_PCT`, t.pct, `${t.key}: % of the protocol swap share`);
+});
+
 section(`Deterministic deployment registry (CREATE3). PROVISIONAL while the deployer is ${cfg.deployment.evm.deployer}`);
 lines.push('    //    Only MINED entries become constants; unmined modules are constructor/initializer inputs.');
 c('address', 'CREATEX', CREATEX_FACTORY);
@@ -491,7 +507,7 @@ vectors.squaredPrimitive.ray = vectors.squaredPrimitive.ageSeconds.map((a, i) =>
 const vectorsJson = JSON.stringify(vectors, null, 2) + '\n';
 
 // ── write or check ───────────────────────────────────────────────────────
-const outputs: [string, string][] = [[PARAMS, params], [SCHEDULE, scheduleSol], [VECTORS, vectorsJson], [FORGE_VECTORS, JSON.stringify(forgeVectors(), null, 1) + '\n'], [SETTLEMENT_VECTORS, JSON.stringify(settlementVectors(), null, 1) + '\n'], [PAIR_VECTORS, JSON.stringify(pairVectors(), null, 1) + '\n']];
+const outputs: [string, string][] = [[PARAMS, params], [SCHEDULE, scheduleSol], [VECTORS, vectorsJson], [FORGE_VECTORS, JSON.stringify(forgeVectors(), null, 1) + '\n'], [SETTLEMENT_VECTORS, JSON.stringify(settlementVectors(), null, 1) + '\n'], [PAIR_VECTORS, JSON.stringify(pairVectors(), null, 1) + '\n'], [FLOW_VECTORS, JSON.stringify(flowVectors(), null, 1) + '\n']];
 if (process.argv.includes('--check')) {
   let stale = 0;
   for (const [p, body] of outputs) {
