@@ -19,7 +19,7 @@ Status: **not ready.** Nothing is deployed and nothing is audited. LitVM mainnet
 1. **The chain.**
    - LitVM must publish the mainnet chain id, RPC and explorer.
    - Record them with their sources, then verify them with the gate's live run.
-   - Re-check the Orbit facts that matter here: timestamps, the per-block gas limit (the largest deployment transaction is 10.2M), and the gas token.
+   - Re-check the Orbit facts that matter here: timestamps, the per-block gas limit (the largest deployment transaction is 10.44M), and the gas token.
 2. **The canonical decision.** The canonical config's chains are Ethereum, BSC, Base, Arbitrum and Solana, and v5.5's launch gate is Ethereum-only.
    - Adding LitVM is the project owner's decision. It changes the config hash, and every generated constant follows.
    - Its quote asset needs the same decision. That is SmelterPool's pair asset: bridged WETH or wrapped zkLTC.
@@ -45,7 +45,7 @@ Status: **not ready.** Nothing is deployed and nothing is audited. LitVM mainnet
 
 - **The testnet kit:**
   - the built core and the EMBER pairs, wired and tested offline against CreateX's real runtime;
-  - rehearsed on a fork of LiteForge (39 transactions, the largest 10.2M gas);
+  - rehearsed on a fork of LiteForge (43 transactions, the largest 10.44M gas);
   - the pairs deployable later, as an add-on.
   See [`docs/testnet/litvm-liteforge.md`](../testnet/litvm-liteforge.md).
 - **The mainnet watch.** It reports the chain's facts once LitVM publishes them; that is blocker 1's input.
