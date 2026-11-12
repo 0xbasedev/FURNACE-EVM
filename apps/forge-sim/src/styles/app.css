@@ -1,34 +1,37 @@
 /* Layout: a smith's bench. A rail holds the position and its assumptions; the working
    surface carries the fire (Heat), the quench (exits), the stamps (Seals) and the day
-   book (settlement). Chrome uses tempered-steel blue; the blacksmith's heat colours
-   are reserved for Heat itself. Dark-first, with a full light mirror. */
+   book (settlement). Theme: creamsicle, vanilla cream with soft orange chrome, and a dusk
+   variant for dark mode. The Heat ramp stays ember red to gold, so Heat still reads as fire
+   against the orange chrome. Every text colour holds 4.5:1 on every surface, and the accent
+   3:1 as a border or focus ring (checked, light and dark). */
 :root {
-  color-scheme: dark;
-  --bg: #121110;
-  --surface: #1b1917;
-  --surface-2: #23201d;
-  --line: #2e2a26;
-  --ink: #efe8de;
-  --ink-2: #b9b0a4;
-  --ink-3: #8f867b;
-  --accent: #5b95ea;
-  --accent-strong: #7aaaf0;
-  --on-accent: #0c1424;
-  --danger: #e2583e;
-  --danger-wash: rgba(226, 88, 62, 0.12);
-  --warn: #d9a33a;
-  --good: #58b585;
-  --s1: #b88a24; /* claimable */
-  --s2: #4a8be8; /* locked Seal escrow */
-  --s3: #c96f42; /* Capstone */
-  --s4: #9479d9; /* forfeited */
-  --heat-0: #4a1208;
+  color-scheme: light;
+  --bg: #fff5ea;
+  --surface: #fffbf6;
+  --surface-2: #ffeedd;
+  --line: #f1d8bf;
+  --ink: #2a1a10;
+  --ink-2: #5a4031;
+  --ink-3: #7d5f4c;
+  --accent: #e2650f;
+  --accent-strong: #cf5a0c;
+  --on-accent: #1f0d03;
+  --danger: #b53324;
+  --on-danger: #ffffff;
+  --danger-wash: rgba(181, 51, 36, 0.08);
+  --warn: #8a5a00;
+  --good: #2e7a4c;
+  --s1: #a87610; /* claimable */
+  --s2: #2f6fc4; /* locked Seal escrow */
+  --s3: #c85a24; /* Capstone */
+  --s4: #7a4fc2; /* forfeited */
+  --heat-0: #5a1a10;
   --heat-1: #8b1e12;
-  --heat-2: #c42a16;
-  --heat-3: #e8641a;
-  --heat-4: #f5b52a;
-  --heat-5: #fff1c8;
-  --glow: rgba(232, 100, 26, 0.18);
+  --heat-2: #b8321a;
+  --heat-3: #d4590f;
+  --heat-4: #c98a00;
+  --heat-5: #a87300;
+  --glow: rgba(226, 101, 15, 0.12);
   --display: 'Big Shoulders Display', 'Arial Narrow', 'Roboto Condensed', sans-serif;
   --body: 'Public Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
@@ -40,63 +43,65 @@
   --step-3: 2.25rem;
   --step-4: 3.5rem;
 }
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme='dark']) {
-    color-scheme: light;
-    --bg: #f2efe9;
-    --surface: #fbfaf7;
-    --surface-2: #eeeae3;
-    --line: #dad4ca;
-    --ink: #1d1b18;
-    --ink-2: #4b4640;
-    --ink-3: #6f685f;
-    --accent: #2b6cc9;
-    --accent-strong: #1f58aa;
-    --on-accent: #ffffff;
-    --danger: #b9382a;
-    --danger-wash: rgba(185, 56, 42, 0.08);
-    --warn: #8a5c00;
-    --good: #2e7d4f;
-    --s1: #b07d12;
-    --s2: #2b6cc9;
-    --s3: #a2522b;
-    --s4: #7b4fc4;
-    --heat-0: #5a1a10;
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+    --bg: #19110b;
+    --surface: #21170f;
+    --surface-2: #2a1e14;
+    --line: #3b2b1e;
+    --ink: #fff0e1;
+    --ink-2: #e3c8b1;
+    --ink-3: #bb9a80;
+    --accent: #ff9a52;
+    --accent-strong: #ffb27a;
+    --on-accent: #2a1206;
+    --danger: #f06a4e;
+    --on-danger: #2a1206;
+    --danger-wash: rgba(240, 106, 78, 0.12);
+    --warn: #e3ad48;
+    --good: #62c08f;
+    --s1: #d4a23a;
+    --s2: #6aa0ef;
+    --s3: #f08a52;
+    --s4: #a78ae6;
+    --heat-0: #4a1208;
     --heat-1: #8b1e12;
-    --heat-2: #b8321a;
-    --heat-3: #d4590f;
-    --heat-4: #c98a00;
-    --heat-5: #a87300;
-    --glow: rgba(212, 89, 15, 0.1);
-  }
+    --heat-2: #c42a16;
+    --heat-3: #e8641a;
+    --heat-4: #f5b52a;
+    --heat-5: #fff1c8;
+    --glow: rgba(255, 154, 82, 0.18);
 }
-:root[data-theme='light'] {
-  color-scheme: light;
-  --bg: #f2efe9;
-  --surface: #fbfaf7;
-  --surface-2: #eeeae3;
-  --line: #dad4ca;
-  --ink: #1d1b18;
-  --ink-2: #4b4640;
-  --ink-3: #6f685f;
-  --accent: #2b6cc9;
-  --accent-strong: #1f58aa;
-  --on-accent: #ffffff;
-  --danger: #b9382a;
-  --danger-wash: rgba(185, 56, 42, 0.08);
-  --warn: #8a5c00;
-  --good: #2e7d4f;
-  --s1: #b07d12;
-  --s2: #2b6cc9;
-  --s3: #a2522b;
-  --s4: #7b4fc4;
-  --heat-0: #5a1a10;
+}
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #19110b;
+  --surface: #21170f;
+  --surface-2: #2a1e14;
+  --line: #3b2b1e;
+  --ink: #fff0e1;
+  --ink-2: #e3c8b1;
+  --ink-3: #bb9a80;
+  --accent: #ff9a52;
+  --accent-strong: #ffb27a;
+  --on-accent: #2a1206;
+  --danger: #f06a4e;
+  --on-danger: #2a1206;
+  --danger-wash: rgba(240, 106, 78, 0.12);
+  --warn: #e3ad48;
+  --good: #62c08f;
+  --s1: #d4a23a;
+  --s2: #6aa0ef;
+  --s3: #f08a52;
+  --s4: #a78ae6;
+  --heat-0: #4a1208;
   --heat-1: #8b1e12;
-  --heat-2: #b8321a;
-  --heat-3: #d4590f;
-  --heat-4: #c98a00;
-  --heat-5: #a87300;
-  --glow: rgba(212, 89, 15, 0.1);
+  --heat-2: #c42a16;
+  --heat-3: #e8641a;
+  --heat-4: #f5b52a;
+  --heat-5: #fff1c8;
+  --glow: rgba(255, 154, 82, 0.18);
 }
 
 *,
@@ -262,7 +267,7 @@ input[type='range'] { width: 100%; accent-color: var(--accent); }
 .nudge b { color: var(--ink); }
 .nudge .ico { flex: none; width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; font: 700 11px var(--mono); background: var(--accent); color: var(--on-accent); }
 .nudge.warn .ico { background: var(--warn); color: var(--bg); }
-.nudge.bad .ico { background: var(--danger); color: #fff; }
+.nudge.bad .ico { background: var(--danger); color: var(--on-danger); }
 
 /* ── exit planner ──────────────────────────────────────────────────── */
 .ladder { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px; }
@@ -294,7 +299,7 @@ input[type='range'] { width: 100%; accent-color: var(--accent); }
 }
 .hold .fill { position: absolute; inset: 0; background: var(--danger); transform-origin: left center; transform: scaleX(0); }
 .hold .lbl { position: relative; mix-blend-mode: normal; }
-.hold.armed .lbl { color: #fff; }
+.hold.armed .lbl { color: var(--on-danger); }
 
 /* ── seals ─────────────────────────────────────────────────────────── */
 .tracks { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
