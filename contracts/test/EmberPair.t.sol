@@ -8,6 +8,18 @@ import {FurnaceParams as P} from "../src/generated/FurnaceParams.sol";
 import {EmberPair} from "../src/pairs/EmberPair.sol";
 import {MockERC20, MockDecimalsERC20, FeeOnTransferERC20} from "./utils/MockERC20.sol";
 
+/// @dev Books arbitrary per-lane amounts. The config gives burn and liquidity the same rate on
+///      both sides, so only distinct amounts show that each ledger keeps its own lane.
+contract EmberPairHarness is EmberPair {
+    constructor(IERC20 ember, IERC20 quote, address router)
+        EmberPair("H", "H", ember, quote, router, address(0), address(0), router)
+    {}
+
+    function book(uint256 burn, uint256 liquidity, uint256 quoteYield) external {
+        _book(FeeParts(0, burn, liquidity, quoteYield, burn + liquidity + quoteYield));
+    }
+}
+
 /// @notice EmberPair (ADR 0015): fees, access, liquidity, pausing, the oracle, and an exact replay
 ///         of the BigInt model's scenarios (scripts/pair-model.ts).
 contract EmberPairTest is Test {
@@ -293,6 +305,16 @@ contract EmberPairTest is Test {
         assertEq(burn + liq + qy, 0);
         vm.prank(router);
         pair.collectProtocolFees(); // nothing left: no transfer, no revert
+    }
+
+    function test_eachLedgerKeepsItsLane() public {
+        EmberPairHarness h = new EmberPairHarness(IERC20(address(ember)), IERC20(address(usdc)), router);
+        h.book(1, 2, 3);
+        h.book(10, 20, 30);
+        (uint256 burn, uint256 liq, uint256 qy) = h.protocolFees();
+        assertEq(burn, 11, "burn");
+        assertEq(liq, 22, "liquidity");
+        assertEq(qy, 33, "Quote yield");
     }
 
     // ── pausing ───────────────────────────────────────────────────────────

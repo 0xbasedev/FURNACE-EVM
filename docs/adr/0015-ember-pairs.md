@@ -28,7 +28,7 @@ Status: accepted for this repository. Not audited, not deployed.
 - **There is no factory, admin, upgrade, delegatecall, flash swap or callback.**
 
 **2. Swaps are exact-in and pull-based.**
-- `buy(quoteIn, minEmberOut, to)` and `sell(emberIn, minQuoteOut, to)` pull the input from the caller with `transferFrom`. They then check that the pair received exactly that amount, so a fee-on-transfer or rebasing token reverts `NonStandardToken`.
+- `buy(quoteIn, minEmberOut, to)` and `sell(emberIn, minQuoteOut, to)` pull the input from the caller with `transferFrom`. They then check that the pair received exactly that amount, so a fee-on-transfer token reverts `NonStandardToken`. A rebasing token cannot be detected this way and is not supported; USDC and WETH are neither.
 - There are no callbacks and no optimistic transfers, so no flash swap. The guard is OpenZeppelin's transient-storage reentrancy guard, as in ForgePool.
 - Exact-out, deadlines and multi-hop routing belong to Flow.
 
