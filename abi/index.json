@@ -1,0 +1,38 @@
+{
+  "EmberToken": {
+    "file": "EmberToken.json",
+    "testnetOnly": false
+  },
+  "Mantle": {
+    "file": "Mantle.json",
+    "testnetOnly": false
+  },
+  "ForgePool": {
+    "file": "ForgePool.json",
+    "testnetOnly": false
+  },
+  "ForgeEmissions": {
+    "file": "ForgeEmissions.json",
+    "testnetOnly": false
+  },
+  "Boost": {
+    "file": "Boost.json",
+    "testnetOnly": false
+  },
+  "ForgeLens": {
+    "file": "ForgeLens.json",
+    "testnetOnly": false
+  },
+  "TestnetToken": {
+    "file": "TestnetToken.json",
+    "testnetOnly": true
+  },
+  "TestnetValuation": {
+    "file": "TestnetValuation.json",
+    "testnetOnly": true
+  },
+  "TestnetPyreLedger": {
+    "file": "TestnetPyreLedger.json",
+    "testnetOnly": true
+  }
+}

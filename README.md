@@ -28,6 +28,7 @@ EVM workspace for **FURNACE Protocol**, a loyalty-staking protocol built on EMBE
 | `apps/forge-sim/` | **Forge simulator** (Vite, React, GSAP): Heat, exit tiers and age haircuts, Seal projections and a day-by-day settlement run, computed by importing the exact models above (see *Simulator*). |
 | `tools/solc`, `tools/forge.mjs` | The solc-js shim, and a forge launcher that propagates forge's exit status (see *Toolchain*). |
 | `contracts/script/` | **Testnet deployment kit**: `DeployTestnet.s.sol` deploys and wires the built core through CreateX's CREATE3, with deployer- and chain-bound salts, on testnets only. Stand-ins for unbuilt modules are in `testnet/`. Rehearsed on a fork of LitVM's LiteForge testnet (chain 4441); see [`docs/testnet/litvm-liteforge.md`](docs/testnet/litvm-liteforge.md). Not a canonical deployment. |
+| `abi/` | The ABIs a frontend or indexer needs, exported from the build by `pnpm abi`; `index.json` marks the testnet-only stand-ins. ForgePool's ABI includes the functions its annex runs. |
 | `docs/` | ADRs, revision log, testnet guides (`docs/testnet/`), and the original v5.3.1 sources (`docs/sources/`, historical). |
 
 ## Commands
@@ -43,6 +44,7 @@ pnpm gas            # gas report: every call its own transaction (forge test --i
 pnpm check:layout   # ForgePool and its annex share one storage layout, at the slots ForgeView decodes
 pnpm config:hash
 pnpm sim:dev        # the Forge simulator on localhost (sim:test, sim:build for its checks and static build)
+pnpm abi            # export the ABIs a frontend needs to abi/ (abi:check fails on stale files; part of pnpm check)
 pnpm testnet:dry-run --sender <address>   # rehearse the testnet deployment on a fork of LiteForge (chain 4441)
 pnpm testnet:deploy --account <keystore> --sender <address>   # broadcast it (testnet keys only)
 ```
