@@ -30,14 +30,15 @@ EVM workspace for **FURNACE Protocol**, a loyalty-staking protocol built on EMBE
 | `tools/solc`, `tools/forge.mjs` | The solc-js shim, and a forge launcher that propagates forge's exit status (see *Toolchain*). |
 | `contracts/script/` | **Testnet deployment kit**: `DeployTestnet.s.sol` deploys and wires the built core and the EMBER pairs through CreateX's CREATE3, with deployer- and chain-bound salts, on testnets only; `DeployTestnetPairs` deploys the pairs later instead, at the addresses pools 0 and 1 already stake. Stand-ins for unbuilt modules are in `testnet/`. Rehearsed on a fork of LitVM's LiteForge testnet (chain 4441); see [`docs/testnet/litvm-liteforge.md`](docs/testnet/litvm-liteforge.md). Not a canonical deployment. |
 | `abi/` | The ABIs a frontend or indexer needs, exported from the build by `pnpm abi`; `index.json` marks the testnet-only stand-ins. ForgePool's ABI includes the functions its annex runs. |
-| `docs/` | ADRs, revision log, testnet guides (`docs/testnet/`), and the original v5.3.1 sources (`docs/sources/`, historical). |
+| `deployments/` | Testnet manifests, and `litvm-mainnet.gate.json`, the record the LitVM mainnet gate reads (`scripts/mainnet-gate.ts`; all of it unset today). There is no mainnet broadcast script; see [`docs/mainnet/litvm-readiness.md`](docs/mainnet/litvm-readiness.md). |
+| `docs/` | ADRs, revision log, testnet guides (`docs/testnet/`), the LitVM mainnet readiness page (`docs/mainnet/`), and the original v5.3.1 sources (`docs/sources/`, historical). |
 
 ## Commands
 
 ```sh
 git submodule update --init   # lib/forge-std
 pnpm install
-pnpm check          # typecheck, canonical checksums, config hash, CREATE3, gen freshness, simulator tests + build, forge exit gate, contract size gate, pool and annex storage layouts, forge tests
+pnpm check          # typecheck, canonical checksums, config hash, CREATE3, gen freshness, simulator tests + build, forge exit gate, contract size gate, pool and annex storage layouts, forge tests, ABI freshness, the mainnet gate still blocked
 pnpm canonical:test # the canonical package's own tests + economics gate (pinned TypeScript 5.8.3)
 pnpm check:all      # both (CI runs both)
 pnpm gen            # regenerate FurnaceParams.sol, ScheduleTable.sol, oracle vectors, Forge, settlement and pair scenarios
@@ -49,6 +50,7 @@ pnpm abi            # export the ABIs a frontend needs to abi/ (abi:check fails 
 pnpm testnet:dry-run --sender <address>   # rehearse the testnet deployment on a fork of LiteForge (chain 4441)
 pnpm testnet:deploy --account <keystore> --sender <address>   # broadcast it (testnet keys only)
 pnpm testnet:pairs:deploy --account <keystore> --sender <address>   # only after FURNACE_TESTNET_PAIRS=later: the EMBER pairs
+pnpm mainnet:gate   # the LitVM mainnet readiness gate: every blocker, in order (exits 1 while blocked; mainnet:gate:check runs in pnpm check)
 ```
 
 ## Simulator
