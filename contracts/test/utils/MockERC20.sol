@@ -25,3 +25,16 @@ contract FeeOnTransferERC20 is MockERC20 {
         super._update(from, to, value);
     }
 }
+
+/// @dev Test-only token with open minting and chosen decimals (a 6-decimal USDC stand-in).
+contract MockDecimalsERC20 is MockERC20 {
+    uint8 private immutable DECIMALS;
+
+    constructor(string memory name_, string memory symbol_, uint8 decimals_) MockERC20(name_, symbol_) {
+        DECIMALS = decimals_;
+    }
+
+    function decimals() public view override returns (uint8) {
+        return DECIMALS;
+    }
+}

@@ -26,8 +26,10 @@
     "check:layout": "node scripts/check-layout.mjs",
     "abi": "node scripts/export-abi.mjs",
     "abi:check": "node scripts/export-abi.mjs --check",
-    "testnet:dry-run": "node tools/forge.mjs script contracts/script/DeployTestnet.s.sol --rpc-url liteforge",
-    "testnet:deploy": "node tools/forge.mjs script contracts/script/DeployTestnet.s.sol --rpc-url liteforge --broadcast --slow"
+    "testnet:dry-run": "node tools/forge.mjs script contracts/script/DeployTestnet.s.sol:DeployTestnet --rpc-url liteforge",
+    "testnet:deploy": "node tools/forge.mjs script contracts/script/DeployTestnet.s.sol:DeployTestnet --rpc-url liteforge --broadcast --slow",
+    "testnet:pairs:dry-run": "node tools/forge.mjs script contracts/script/DeployTestnet.s.sol:DeployTestnetPairs --rpc-url liteforge",
+    "testnet:pairs:deploy": "node tools/forge.mjs script contracts/script/DeployTestnet.s.sol:DeployTestnetPairs --rpc-url liteforge --broadcast --slow"
   },
   "devDependencies": {
     "@foundry-rs/forge": "1.7.1",

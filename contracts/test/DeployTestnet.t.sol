@@ -9,12 +9,13 @@ import {ForgePool} from "../src/forge/ForgePool.sol";
 import {ForgeView} from "../src/forge/ForgeView.sol";
 import {FurnaceTestnet} from "../script/DeployTestnet.s.sol";
 import {TestnetToken, TestnetValuation} from "../script/testnet/TestnetStandIns.sol";
+import {EmberPair} from "../src/pairs/EmberPair.sol";
 
 using ForgeView for ForgePool;
 
 /// @notice The testnet kit, offline: CreateX's runtime (fixture, fetched from LiteForge and equal to
 ///         Ethereum's) is etched at its address and the chain id set to LiteForge's. The same
-///         deployment is rehearsed live by `pnpm deploy:liteforge:dry` on a fork of chain 4441.
+///         deployment is rehearsed live by `pnpm testnet:dry-run` on a fork of chain 4441.
 contract DeployTestnetTest is Test, FurnaceTestnet {
     address deployer = makeAddr("deployer");
     address operator = makeAddr("operator");
@@ -28,8 +29,15 @@ contract DeployTestnetTest is Test, FurnaceTestnet {
     }
 
     function _deployAs(address who, address op, string memory version) internal returns (Deployment memory d) {
+        return _deployAs(who, op, version, true);
+    }
+
+    function _deployAs(address who, address op, string memory version, bool pairsNow)
+        internal
+        returns (Deployment memory d)
+    {
         vm.startPrank(who);
-        d = _deploy(who, op, version, block.timestamp, address(0));
+        d = _deploy(who, Options(op, version, block.timestamp, address(0), address(0), pairsNow));
         vm.stopPrank();
     }
 
@@ -46,6 +54,19 @@ contract DeployTestnetTest is Test, FurnaceTestnet {
         assertEq(d.emissions.MATCH_RESERVE(), operator);
         assertEq(d.emissions.SEALED_POT(), operator);
         assertEq(TestnetToken(address(d.stake[3])).decimals(), 6, "the USDC stand-in has USDC's decimals");
+        // The EMBER pairs (ADR 0015): pools 0 and 1 stake their receipts.
+        assertTrue(d.pairsLive);
+        Plan memory pl = _plan(deployer, "1");
+        for (uint256 i; i < 2; ++i) {
+            assertEq(address(d.stake[i]), address(d.pairs[i]), "pool i stakes pair i");
+            assertEq(address(d.pairs[i]), pl.pair[i], "at the predicted address");
+            assertEq(address(d.pairs[i].EMBER()), address(d.ember));
+            assertEq(d.pairs[i].INITIALIZER(), operator, "the Kindling slot initializes");
+            assertEq(d.pairs[i].FEE_ROUTER(), operator, "the Vent slot collects");
+        }
+        assertEq(address(d.pairs[0].QUOTE()), address(d.stake[3]), "BlastPool quotes the USDC that pool 3 stakes");
+        assertEq(TestnetToken(address(d.pairs[1].QUOTE())).decimals(), 18, "SmelterPool quotes tWETH");
+        assertEq(d.pairs[0].QUOTE_SCALE(), 1e12);
     }
 
     /// Salts bind the deployer and the chain: another deployer, or a new salt version, gets a fresh
@@ -67,6 +88,12 @@ contract DeployTestnetTest is Test, FurnaceTestnet {
 
     function redeploy(address who, address op, string memory version) external {
         _deployAs(who, op, version);
+    }
+
+    function pairsAs(address who, Deployment memory d) external {
+        vm.startPrank(who);
+        _deployPairs(_plan(d.deployer, d.saltVersion), d);
+        vm.stopPrank();
     }
 
     function test_refusesChainsOutsideTheTestnetList() public {
@@ -102,5 +129,62 @@ contract DeployTestnetTest is Test, FurnaceTestnet {
             assertGt(d.emissions.unclaimed(i, ids[i]), 0, "the position earned");
         }
         assertGt(IERC20(address(d.ember)).balanceOf(address(d.emissions)), 0);
+    }
+
+    /// The add-on (ADR 0015): before the pairs exist, pools 0 and 1 refuse deposits and an epoch
+    /// settles around them; once the pairs are deployed at the predicted addresses, those pools
+    /// take LP and earn, with no migration.
+    function test_pairsActivateLaterAtThePredictedAddresses() public {
+        Deployment memory d = _deployAs(operator, operator, "1", false);
+        assertFalse(d.pairsLive);
+        Plan memory pl = _plan(operator, "1");
+        for (uint256 i; i < 2; ++i) {
+            assertEq(address(d.pools[i].STAKE_TOKEN()), pl.pair[i], "pool i names pair i's address");
+            assertEq(pl.pair[i].code.length, 0, "which holds no code yet");
+        }
+        vm.startPrank(operator);
+        uint256[4] memory ids = _smoke(d, operator); // pools 2 and 3 only
+        vm.expectRevert(); // a call to an address with no code
+        d.pools[0].open(1e18);
+        vm.expectRevert();
+        d.pools[1].open(1e18);
+        vm.stopPrank();
+        assertEq(ids[0], 0);
+
+        vm.warp(d.start + P.EPOCH_SECONDS);
+        _settle(d, 0);
+        assertGt(d.emissions.unclaimed(2, ids[2]), 0, "the live pools earn");
+
+        // CreateX binds each salt to its deployer: anyone else lands on another address.
+        address stranger = makeAddr("stranger");
+        vm.expectPartialRevert(AddressMismatch.selector);
+        this.pairsAs(stranger, d);
+
+        vm.startPrank(operator);
+        _deployPairs(pl, d);
+        _seedPairs(d, operator);
+        IERC20(address(d.pairs[0])).approve(address(d.pools[0]), type(uint256).max);
+        ids[0] = d.pools[0].open(d.pairs[0].balanceOf(operator) / 2);
+        vm.stopPrank();
+        assertEq(address(d.pairs[0]), pl.pair[0]);
+        assertEq(address(d.pairs[1]), pl.pair[1]);
+
+        vm.expectRevert(abi.encodeWithSelector(PairsAlreadyLive.selector, pl.pair[0]));
+        this.pairsAs(operator, d);
+
+        vm.warp(d.start + 2 * P.EPOCH_SECONDS);
+        _settle(d, 1);
+        assertGt(d.emissions.unclaimed(0, ids[0]), 0, "pool 0 earns once its pair exists");
+    }
+
+    function _settle(Deployment memory d, uint256 epoch) internal {
+        d.mantle.finalizeEpoch();
+        d.emissions.openEpoch();
+        for (uint256 i; i < 4; ++i) {
+            for (uint256 n; d.emissions.poolEpoch(epoch, i).phase != ForgeEmissions.Phase.Done; ++n) {
+                assertLt(n, 16, "bounded pages");
+                d.emissions.advance(epoch, i);
+            }
+        }
     }
 }

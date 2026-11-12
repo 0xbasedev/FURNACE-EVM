@@ -3,6 +3,7 @@ pragma solidity 0.8.28;
 
 import {Script, console2} from "forge-std/Script.sol";
 import {VmSafe} from "forge-std/Vm.sol";
+import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {FurnaceParams as P} from "../src/generated/FurnaceParams.sol";
 import {EmberToken} from "../src/EmberToken.sol";
@@ -11,6 +12,7 @@ import {ForgePool} from "../src/forge/ForgePool.sol";
 import {IMantleDistribution, ForgeEmissions} from "../src/forge/ForgeEmissions.sol";
 import {Boost, IValuation, IPyreLedger} from "../src/forge/Boost.sol";
 import {ForgeLens} from "../src/forge/ForgeLens.sol";
+import {EmberPair} from "../src/pairs/EmberPair.sol";
 import {TestnetToken, TestnetValuation, TestnetPyreLedger} from "./testnet/TestnetStandIns.sol";
 
 /// @dev CreateX (https://github.com/pcaversaccio/createx), at the same address on every chain.
@@ -29,8 +31,12 @@ interface ICreateX {
 ///         This is NOT the canonical deployment. Salts are bound to the deployer AND the chain (the
 ///         0x01 flag), so they can never reproduce an address on another chain; the canonical
 ///         registry's mined salts are not used. Every slot for an unbuilt module (Kindling, the
-///         Treasury, the fee router, the Deed market, the match reserve, the Sealed pot) is the
-///         testnet operator's wallet. Not audited.
+///         Treasury, the fee router, Flow, the guardian, the Deed market, the match reserve, the
+///         Sealed pot) is the testnet operator's wallet. Not audited.
+///
+///         The EMBER pairs (BlastPool, SmelterPool; ADR 0015) are an add-on: Forge pools 0 and 1
+///         stake their CREATE3-predicted addresses, so the pairs can deploy in the same run (the
+///         default) or later from the same deployer (`DeployTestnetPairs`), with no migration.
 abstract contract FurnaceTestnet {
     ICreateX internal constant CREATEX = ICreateX(P.CREATEX);
     /// @dev keccak256 of CreateX's runtime code, the same on Ethereum and on LiteForge (checked
@@ -50,6 +56,9 @@ abstract contract FurnaceTestnet {
         Boost boost;
         ForgePool[4] pools;
         IERC20[4] stake;
+        EmberPair[2] pairs; // at their predicted addresses, deployed or not
+        IERC20[2] pairQuote; // tUSDC (or FURNACE_TESTNET_USDC), tWETH (or FURNACE_TESTNET_WETH)
+        bool pairsLive;
         TestnetValuation valuation;
         TestnetPyreLedger pyre;
         ForgeLens lens;
@@ -60,6 +69,7 @@ abstract contract FurnaceTestnet {
     error AddressMismatch(string label, address predicted, address deployed);
     error Miswired(string what);
     error SaltVersionUsed(string version, address existing);
+    error PairsAlreadyLive(address blastPool);
 
     /// @notice Testnet chains this kit deploys to. Anything else is refused.
     function _isTestnet(uint256 chainId) internal pure returns (bool) {
@@ -86,10 +96,15 @@ abstract contract FurnaceTestnet {
         address emissions;
         address boost;
         address[4] pool;
+        address[2] pair;
     }
 
     function _poolLabel(uint256 i) internal pure returns (string memory) {
         return i == 0 ? "ForgePool0" : i == 1 ? "ForgePool1" : i == 2 ? "ForgePool2" : "ForgePool3";
+    }
+
+    function _pairLabel(uint256 i) internal pure returns (string memory) {
+        return i == 0 ? "BlastPool" : "SmelterPool";
     }
 
     function _plan(address deployer, string memory version) internal view returns (Plan memory pl) {
@@ -99,6 +114,7 @@ abstract contract FurnaceTestnet {
         pl.emissions = _predict(deployer, _salt(deployer, version, "ForgeEmissions"));
         pl.boost = _predict(deployer, _salt(deployer, version, "Boost"));
         for (uint256 i; i < 4; ++i) pl.pool[i] = _predict(deployer, _salt(deployer, version, _poolLabel(i)));
+        for (uint256 i; i < 2; ++i) pl.pair[i] = _predict(deployer, _salt(deployer, version, _pairLabel(i)));
     }
 
     function _create3(Plan memory pl, string memory label, address predicted, bytes memory initCode)
@@ -109,34 +125,49 @@ abstract contract FurnaceTestnet {
         if (deployed != predicted) revert AddressMismatch(label, predicted, deployed);
     }
 
+    /// @notice What `_deploy` takes beyond the deployer: the testnet's choices.
+    struct Options {
+        address operator;
+        string version;
+        uint256 start;
+        address usdc; // an existing testnet USDC, or zero for the tUSDC stand-in
+        address weth; // an existing testnet WETH, or zero for the tWETH stand-in
+        bool pairsNow; // deploy the EMBER pairs in this run (else later, with DeployTestnetPairs)
+    }
+
     /// @notice Deploy and wire everything. Every call must come from `deployer` (a broadcast or a
     ///         prank), since CreateX binds each salt to its caller.
-    function _deploy(address deployer, address operator, string memory version, uint256 start, address usdc)
-        internal
-        returns (Deployment memory d)
-    {
+    function _deploy(address deployer, Options memory o) internal returns (Deployment memory d) {
         if (!_isTestnet(block.chainid)) revert NotATestnet(block.chainid);
         if (address(CREATEX).codehash != CREATEX_CODEHASH) revert CreateXMissing(address(CREATEX).codehash);
-        (d.deployer, d.operator, d.saltVersion, d.start) = (deployer, operator, version, start);
+        (d.deployer, d.operator, d.saltVersion, d.start) = (deployer, o.operator, o.version, o.start);
 
         // 1. Stand-ins (plain CREATE: nothing names them before they exist).
-        d.valuation = new TestnetValuation(operator);
-        d.pyre = new TestnetPyreLedger(operator);
-        d.stake[0] = new TestnetToken("Furnace Testnet EMBER/USDC LP (stand-in)", "tBLAST-LP", 18, 1_000_000e18);
-        d.stake[1] = new TestnetToken("Furnace Testnet EMBER/WETH LP (stand-in)", "tSMELT-LP", 18, 1_000_000e18);
-        d.stake[3] = usdc != address(0)
-            ? IERC20(usdc)
+        d.valuation = new TestnetValuation(o.operator);
+        d.pyre = new TestnetPyreLedger(o.operator);
+        d.pairQuote[0] = o.usdc != address(0)
+            ? IERC20(o.usdc)
             : IERC20(address(new TestnetToken("Furnace Testnet USDC (stand-in)", "tUSDC", 6, 1_000_000e6)));
+        d.pairQuote[1] = o.weth != address(0)
+            ? IERC20(o.weth)
+            : IERC20(address(new TestnetToken("Furnace Testnet WETH (stand-in)", "tWETH", 18, 1_000_000e18)));
+        d.stake[3] = d.pairQuote[0]; // usdc-single
 
         // 2. Predict the core: each constructor names addresses deployed after it.
-        Plan memory pl = _plan(deployer, version);
+        Plan memory pl = _plan(deployer, o.version);
         // A reused salt would make CREATE3 collide, which burns all the gas sent: refuse it first.
-        if (pl.ember.code.length != 0) revert SaltVersionUsed(version, pl.ember);
+        if (pl.ember.code.length != 0) revert SaltVersionUsed(o.version, pl.ember);
         d.stake[2] = IERC20(pl.ember); // pool 2 stakes EMBER itself (ember-single)
+        for (uint256 i; i < 2; ++i) {
+            d.pairs[i] = EmberPair(pl.pair[i]);
+            d.stake[i] = IERC20(pl.pair[i]); // pools 0 and 1 stake the pairs' receipts, live or not
+        }
 
         // 3. Deploy in constructor-dependency order: EMBER and the Mantle store addresses only;
-        //    ForgeEmissions reads the Mantle and the pools; Boost checks every wire.
+        //    the pairs read EMBER's and their quote's decimals; ForgeEmissions reads the Mantle and
+        //    the pools; Boost checks every wire.
         _deployTokenAndMantle(pl, d);
+        if (o.pairsNow) _deployPairs(pl, d);
         _deployPools(pl, d);
         _deployEmissionsAndBoost(pl, d);
         d.lens = new ForgeLens();
@@ -153,6 +184,35 @@ abstract contract FurnaceTestnet {
         bytes memory args =
             abi.encode(IEmberMintBurn(pl.ember), pl.emissions, d.operator, d.operator, d.start, registrars, categories);
         d.mantle = Mantle(_create3(pl, "Mantle", pl.mantle, abi.encodePacked(type(Mantle).creationCode, args)));
+    }
+
+    /// @notice The two EMBER pairs at their predicted addresses. The operator holds the fee
+    ///         router, Flow, guardian and initializer slots (Kindling and the Vent are not built).
+    function _deployPairs(Plan memory pl, Deployment memory d) internal {
+        if (pl.pair[0].code.length != 0) revert PairsAlreadyLive(pl.pair[0]);
+        string[2] memory names = ["Furnace Testnet Blast Furnace EMBER/USDC LP", "Furnace Testnet Smelter EMBER/WETH LP"];
+        string[2] memory symbols = ["tBLAST-LP", "tSMELT-LP"];
+        for (uint256 i; i < 2; ++i) {
+            bytes memory args = abi.encode(
+                names[i], symbols[i], IERC20(pl.ember), d.pairQuote[i], d.operator, d.operator, d.operator, d.operator
+            );
+            d.pairs[i] = EmberPair(
+                _create3(pl, _pairLabel(i), pl.pair[i], abi.encodePacked(type(EmberPair).creationCode, args))
+            );
+        }
+        d.pairsLive = true;
+        _checkPairs(d);
+    }
+
+    function _checkPairs(Deployment memory d) internal view {
+        for (uint256 i; i < 2; ++i) {
+            EmberPair p = d.pairs[i];
+            if (address(p.EMBER()) != address(d.stake[2]) || address(p.QUOTE()) != address(d.pairQuote[i])) {
+                revert Miswired("pair tokens");
+            }
+            if (p.FEE_ROUTER() != d.operator || p.FLOW() != d.operator || p.GUARDIAN() != d.operator) revert Miswired("pair slots");
+            if (p.INITIALIZER() != d.operator) revert Miswired("pair initializer");
+        }
     }
 
     function _deployPools(Plan memory pl, Deployment memory d) internal {
@@ -190,24 +250,49 @@ abstract contract FurnaceTestnet {
         }
     }
 
-    /// @notice A first exercise of every principal path the stand-ins allow, as `actor` (who must
-    ///         be the operator for the EMBER steps: the Kindling slot is the operator's wallet).
+    /// @notice A first exercise of every principal path the deployment allows, as `actor`. The
+    ///         EMBER steps need the operator (the Kindling slot and each pair's initializer are the
+    ///         operator's wallet); any other actor only stakes tUSDC. Mints the stand-ins, so a
+    ///         FURNACE_TESTNET_USDC or _WETH token must be mintable by the actor.
     function _smoke(Deployment memory d, address actor) internal returns (uint256[4] memory ids) {
-        for (uint256 i; i < 4; ++i) {
-            if (i == 2) continue;
-            uint256 unit = 10 ** TestnetToken(address(d.stake[i])).decimals();
-            TestnetToken(address(d.stake[i])).mint(actor, 1_000 * unit);
-            d.stake[i].approve(address(d.pools[i]), type(uint256).max);
-            ids[i] = d.pools[i].open(100 * unit);
-        }
+        TestnetToken usdc = TestnetToken(address(d.pairQuote[0]));
+        usdc.mint(actor, 1_000_000e6);
+        usdc.approve(address(d.pools[3]), type(uint256).max);
+        ids[3] = d.pools[3].open(100e6);
         if (actor == d.operator) {
             d.mantle.mintKindlingSeed(); // 420,000 test EMBER to the operator
-            IERC20(address(d.ember)).approve(address(d.pools[2]), type(uint256).max);
+            IERC20 ember = IERC20(address(d.ember));
+            ember.approve(address(d.pools[2]), type(uint256).max);
             ids[2] = d.pools[2].open(1_000e18);
-            IERC20(address(d.ember)).approve(address(d.boost), type(uint256).max);
-            d.boost.deposit(0, ids[0], 100e18); // a Capstone on the EMBER/USDC stand-in position
+            ember.approve(address(d.boost), type(uint256).max);
+            if (d.pairsLive) {
+                _seedPairs(d, actor);
+                for (uint256 i; i < 2; ++i) {
+                    IERC20(address(d.pairs[i])).approve(address(d.pools[i]), type(uint256).max);
+                    ids[i] = d.pools[i].open(d.pairs[i].balanceOf(actor) / 2);
+                }
+                // One buy and one sell on BlastPool, at the full fee.
+                usdc.approve(address(d.pairs[0]), type(uint256).max);
+                uint256 got = d.pairs[0].buy(100e6, 0, actor);
+                d.pairs[0].sell(got / 2, 0, actor);
+            }
+            d.boost.deposit(d.pairsLive ? 0 : 2, d.pairsLive ? ids[0] : ids[2], 100e18); // a Capstone
         }
-        d.pools[0].requestCooling(ids[0], 1e18);
+        d.pools[3].requestCooling(ids[3], 1e6);
+    }
+
+    /// @notice First liquidity: 50,000 EMBER with 50,000 tUSDC (1 USDC per EMBER) and 20,000
+    ///         EMBER with 10 tWETH. Test prices, set by hand.
+    function _seedPairs(Deployment memory d, address actor) internal {
+        TestnetToken weth = TestnetToken(address(d.pairQuote[1]));
+        weth.mint(actor, 1_000e18);
+        uint256[2] memory emberIn = [uint256(50_000e18), 20_000e18];
+        uint256[2] memory quoteIn = [uint256(50_000e6), 10e18];
+        for (uint256 i; i < 2; ++i) {
+            IERC20(address(d.ember)).approve(address(d.pairs[i]), type(uint256).max);
+            d.pairQuote[i].approve(address(d.pairs[i]), type(uint256).max);
+            d.pairs[i].addLiquidity(emberIn[i], quoteIn[i], emberIn[i], quoteIn[i], actor);
+        }
     }
 }
 
@@ -215,17 +300,21 @@ abstract contract FurnaceTestnet {
 ///         fork); add `--broadcast --account <keystore>` to deploy. Environment, all optional:
 ///         FURNACE_TESTNET_OPERATOR (default: the deployer), FURNACE_TESTNET_SALT_VERSION (default
 ///         "1"; bump it to deploy a fresh set), FURNACE_TESTNET_START (default: now),
-///         FURNACE_TESTNET_USDC (an existing testnet USDC instead of the stand-in) and
-///         FURNACE_TESTNET_SMOKE=1 (also run the smoke actions).
+///         FURNACE_TESTNET_USDC and FURNACE_TESTNET_WETH (existing testnet tokens instead of the
+///         stand-ins), FURNACE_TESTNET_PAIRS=later (leave the EMBER pairs for DeployTestnetPairs)
+///         and FURNACE_TESTNET_SMOKE=1 (also run the smoke actions).
 contract DeployTestnet is Script, FurnaceTestnet {
     function run() external returns (Deployment memory d) {
         vm.startBroadcast();
         (, address deployer,) = vm.readCallers();
-        address operator = vm.envOr("FURNACE_TESTNET_OPERATOR", deployer);
-        string memory version = vm.envOr("FURNACE_TESTNET_SALT_VERSION", string("1"));
-        uint256 start = vm.envOr("FURNACE_TESTNET_START", block.timestamp);
-        address usdc = vm.envOr("FURNACE_TESTNET_USDC", address(0));
-        d = _deploy(deployer, operator, version, start, usdc);
+        Options memory o;
+        o.operator = vm.envOr("FURNACE_TESTNET_OPERATOR", deployer);
+        o.version = vm.envOr("FURNACE_TESTNET_SALT_VERSION", string("1"));
+        o.start = vm.envOr("FURNACE_TESTNET_START", block.timestamp);
+        o.usdc = vm.envOr("FURNACE_TESTNET_USDC", address(0));
+        o.weth = vm.envOr("FURNACE_TESTNET_WETH", address(0));
+        o.pairsNow = keccak256(bytes(vm.envOr("FURNACE_TESTNET_PAIRS", string("now")))) != keccak256("later");
+        d = _deploy(deployer, o);
         if (vm.envOr("FURNACE_TESTNET_SMOKE", false)) _smoke(d, deployer);
         vm.stopBroadcast();
         _report(d);
@@ -240,6 +329,11 @@ contract DeployTestnet is Script, FurnaceTestnet {
         console2.log("Mantle           ", address(d.mantle));
         console2.log("ForgeEmissions   ", address(d.emissions));
         console2.log("Boost            ", address(d.boost));
+        console2.log(d.pairsLive ? "EMBER pairs: deployed" : "EMBER pairs: predicted, not deployed (DeployTestnetPairs)");
+        console2.log("BlastPool        ", address(d.pairs[0]));
+        console2.log("  quote          ", address(d.pairQuote[0]));
+        console2.log("SmelterPool      ", address(d.pairs[1]));
+        console2.log("  quote          ", address(d.pairQuote[1]));
         for (uint256 i; i < 4; ++i) {
             console2.log("ForgePool", i, address(d.pools[i]));
             console2.log("  stake token    ", address(d.stake[i]));
@@ -263,14 +357,58 @@ contract DeployTestnet is Script, FurnaceTestnet {
         vm.serializeAddress(k, "ForgeLens", address(d.lens));
         vm.serializeAddress(k, "TestnetValuation", address(d.valuation));
         vm.serializeAddress(k, "TestnetPyreLedger", address(d.pyre));
+        vm.serializeAddress(k, "BlastPool", address(d.pairs[0]));
+        vm.serializeAddress(k, "BlastPoolQuote", address(d.pairQuote[0]));
+        vm.serializeAddress(k, "SmelterPool", address(d.pairs[1]));
+        vm.serializeAddress(k, "SmelterPoolQuote", address(d.pairQuote[1]));
+        vm.serializeBool(k, "pairsLive", d.pairsLive);
         for (uint256 i; i < 4; ++i) {
             vm.serializeAddress(k, string.concat("ForgePool", vm.toString(i)), address(d.pools[i]));
             vm.serializeAddress(k, string.concat("ForgePool", vm.toString(i), "Annex"), d.pools[i].ANNEX());
             vm.serializeAddress(k, string.concat("ForgePool", vm.toString(i), "StakeToken"), address(d.stake[i]));
         }
         string memory json = vm.serializeString(k, "status", "testnet only: not audited, stand-ins for unbuilt modules");
-        string memory path = string.concat("deployments/testnet-", vm.toString(block.chainid), ".json");
-        vm.writeJson(json, path);
-        console2.log("manifest         ", path);
+        vm.writeJson(json, _manifestPath());
+        console2.log("manifest         ", _manifestPath());
+    }
+}
+
+function _manifestPath() view returns (string memory) {
+    return string.concat("deployments/testnet-", Strings.toString(block.chainid), ".json");
+}
+
+/// @notice Deploys the EMBER pairs later, at the addresses Forge pools 0 and 1 already stake
+///         (ADR 0015): `forge script contracts/script/DeployTestnet.s.sol:DeployTestnetPairs
+///         --rpc-url liteforge --broadcast --account <the original deployer's keystore>`. Reads
+///         the deployment from `deployments/testnet-<chain id>.json`; CreateX binds each salt to
+///         its caller, so only the original deployer can do this, and only once.
+contract DeployTestnetPairs is Script, FurnaceTestnet {
+    error NotTheDeployer(address broadcaster, address deployer);
+
+    function run() external returns (EmberPair[2] memory pairs) {
+        string memory json = vm.readFile(_manifestPath());
+        if (vm.parseJsonUint(json, ".chainId") != block.chainid) revert Miswired("manifest chain id");
+        Deployment memory d;
+        d.deployer = vm.parseJsonAddress(json, ".deployer");
+        d.operator = vm.parseJsonAddress(json, ".operator");
+        d.saltVersion = vm.parseJsonString(json, ".saltVersion");
+        d.stake[2] = IERC20(vm.parseJsonAddress(json, ".EmberToken"));
+        d.pairQuote[0] = IERC20(vm.parseJsonAddress(json, ".BlastPoolQuote"));
+        d.pairQuote[1] = IERC20(vm.parseJsonAddress(json, ".SmelterPoolQuote"));
+        Plan memory pl = _plan(d.deployer, d.saltVersion);
+        if (pl.ember != address(d.stake[2])) revert Miswired("manifest EMBER");
+        for (uint256 i; i < 2; ++i) {
+            ForgePool pool = ForgePool(vm.parseJsonAddress(json, string.concat(".ForgePool", vm.toString(i))));
+            if (address(pool.STAKE_TOKEN()) != pl.pair[i]) revert Miswired("pool stake token");
+        }
+        vm.startBroadcast();
+        (, address broadcaster,) = vm.readCallers();
+        if (broadcaster != d.deployer) revert NotTheDeployer(broadcaster, d.deployer);
+        _deployPairs(pl, d);
+        vm.stopBroadcast();
+        pairs = d.pairs;
+        console2.log("BlastPool        ", address(pairs[0]));
+        console2.log("SmelterPool      ", address(pairs[1]));
+        if (vm.isContext(VmSafe.ForgeContext.ScriptBroadcast)) vm.writeJson("true", _manifestPath(), ".pairsLive");
     }
 }
