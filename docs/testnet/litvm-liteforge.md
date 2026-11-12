@@ -100,6 +100,16 @@ On mainnet each of those is an immutable contract at a mined address. That is wh
 - **Through Flow.** `Flow.swap`, `zapIn`, `zapAndStake` (position 0 opens one; any other id adds to your own) and `zapOut`, each with a deadline and a minimum. To see a rebate, have the operator call `TestnetFeeRebate.setRebate(wallet, 50)`: that wallet's swaps then book half the protocol share.
 - **Trading and liquidity.** `EmberPair.buy`, `sell`, `addLiquidity` and `redeem`, with `quoteBuy` and `quoteSell` for previews. Fees are booked by lane; the operator, as fee router, pulls them with `collectProtocolFees()`. `consult(1800)` returns the 30-minute TWAP once the pair is 30 minutes old; anyone can `checkpoint()` to keep observations fresh.
 
+## Use the dApp
+
+The deployment writes `deployments/testnet-4441.json`; the dApp reads it, with `abi/`, when it builds.
+1. `pnpm app:build`, then serve `apps/forge-app/dist` (or `pnpm app:dev` locally).
+2. Connect a wallet. If it is on another chain, the app offers to switch, and adds LiteForge when the wallet does not know it.
+3. Get zkLTC from the faucet for gas, then mint tUSDC or tWETH under *Test tokens*.
+4. Under *Zap & stake*, pay tUSDC (or EMBER) into a position. The route cards show what Flow stakes fee-free against what a deposit would keep.
+
+Each action asks first for an approval of exactly the amount it spends, unless an earlier one still covers it. The app never sees a key; the wallet signs. Before the kit is broadcast, or if the manifest is missing, the app shows *Not deployed yet* and quotes on simulated reserves.
+
 ## Verification of the kit
 
 - **`contracts/test/DeployTestnet.t.sol`**, offline in CI: CreateX's runtime is etched from `contracts/test/fixtures/createx-runtime.hex`, fetched from LiteForge, and its hash is checked. The tests show:
