@@ -23,7 +23,9 @@
     "check": "pnpm typecheck && pnpm canonical:sums && pnpm config:verify-hash && pnpm verify:create3 && pnpm gen:check && pnpm sim:test && pnpm sim:build && pnpm forge:gate && pnpm forge:sizes && pnpm check:layout && pnpm test:sol",
     "check:all": "pnpm check && pnpm canonical:test",
     "forge:gate": "node scripts/check-forge-gate.mjs",
-    "check:layout": "node scripts/check-layout.mjs"
+    "check:layout": "node scripts/check-layout.mjs",
+    "testnet:dry-run": "node tools/forge.mjs script contracts/script/DeployTestnet.s.sol --rpc-url liteforge",
+    "testnet:deploy": "node tools/forge.mjs script contracts/script/DeployTestnet.s.sol --rpc-url liteforge --broadcast --slow"
   },
   "devDependencies": {
     "@foundry-rs/forge": "1.7.1",

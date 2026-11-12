@@ -8,3 +8,5 @@ cache/
 canonical/node_modules/
 canonical/package-lock.json
 apps/*/dist/
+# forge script dry runs (a broadcast's own record in broadcast/ is kept)
+broadcast/**/dry-run/
