@@ -39,6 +39,8 @@ Orbit differences from Ethereum that could matter here:
 | tWETH | **stand-in** (18 decimals) for SmelterPool's quote, unless `FURNACE_TESTNET_WETH` names an existing token. On LitVM mainnet that asset is undecided: bridged WETH or wrapped zkLTC |
 | TestnetValuation | **stand-in** for the protected valuation source: the operator sets each pool's rate by hand (zero gives no Capstone bonus) |
 | TestnetPyreLedger | **stand-in** for the Relics Pyre ledger: the operator records burns by hand |
+| **Flow** | built (ADR 0016): rebated swaps, zaps in and out, and `zapAndStake`, the fee-free stake of the LP a zap forms into pools 0 and 1. The pairs and the LP pools name its predicted address |
+| TestnetFeeRebate | **stand-in** for the Relics fee-rebate perk: the operator sets a wallet's percent with `setRebate`; Flow snaps it down to 25 or 50 |
 
 The stand-ins live in `contracts/script/testnet/` and never in `contracts/src`. The faucet tokens can be minted by anyone, up to 1,000,000 per call.
 
@@ -50,7 +52,8 @@ The stand-ins live in `contracts/script/testnet/` and never in `contracts/src`. 
 - is each pool's fee collector;
 - is the Deed market, the only caller of `list` and `settle`;
 - is ForgeEmissions' match reserve and Sealed-pot consumer;
-- is each pair's **initializer** (Kindling's slot: the first deposit, which sets the price), its **fee router** (the Vent's: it alone collects the booked protocol fees), **Flow** (the only caller of the rebated swaps) and its **guardian** (it can pause swaps, never redemptions).
+- is each pair's **initializer** (Kindling's slot: the first deposit, which sets the price), its **fee router** (the Vent's: it alone collects the booked protocol fees) and its **guardian** (it can pause swaps, never redemptions);
+- is Flow's **compounder**, the only caller of the Compound waiver (the Stoke-into-LP consumer is not built).
 
 On mainnet each of those is an immutable contract at a mined address. That is why this kit refuses any chain outside its testnet list (4441, and 31337 for local runs).
 
@@ -87,13 +90,14 @@ On mainnet each of those is an immutable contract at a mined address. That is wh
 - `FURNACE_TESTNET_START`: the Mantle's start; default now
 - `FURNACE_TESTNET_USDC`, `FURNACE_TESTNET_WETH`: existing testnet tokens instead of the stand-ins (the smoke actions mint them, so they must be mintable)
 - `FURNACE_TESTNET_PAIRS=later`: leave the EMBER pairs for `testnet:pairs:deploy`
-- `FURNACE_TESTNET_SMOKE=1`: first liquidity in both pairs (50,000 EMBER with 50,000 tUSDC; 20,000 EMBER with 10 tWETH), one position in each pool, a buy and a sell on BlastPool, a Capstone deposit and a cooling request
+- `FURNACE_TESTNET_SMOKE=1`: first liquidity in both pairs (50,000 EMBER with 50,000 tUSDC; 20,000 EMBER with 10 tWETH), one position in each pool, a buy and a sell on BlastPool, a 100 tUSDC zap staked fee-free through Flow into the pool-0 position, a Capstone deposit and a cooling request
 
 ## After deploying
 
 - **Settlement is permissionless and daily.** After each epoch ends: `Mantle.finalizeEpoch()`, then `ForgeEmissions.openEpoch()`, then `ForgeEmissions.advance(epoch, pool)` for each pool until its phase is `Done`. The kit's test runs exactly this, and every pool's position earns.
 - **To see Boost raise a bonus**, set a rate as the operator, for example `TestnetValuation.setRate(0, 5e26)` (0.5 EMBER per stake unit), then call `Boost.refresh(0, id)`.
 - **Test tokens**: `TestnetToken.mint(to, amount)` on tUSDC and tWETH.
+- **Through Flow.** `Flow.swap`, `zapIn`, `zapAndStake` (position 0 opens one; any other id adds to your own) and `zapOut`, each with a deadline and a minimum. To see a rebate, have the operator call `TestnetFeeRebate.setRebate(wallet, 50)`: that wallet's swaps then book half the protocol share.
 - **Trading and liquidity.** `EmberPair.buy`, `sell`, `addLiquidity` and `redeem`, with `quoteBuy` and `quoteSell` for previews. Fees are booked by lane; the operator, as fee router, pulls them with `collectProtocolFees()`. `consult(1800)` returns the 30-minute TWAP once the pair is 30 minutes old; anyone can `checkpoint()` to keep observations fresh.
 
 ## Verification of the kit
@@ -110,5 +114,5 @@ On mainnet each of those is an immutable contract at a mined address. That is wh
 ## Not shown by the testnet
 
 - Anything about mainnet economics. The stake tokens are faucet tokens, and the rates are set by hand.
-- The behaviour of unbuilt modules: Flow (routing, zaps, the Relic check behind a rebate), the Deed market, Kindling, Ignition, the fee router and the valuation source.
+- The behaviour of unbuilt modules: Relics (which decides a wallet's rebate tier), the compounder, the Deed market, Kindling, Ignition, the fee router and the valuation source.
 - Audit status. None of this is audited.

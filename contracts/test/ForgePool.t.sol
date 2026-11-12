@@ -19,7 +19,7 @@ using ForgeView for ForgePoolHarness;
 /// @dev Test-only subclass: jumps a position's ticket or record counter towards its limit.
 contract ForgePoolHarness is ForgePool {
     constructor(IERC20 stakeToken, bool isLp, address feeCollector, address boost, address deeds)
-        ForgePool(stakeToken, isLp, feeCollector, boost, deeds)
+        ForgePool(stakeToken, isLp, feeCollector, boost, deeds, address(0))
     {}
 
     function setNextTicketIdForTest(uint256 id, uint32 value) external {
@@ -47,7 +47,7 @@ abstract contract ForgeFixture is ForgeVectors {
 
     function _deploy(bool lp) internal {
         token = new MockERC20("Receipt", "RCPT");
-        pool = new ForgePool(IERC20(address(token)), lp, collector, boost, deeds);
+        pool = new ForgePool(IERC20(address(token)), lp, collector, boost, deeds, address(0));
     }
 
     function _user(uint256 pos) internal pure returns (address) {
@@ -347,18 +347,18 @@ contract ForgePoolTest is ForgeFixture {
 
     function test_constructorRejectsZeroAddresses() public {
         vm.expectRevert(ForgePoolBase.ZeroAddress.selector);
-        new ForgePool(IERC20(address(0)), true, collector, boost, deeds);
+        new ForgePool(IERC20(address(0)), true, collector, boost, deeds, address(0));
         vm.expectRevert(ForgePoolBase.ZeroAddress.selector);
-        new ForgePool(IERC20(address(token)), true, address(0), boost, deeds);
+        new ForgePool(IERC20(address(token)), true, address(0), boost, deeds, address(0));
         vm.expectRevert(ForgePoolBase.ZeroAddress.selector);
-        new ForgePool(IERC20(address(token)), true, collector, address(0), deeds);
+        new ForgePool(IERC20(address(token)), true, collector, address(0), deeds, address(0));
         vm.expectRevert(ForgePoolBase.ZeroAddress.selector);
-        new ForgePool(IERC20(address(token)), true, collector, boost, address(0));
+        new ForgePool(IERC20(address(token)), true, collector, boost, address(0), address(0));
     }
 
     function test_feeOnTransferTokenIsRejected() public {
         FeeOnTransferERC20 skim = new FeeOnTransferERC20();
-        ForgePool skimPool = new ForgePool(IERC20(address(skim)), false, collector, boost, deeds);
+        ForgePool skimPool = new ForgePool(IERC20(address(skim)), false, collector, boost, deeds, address(0));
         skim.mint(alice, 1e18);
         vm.startPrank(alice);
         skim.approve(address(skimPool), type(uint256).max);
@@ -460,7 +460,7 @@ contract ForgePoolTest is ForgeFixture {
 
     function test_emergencyExitIgnoresTheFeeCollector() public {
         // Exits never call the fee collector, so one that always reverts cannot block them.
-        ForgePool hostile = new ForgePool(IERC20(address(token)), true, address(new Reverter()), boost, deeds);
+        ForgePool hostile = new ForgePool(IERC20(address(token)), true, address(new Reverter()), boost, deeds, address(0));
         vm.startPrank(alice);
         token.approve(address(hostile), type(uint256).max);
         uint256 id = hostile.open(100e18);

@@ -27,6 +27,10 @@
     "file": "EmberPair.json",
     "testnetOnly": false
   },
+  "Flow": {
+    "file": "Flow.json",
+    "testnetOnly": false
+  },
   "TestnetToken": {
     "file": "TestnetToken.json",
     "testnetOnly": true
@@ -37,6 +41,10 @@
   },
   "TestnetPyreLedger": {
     "file": "TestnetPyreLedger.json",
+    "testnetOnly": true
+  },
+  "TestnetFeeRebate": {
+    "file": "TestnetFeeRebate.json",
     "testnetOnly": true
   }
 }

@@ -15,11 +15,13 @@
     "Kindling": null,
     "FeeRouter": null,
     "Flow": null,
+    "Compounder": null,
     "Deeds": null,
     "MatchReserve": null,
     "SealedPot": null,
     "Valuation": null,
-    "PyreLedger": null
+    "PyreLedger": null,
+    "FeeRebate": null
   },
   "audits": []
 }

@@ -13,12 +13,14 @@ const CONTRACTS = [
   ['Boost', 'Boost.sol'],
   ['ForgeLens', 'ForgeLens.sol'],
   ['EmberPair', 'EmberPair.sol'],
+  ['Flow', 'Flow.sol'],
   // Testnet-only stand-ins (contracts/script/testnet): never part of a canonical deployment.
   ['TestnetToken', 'TestnetStandIns.sol'],
   ['TestnetValuation', 'TestnetStandIns.sol'],
   ['TestnetPyreLedger', 'TestnetStandIns.sol'],
+  ['TestnetFeeRebate', 'TestnetStandIns.sol'],
 ];
-const TESTNET_ONLY = new Set(['TestnetToken', 'TestnetValuation', 'TestnetPyreLedger']);
+const TESTNET_ONLY = new Set(['TestnetToken', 'TestnetValuation', 'TestnetPyreLedger', 'TestnetFeeRebate']);
 const check = process.argv.includes('--check');
 
 const files = new Map();

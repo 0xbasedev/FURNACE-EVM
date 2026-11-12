@@ -19,7 +19,7 @@ using ForgeView for ForgePool;
 ///      used to define itself (before ADR 0010): the reference ForgeView must reproduce.
 contract ForgePoolViewHarness is ForgePool {
     constructor(IERC20 token, address collector, address boost, address deeds)
-        ForgePool(token, true, collector, boost, deeds)
+        ForgePool(token, true, collector, boost, deeds, address(0))
     {}
 
     function rawPosition(uint256 id) external view returns (Position memory) {

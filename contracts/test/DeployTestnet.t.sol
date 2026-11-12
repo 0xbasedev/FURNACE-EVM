@@ -67,6 +67,15 @@ contract DeployTestnetTest is Test, FurnaceTestnet {
         assertEq(address(d.pairs[0].QUOTE()), address(d.stake[3]), "BlastPool quotes the USDC that pool 3 stakes");
         assertEq(TestnetToken(address(d.pairs[1].QUOTE())).decimals(), 18, "SmelterPool quotes tWETH");
         assertEq(d.pairs[0].QUOTE_SCALE(), 1e12);
+        // Flow (ADR 0016): the pairs and the LP pools name it; the single-asset pools do not.
+        assertEq(address(d.flow), pl.flow, "Flow at its predicted address");
+        for (uint256 i; i < 2; ++i) assertEq(d.pairs[i].FLOW(), address(d.flow), "pair i routes through Flow");
+        assertEq(d.pools[0].FLOW(), address(d.flow));
+        assertEq(d.pools[1].FLOW(), address(d.flow));
+        assertEq(d.pools[2].FLOW(), address(0), "no fee-free stake into the EMBER pool");
+        assertEq(d.pools[3].FLOW(), address(0), "nor the USDC pool");
+        assertEq(d.flow.COMPOUNDER(), operator, "the compounder slot is the operator's");
+        assertEq(address(d.flow.REBATES()), address(d.rebates));
     }
 
     /// Salts bind the deployer and the chain: another deployer, or a new salt version, gets a fresh

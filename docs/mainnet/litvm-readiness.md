@@ -26,13 +26,13 @@ Status: **not ready.** Nothing is deployed and nothing is audited. LitVM mainnet
 3. **The factory and the opcodes.**
    - CreateX must be at `0xba5E…ba5Ed` with the known runtime hash.
    - PUSH0, TSTORE/TLOAD and MCOPY must execute. The pools' and pairs' reentrancy guards use transient storage.
-4. **The modules the testnet hands to an operator wallet.** Each must be a contract at a mined address:
+4. **The modules the testnet fills with an operator wallet or a stand-in.** Each must be a contract at a mined address:
    - Treasury (a 3-of-5 Safe with real owners) and the guardian;
    - Kindling (each pair's initializer) and the fee router (the Vent);
-   - Flow (rebates and the Compound waiver) and the Deed market;
+   - the compounder (Flow's waiver caller, the Stoke-into-LP consumer) and the Deed market;
    - the match reserve and the Sealed-pot stream;
-   - the protected valuation source and the Relics (Pyre) ledger.
-   Of these, only the pairs' side is built ([ADR 0015](../adr/0015-ember-pairs.md)).
+   - the protected valuation source, and Relics: its Pyre ledger and its fee-rebate perk.
+   Flow itself is built ([ADR 0016](../adr/0016-flow.md)) and needs only its mined address; the pairs it routes are built too ([ADR 0015](../adr/0015-ember-pairs.md)).
 5. **The pairs' trust window** (ADR 0015). A CREATE3 address does not commit to code. The pairs must therefore deploy in the same broadcast as the core, or move to CreateX's CREATE2, which is a change to §23.
 6. **The pools' remaining hooks.** They are needed before an immutable mainnet deployment:
    - Kindling positions with the First Flame floor;

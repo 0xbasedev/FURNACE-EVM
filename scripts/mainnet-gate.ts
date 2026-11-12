@@ -18,7 +18,22 @@ import cfg, { CREATEX_FACTORY, DEPLOYER as PLACEHOLDER_DEPLOYER } from '../canon
 export const CREATEX_CODEHASH = '0xbd8a7ea8cfca7b4e5f5041d7d4b17bc317c5ce42cfbc42066a00cf26b43eb53f';
 /** The testnet kit's chains, which can never be the mainnet. */
 const TESTNET_CHAIN_IDS = new Set([4441, 31337]);
-const MODULE_SLOTS = ['Treasury', 'Guardian', 'Kindling', 'FeeRouter', 'Flow', 'Deeds', 'MatchReserve', 'SealedPot', 'Valuation', 'PyreLedger'] as const;
+const MODULE_SLOTS = ['Treasury', 'Guardian', 'Kindling', 'FeeRouter', 'Flow', 'Compounder', 'Deeds', 'MatchReserve', 'SealedPot', 'Valuation', 'PyreLedger', 'FeeRebate'] as const;
+/** What each slot is on the testnet, for the blocker's wording. */
+const TESTNET_NOTE: Record<(typeof MODULE_SLOTS)[number], string> = {
+  Treasury: "on the testnet it is the operator's wallet",
+  Guardian: "on the testnet it is the operator's wallet",
+  Kindling: "on the testnet it is the operator's wallet",
+  FeeRouter: "the Vent; on the testnet it is the operator's wallet",
+  Flow: 'built (ADR 0016); the testnet kit deploys it, the mainnet needs its mined address',
+  Compounder: "Flow's waiver caller, the Stoke-into-LP consumer; on the testnet it is the operator's wallet",
+  Deeds: "on the testnet it is the operator's wallet",
+  MatchReserve: "on the testnet it is the operator's wallet",
+  SealedPot: "on the testnet it is the operator's wallet",
+  Valuation: 'on the testnet it is a stand-in the operator sets',
+  PyreLedger: "Relics' Pyre ledger; on the testnet it is a stand-in the operator sets",
+  FeeRebate: "Relics' fee-rebate perk, read by Flow; on the testnet it is a stand-in the operator sets",
+};
 const RECORD_KEYS = ['network', 'status', 'chainId', 'rpcUrl', 'explorerUrl', 'sources', 'pairsTrustWindow', 'usdc', 'smelterQuote', 'deployer', 'modules', 'audits'];
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 
@@ -132,7 +147,7 @@ export function blockers(r: GateRecord, opts: { rpc?: Rpc; head?: string } = {})
   // 4. The modules the testnet gives to an operator wallet must be real contracts.
   for (const slot of MODULE_SLOTS) {
     const a = r.modules[slot];
-    if (a === null) b.push(`modules: ${slot} has no address (on the testnet it is the operator's wallet)`);
+    if (a === null) b.push(`modules: ${slot} has no address (${TESTNET_NOTE[slot]})`);
     else if (live && rpc && !hasCode(rpc, a)) b.push(`modules: ${slot} at ${a} has no code on the chain`);
   }
   // 5. The pairs (ADR 0015).

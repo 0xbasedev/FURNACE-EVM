@@ -153,6 +153,10 @@ library FurnaceParams {
     uint256 internal constant PAIR_TWAP_SECONDS = 1800; // the Vent window; the pair observes every sixth of it
     address internal constant BURN_ADDRESS = 0x000000000000000000000000000000000000dEaD; // holds each pair's minimum liquidity
 
+    // ── Flow: Relic rebates of the protocol swap share, waivers (spec v5.5 §4, §14; ADR 0016) ──
+    uint256 internal constant FLOW_REBATE_TIER_0_PCT = 25; // eternal: % of the protocol swap share
+    uint256 internal constant FLOW_REBATE_TIER_1_PCT = 50; // bedrock: % of the protocol swap share
+
     // ── Deterministic deployment registry (CREATE3). PROVISIONAL while the deployer is 0x1111111111111111111111111111111111111111 ──
     //    Only MINED entries become constants; unmined modules are constructor/initializer inputs.
     address internal constant CREATEX = 0xba5Ed099633D3B313e4D5F7bdc1305d3c28ba5Ed;

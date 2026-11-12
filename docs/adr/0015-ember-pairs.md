@@ -152,5 +152,5 @@ Status: accepted for this repository. Not audited, not deployed.
 
 - **Forge pools 0 and 1 have a real stake token on testnet.** The testnet manifest names the pairs, and `pnpm abi` exports `EmberPair`.
 - **Every protocol swap fee arrives at the Vent in the quote asset, split by lane.**
-- **Flow must exist before rebates or the Compound waiver work.** Until then every swap pays the full fee, which is the conservative direction.
+- **Rebates and the Compound waiver need Flow.** Flow is now built (ADR 0016); on the testnet the pairs name it. A pair whose `FLOW` is zero charges every swap the full fee, which is the conservative direction.
 - **Not audited or deployed.**
