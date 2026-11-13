@@ -31,6 +31,10 @@
     "file": "Flow.json",
     "testnetOnly": false
   },
+  "Vent": {
+    "file": "Vent.json",
+    "testnetOnly": false
+  },
   "TestnetToken": {
     "file": "TestnetToken.json",
     "testnetOnly": true

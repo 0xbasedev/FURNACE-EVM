@@ -10,6 +10,8 @@ import {ForgeView} from "../src/forge/ForgeView.sol";
 import {FurnaceTestnet} from "../script/DeployTestnet.s.sol";
 import {TestnetToken, TestnetValuation} from "../script/testnet/TestnetStandIns.sol";
 import {EmberPair} from "../src/pairs/EmberPair.sol";
+import {Vent} from "../src/vent/Vent.sol";
+import {Mantle} from "../src/Mantle.sol";
 
 using ForgeView for ForgePool;
 
@@ -47,7 +49,7 @@ contract DeployTestnetTest is Test, FurnaceTestnet {
         assertEq(address(d.stake[2]), address(d.ember), "pool 2 stakes EMBER itself");
         for (uint256 i; i < 4; ++i) {
             assertEq(d.pools[i].DEEDS(), operator, "the Deed slot is the operator's");
-            assertEq(d.pools[i].FEE_COLLECTOR(), operator);
+            assertEq(d.pools[i].FEE_COLLECTOR(), address(d.vent), "the Vent collects every pool's fees");
         }
         assertEq(d.mantle.KINDLING(), operator);
         assertEq(d.mantle.TREASURY(), operator);
@@ -62,7 +64,7 @@ contract DeployTestnetTest is Test, FurnaceTestnet {
             assertEq(address(d.pairs[i]), pl.pair[i], "at the predicted address");
             assertEq(address(d.pairs[i].EMBER()), address(d.ember));
             assertEq(d.pairs[i].INITIALIZER(), operator, "the Kindling slot initializes");
-            assertEq(d.pairs[i].FEE_ROUTER(), operator, "the Vent slot collects");
+            assertEq(d.pairs[i].FEE_ROUTER(), address(d.vent), "the Vent collects every pair's fees");
         }
         assertEq(address(d.pairs[0].QUOTE()), address(d.stake[3]), "BlastPool quotes the USDC that pool 3 stakes");
         assertEq(TestnetToken(address(d.pairs[1].QUOTE())).decimals(), 18, "SmelterPool quotes tWETH");
@@ -87,6 +89,46 @@ contract DeployTestnetTest is Test, FurnaceTestnet {
             assertEq(d.pools[i].IGNITION(), operator, "Ignition grants head starts in every pool");
         }
         assertEq(address(d.flow.REBATES()), address(d.rebates));
+        assertEq(uint8(d.mantle.registrarCategory(address(d.vent))), uint8(Mantle.BurnCategory.Protocol), "the Vent's burns are registered");
+        assertEq(address(d.vent.PAIR_0()), address(d.pairs[0]));
+        assertEq(address(d.vent.POOL_3()), address(d.pools[3]));
+        assertEq(d.vent.TREASURY(), operator, "the operator stands in for every recipient");
+        assertEq(d.vent.COMPOUNDER(), operator);
+    }
+
+    /// The Vent (ADR 0020) on the real pools and pairs: the smoke run's fees are collected; once the
+    /// TWAP has matured and the 24 h clock has run, the burn lane buys EMBER back and burns it for
+    /// Ashfall credit. An emergency exit never touches it.
+    function test_theVentBuysBackAndBurns() public {
+        Deployment memory d = _deployAs(operator, operator, "1");
+        vm.startPrank(operator);
+        uint256[4] memory ids = _smoke(d, operator);
+        vm.stopPrank();
+        Vent.Lane memory l = d.vent.lane(0);
+        assertGt(l.burnQuote, 0, "the smoke run's fees wait in BlastPool's burn lane");
+        assertGt(d.vent.totalBurned(), 0, "EMBER-side shares burned at once");
+        assertGt(d.vent.owed(Vent.Recipient.Treasury, d.pairQuote[0]), 0);
+        // The smoke run's own vent deferred: a fresh pair has no 30-minute TWAP.
+        uint256 supply = IERC20(address(d.ember)).totalSupply();
+        vm.warp(block.timestamp + P.VENT_MAX_WAIT);
+        for (uint256 k; k < 8; ++k) {
+            vm.warp(block.timestamp + 300);
+            d.pairs[0].checkpoint();
+        }
+        uint256 credits = d.mantle.creditsOf(d.mantle.epochAt(block.timestamp));
+        (Vent.Deferral r, uint256 quoteIn, uint256 out) = d.vent.vent(0);
+        assertEq(uint256(r), uint256(Vent.Deferral.None), "a buyback");
+        assertGt(quoteIn, 0);
+        assertEq(IERC20(address(d.ember)).totalSupply(), supply - out, "the bought EMBER is burned");
+        assertEq(d.mantle.creditsOf(d.mantle.epochAt(block.timestamp)), credits + (out * P.RECYCLE_PROTOCOL_BURN_PCT) / 100);
+        // The Treasury's share reaches the operator standing in for it; the match reserve does not.
+        uint256 owed = d.vent.owed(Vent.Recipient.Treasury, d.pairQuote[0]);
+        uint256 before = d.pairQuote[0].balanceOf(operator);
+        d.vent.release(Vent.Recipient.Treasury, d.pairQuote[0]);
+        assertEq(d.pairQuote[0].balanceOf(operator), before + owed);
+        // Principal exits never wait on the Vent.
+        vm.prank(operator);
+        d.pools[3].emergencyExit(ids[3]);
     }
 
     /// Salts bind the deployer and the chain: another deployer, or a new salt version, gets a fresh
@@ -171,6 +213,12 @@ contract DeployTestnetTest is Test, FurnaceTestnet {
         d.pools[1].open(1e18);
         vm.stopPrank();
         assertEq(ids[0], 0);
+
+        // The Vent works around the missing pairs: pool 2's EMBER fees burn, while pool 3's
+        // USDC (BlastPool's quote) and the LP pools wait until the pairs exist.
+        d.vent.collectAll();
+        assertGt(d.vent.totalBurned(), 0, "pool 2's EMBER fees burned");
+        assertGt(d.pools[3].feesOwed(0), 0, "pool 3's fees wait in the pool");
 
         vm.warp(d.start + P.EPOCH_SECONDS);
         _settle(d, 0);

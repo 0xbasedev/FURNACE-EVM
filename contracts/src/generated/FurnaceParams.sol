@@ -158,6 +158,27 @@ library FurnaceParams {
     uint256 internal constant FLOW_REBATE_TIER_0_PCT = 25; // eternal: % of the protocol swap share
     uint256 internal constant FLOW_REBATE_TIER_1_PCT = 50; // bedrock: % of the protocol swap share
 
+    // ── The Vent: fee lanes, the protected buyback, its window (spec v5.5 §13; ADR 0020) ──
+    uint256 internal constant VENT_BURN_PCT = 40; // standard Forge fees: burn lane
+    uint256 internal constant VENT_LIQUIDITY_PCT = 40; // match reserve: EMBER burned, quote held
+    uint256 internal constant VENT_HEARTH_PCT = 10; // owed in kind to the Hearth
+    uint256 internal constant VENT_TREASURY_PCT = 10; // owed in kind to the Treasury
+    uint256 internal constant EMERGENCY_BURN_PCT = 50; // emergency-exit fees
+    uint256 internal constant EMERGENCY_LIQUIDITY_PCT = 25;
+    uint256 internal constant EMERGENCY_STAKERS_PCT = 25; // owed in kind to the stakers' distributor [P]
+    uint256 internal constant DEED_FEE_BURN_PCT = 50; // Deed market fees
+    uint256 internal constant DEED_FEE_LIQUIDITY_PCT = 50;
+    uint256 internal constant VENT_BAND_BPS = 200; // spot within this of the TWAP
+    uint256 internal constant VENT_SLIPPAGE_BPS = 100; // minimum out: the TWAP value less this, fees included
+    uint256 internal constant VENT_CHUNK_BPS = 50; // 0.5% of the current quote reserve per call
+    uint256 internal constant VENT_PRICE_IMPACT_BPS = 300; // implied by the chunk and the slippage floor
+    uint256 internal constant VENT_WINDOW_SECONDS = 1800; // aligned windows [P]
+    uint256 internal constant VENT_WINDOW_MAX_BPS = 50; // of the window's fixed starting quote reserve
+    uint256 internal constant VENT_ORACLE_MAX_AGE = 3600; // a longer TWAP span is stale: defer [P]
+    uint256 internal constant VENT_MIN_BATCH_USD = 5000; // whole dollars, in a USD-stablecoin quote only [P]
+    uint256 internal constant VENT_MAX_WAIT = 86400; // 24 h
+    uint256 internal constant VENT_ALERT_AFTER = 259200; // 72 h: an alert, never a weaker guard
+
     // ── Deterministic deployment registry (CREATE3). PROVISIONAL while the deployer is 0x1111111111111111111111111111111111111111 ──
     //    Only MINED entries become constants; unmined modules are constructor/initializer inputs.
     address internal constant CREATEX = 0xba5Ed099633D3B313e4D5F7bdc1305d3c28ba5Ed;
