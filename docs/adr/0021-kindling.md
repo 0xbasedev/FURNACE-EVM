@@ -141,7 +141,16 @@ Status: accepted for this repository. Not audited, not deployed.
   - default mode: 52 transactions, 89.4M gas;
   - real Kindling mode: 29 transactions, 90.3M gas.
   - Each costs about 0.0018 zkLTC at 0.02 gwei, and the largest transaction is a ForgePool deployment at 12.48M.
-- **Mutations:** see the PR. Planted bugs ran in a separate worktree, so the main tree never held one.
+- **`pnpm check`:** 396/396 Forge tests in a clean worktree.
+- **Mutations:** 51 planted bugs, run in a separate worktree so the main tree never held one. **All 51 are caught**: 30 by the replay and 21 by unit tests, with no new test needed for any. The boundary, minimum and taxing-quote tests above were written before the pass, for the mutants that usually slip through. The 51 cover:
+  - the window's edges, the $1 minimum, the fee's rounding, both caps (one unit slack and one unit strict), top-ups, the totals, the exact pull and the booking;
+  - the cancellation's rounding, gate, zero amount and base;
+  - settlement's timing, deadline, minimum and single use, the venue check, the seed and quote checks, the LP split, the sink transfer, and the bounty's base and recipient;
+  - failure at the minimum, before the timeout and before the deadline;
+  - refunds twice, unmarked or without the fee;
+  - materialization twice, the entitlement's rounding, the sweep and its destination;
+  - the venue's supply, stake-token and initializer checks, and both views;
+  - the escrow's caller check, every ledger cap, its state moves, the single fee release and the refund's fee ledger.
 
 ## Consequences
 
