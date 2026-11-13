@@ -59,10 +59,12 @@ contract ForgeHandler is Test {
         }
         firstOpen = block.timestamp;
         compounder = pool_.COMPOUNDER();
-        token.mint(compounder, 1e30);
-        minted += 1e30;
-        vm.prank(compounder);
-        token.approve(address(pool), type(uint256).max);
+        if (compounder != address(0)) {
+            token.mint(compounder, 1e30);
+            minted += 1e30;
+            vm.prank(compounder);
+            token.approve(address(pool), type(uint256).max);
+        }
     }
 
     function idCount() external view returns (uint256) {
@@ -260,7 +262,7 @@ contract ForgeHandler is Test {
 
     /// The compounder returns earned LP to a lot: usually a used slot, sometimes any slot.
     function addToLot(uint256 seed, uint256 slot, uint256 amount) external {
-        if (ids.length == 0) return;
+        if (ids.length == 0 || compounder == address(0)) return;
         uint256 id = ids[seed % ids.length];
         uint32 used = pool.positionOf(id).usedMask;
         if (slot % 4 != 0 && used != 0) {
@@ -324,7 +326,7 @@ contract ForgeHandler is Test {
 
     function userBalances() external view returns (uint256 total) {
         for (uint256 i; i < 3; ++i) total += token.balanceOf(users[i]);
-        total += token.balanceOf(compounder);
+        if (compounder != address(0)) total += token.balanceOf(compounder);
     }
 }
 

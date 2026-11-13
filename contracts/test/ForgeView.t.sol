@@ -18,8 +18,9 @@ using ForgeView for ForgePool;
 /// @dev The pool's own storage, returned by Solidity's accessors, and the views ForgePool
 ///      used to define itself (before ADR 0010): the reference ForgeView must reproduce.
 contract ForgePoolViewHarness is ForgePool {
+    /// A compounder, so the handler's source-lot additions run through the decoding check too.
     constructor(IERC20 token, address collector, address boost, address deeds)
-        ForgePool(token, true, collector, boost, deeds, address(0), address(0))
+        ForgePool(token, true, collector, boost, deeds, address(0), address(0xC0FFEE))
     {}
 
     function rawPosition(uint256 id) external view returns (Position memory) {
