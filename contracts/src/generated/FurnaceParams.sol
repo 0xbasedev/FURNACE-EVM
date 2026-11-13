@@ -61,6 +61,7 @@ library FurnaceParams {
     uint256 internal constant MILESTONE_4_T3 = 31536000000000000000000000000000000;
     uint256 internal constant MILESTONE_4_T5 = 994519296000000000000000000000000000000000;
     uint256 internal constant DEED_HEAT_CARRY_PCT = 80;
+    uint256 internal constant FIRST_FLAME_AGE = 1296000; // First Flame: 15 days added to a founder's financial Heat age (ADR 0018)
 
     // ── Forge custody: fees, cooling plans, emergency exit (spec v5.5 §4, §11) ──
     uint256 internal constant FORGE_DEPOSIT_FEE_PCT = 1;

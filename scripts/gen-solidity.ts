@@ -124,6 +124,11 @@ milestones.forEach((m, i) => {
   c('uint256', `MILESTONE_${i}_T5`, isqrt(x ** 5n * RAY * RAY / AGE_CAP));
 });
 c('uint256', 'DEED_HEAT_CARRY_PCT', f.deeds.heatCarryPct);
+// First Flame (spec v5.5 §2; ADR 0018): a founder position's financial Heat reads this much older.
+// The owner's reading: an offset on the real age (v5.4's "accumulates from day 15"), not a max.
+if (!cfg.ignition.founderBadge.enabled) throw new Error('First Flame is disabled: ForgePool applies it');
+c('uint256', 'FIRST_FLAME_AGE', BigInt(cfg.ignition.founderBadge.phantomAgeBonusDays) * DAY_N,
+  `First Flame: ${cfg.ignition.founderBadge.phantomAgeBonusDays} days added to a founder's financial Heat age (ADR 0018)`);
 
 section('Forge custody: fees, cooling plans, emergency exit (spec v5.5 §4, §11)');
 // ForgePool implements exactly these policies; fail generation if the config selects another.

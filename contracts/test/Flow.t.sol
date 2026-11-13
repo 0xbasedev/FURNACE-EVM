@@ -58,8 +58,8 @@ abstract contract FlowRig is Test {
         address flowAt = vm.computeCreateAddress(address(this), n + 4);
         blast = new EmberPair("B", "B", IERC20(address(ember)), IERC20(address(usdc)), operator, flowAt, operator, operator);
         smelter = new EmberPair("S", "S", IERC20(address(ember)), IERC20(address(weth)), operator, flowAt, operator, operator);
-        pool0 = new ForgePool(IERC20(address(blast)), true, operator, makeAddr("boost"), deeds, flowAt, address(0));
-        pool1 = new ForgePool(IERC20(address(smelter)), true, operator, makeAddr("boost"), deeds, flowAt, address(0));
+        pool0 = new ForgePool(IERC20(address(blast)), true, operator, makeAddr("boost"), deeds, flowAt, address(0), address(0), address(0));
+        pool1 = new ForgePool(IERC20(address(smelter)), true, operator, makeAddr("boost"), deeds, flowAt, address(0), address(0), address(0));
         IFeeRebate src = address(rebateSource) == address(1) ? IFeeRebate(address(rebates)) : rebateSource;
         flow = new Flow(IERC20(address(ember)), blast, smelter, pool0, pool1, src, compounder_);
         assertEq(address(flow), flowAt, "Flow at its predicted address");
@@ -123,7 +123,7 @@ contract FlowTest is FlowRig {
         new Flow(IERC20(address(ember)), blast, smelter, ForgePool(address(0)), pool1, rebates, compounder);
         // Only an LP pool may name a Flow: the exemption is for LP formation.
         vm.expectRevert(ForgePoolBase.FlowNeedsLp.selector);
-        new ForgePool(IERC20(address(ember)), false, operator, makeAddr("boost"), deeds, address(flow), address(0));
+        new ForgePool(IERC20(address(ember)), false, operator, makeAddr("boost"), deeds, address(flow), address(0), address(0), address(0));
         assertEq(pool0.FLOW(), address(flow));
     }
 
@@ -288,7 +288,7 @@ contract FlowTest is FlowRig {
         vm.expectRevert(ForgePoolBase.NotFlow.selector);
         pool0.depositFor(1, user, 1e18);
         vm.stopPrank();
-        ForgePool noFlow = new ForgePool(IERC20(address(blast)), true, operator, makeAddr("boost"), deeds, address(0), address(0));
+        ForgePool noFlow = new ForgePool(IERC20(address(blast)), true, operator, makeAddr("boost"), deeds, address(0), address(0), address(0), address(0));
         vm.prank(address(0));
         vm.expectRevert(ForgePoolBase.NotFlow.selector);
         noFlow.openFor(user, 1e18);
@@ -361,7 +361,7 @@ contract FlowTest is FlowRig {
         x.q = new MockDecimalsERC20("Q", "Q", uint8(vm.parseJsonUint(json, string.concat(base, ".quoteDecimals"))));
         address flowAt = vm.computeCreateAddress(address(this), vm.getNonce(address(this)) + 2);
         x.p = new EmberPair("P", "P", IERC20(address(ember)), IERC20(address(x.q)), operator, flowAt, operator, operator);
-        ForgePool pool = new ForgePool(IERC20(address(x.p)), true, operator, makeAddr("boost"), deeds, flowAt, address(0));
+        ForgePool pool = new ForgePool(IERC20(address(x.p)), true, operator, makeAddr("boost"), deeds, flowAt, address(0), address(0), address(0));
         x.f = new Flow(IERC20(address(ember)), x.p, smelter, pool, pool1, rebates, compounder);
         assertEq(address(x.f), flowAt);
         x.z = makeAddr(string.concat("zapper", base));

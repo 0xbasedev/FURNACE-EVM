@@ -14,7 +14,9 @@ import {Boost, IValuation, IPyreLedger} from "../src/forge/Boost.sol";
 import {ForgeLens} from "../src/forge/ForgeLens.sol";
 import {EmberPair} from "../src/pairs/EmberPair.sol";
 import {Flow, IFeeRebate} from "../src/flow/Flow.sol";
-import {TestnetToken, TestnetValuation, TestnetPyreLedger, TestnetFeeRebate} from "./testnet/TestnetStandIns.sol";
+import {
+    TestnetToken, TestnetValuation, TestnetPyreLedger, TestnetFeeRebate, TestnetFounders
+} from "./testnet/TestnetStandIns.sol";
 
 /// @dev CreateX (https://github.com/pcaversaccio/createx), at the same address on every chain.
 interface ICreateX {
@@ -63,6 +65,7 @@ abstract contract FurnaceTestnet {
         bool pairsLive;
         Flow flow; // at its predicted address; the pairs and pools 0 and 1 name it
         TestnetFeeRebate rebates;
+        TestnetFounders founders;
         TestnetValuation valuation;
         TestnetPyreLedger pyre;
         ForgeLens lens;
@@ -152,6 +155,7 @@ abstract contract FurnaceTestnet {
         d.valuation = new TestnetValuation(o.operator);
         d.pyre = new TestnetPyreLedger(o.operator);
         d.rebates = new TestnetFeeRebate(o.operator);
+        d.founders = new TestnetFounders(o.operator);
         d.pairQuote[0] = o.usdc != address(0)
             ? IERC20(o.usdc)
             : IERC20(address(new TestnetToken("Furnace Testnet USDC (stand-in)", "tUSDC", 6, 1_000_000e6)));
@@ -233,7 +237,12 @@ abstract contract FurnaceTestnet {
             // unbuilt compounder, as it does for Flow's.
             address flow = isLp[i] ? pl.flow : address(0);
             address compounder = isLp[i] ? d.operator : address(0);
-            bytes memory args = abi.encode(d.stake[i], isLp[i], d.operator, pl.boost, d.operator, flow, compounder);
+            // Kindling's LP is EMBER/USDC, pool 0's receipt (spec v5.5 §3); the operator stands in.
+            // Every pool reads the same founder record for First Flame (ADR 0018).
+            address kindling = i == 0 ? d.operator : address(0);
+            bytes memory args = abi.encode(
+                d.stake[i], isLp[i], d.operator, pl.boost, d.operator, flow, compounder, kindling, address(d.founders)
+            );
             d.pools[i] =
                 ForgePool(_create3(pl, _poolLabel(i), pl.pool[i], abi.encodePacked(type(ForgePool).creationCode, args)));
         }
@@ -279,6 +288,8 @@ abstract contract FurnaceTestnet {
             if (p.ANNEX().code.length == 0) revert Miswired("pool annex");
             if (p.FLOW() != (p.IS_LP() ? address(d.flow) : address(0))) revert Miswired("pool FLOW");
             if (p.COMPOUNDER() != (p.IS_LP() ? d.operator : address(0))) revert Miswired("pool COMPOUNDER");
+            if (p.KINDLING() != (i == 0 ? d.operator : address(0))) revert Miswired("pool KINDLING");
+            if (p.FOUNDERS() != address(d.founders)) revert Miswired("pool FOUNDERS");
         }
         Flow f = d.flow;
         if (address(f.PAIR0()) != address(d.pairs[0]) || address(f.PAIR1()) != address(d.pairs[1])) revert Miswired("Flow pairs");
@@ -319,6 +330,11 @@ abstract contract FurnaceTestnet {
                 // The operator, standing in for the compounder, returns 1 LP to that position's
                 // first lot at the lot's own age, fee-free (ADR 0017).
                 d.pools[0].addToLot(ids[0], 0, 1e18);
+                // The operator, standing in for Kindling, opens a contributor position for itself at
+                // the standard fee, then marks itself a founder and refreshes First Flame (ADR 0018).
+                d.pools[0].openKindling(actor, 10e18);
+                d.founders.setFounder(actor, true);
+                d.pools[0].refreshFounder(ids[0]);
             }
             d.boost.deposit(d.pairsLive ? 0 : 2, d.pairsLive ? ids[0] : ids[2], 100e18); // a Capstone
         }
@@ -385,6 +401,7 @@ contract DeployTestnet is Script, FurnaceTestnet {
         }
         console2.log("Flow             ", address(d.flow));
         console2.log("TestnetFeeRebate ", address(d.rebates));
+        console2.log("TestnetFounders  ", address(d.founders));
         console2.log("ForgeLens        ", address(d.lens));
         console2.log("TestnetValuation ", address(d.valuation));
         console2.log("TestnetPyreLedger", address(d.pyre));
@@ -410,6 +427,7 @@ contract DeployTestnet is Script, FurnaceTestnet {
         vm.serializeBool(k, "pairsLive", d.pairsLive);
         vm.serializeAddress(k, "Flow", address(d.flow));
         vm.serializeAddress(k, "TestnetFeeRebate", address(d.rebates));
+        vm.serializeAddress(k, "TestnetFounders", address(d.founders));
         for (uint256 i; i < 4; ++i) {
             vm.serializeAddress(k, string.concat("ForgePool", vm.toString(i)), address(d.pools[i]));
             vm.serializeAddress(k, string.concat("ForgePool", vm.toString(i), "Annex"), d.pools[i].ANNEX());

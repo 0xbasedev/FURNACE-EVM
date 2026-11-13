@@ -6,9 +6,10 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ForgePool} from "../src/forge/ForgePool.sol";
 import {ForgePoolBase} from "../src/forge/ForgePoolBase.sol";
 import {ForgeView} from "../src/forge/ForgeView.sol";
-import {Lot, Record, Seal, SealStatus} from "../src/forge/ForgeMeasures.sol";
+import {Lot, Record, Seal, SealStatus, ForgeMeasures} from "../src/forge/ForgeMeasures.sol";
 import {FurnaceParams as P} from "../src/generated/FurnaceParams.sol";
 import {MockERC20} from "./utils/MockERC20.sol";
+import {MockFounders} from "./utils/MockFounders.sol";
 
 using ForgeView for ForgePool;
 
@@ -44,6 +45,15 @@ contract ForgeHandler is Test {
     address public compounder;
     bool public addBroken;
     uint256 public adds;
+    /// First Flame and Kindling (ADR 0018): the founder record, Kindling, and a ghost log of each
+    /// position's founder flag changes.
+    MockFounders public founders;
+    address public kindling;
+    mapping(uint256 id => uint256[]) internal founderTimes;
+    mapping(uint256 id => bool[]) internal founderFlags;
+    mapping(uint256 id => bool) internal lastFounder;
+    uint256 public refreshes;
+    uint256 public kindled;
 
     constructor(ForgePool pool_, MockERC20 token_, address collector_) {
         (pool, token, collector) = (pool_, token_, collector_);
@@ -58,6 +68,14 @@ contract ForgeHandler is Test {
             ids.push(pool.open(1e18 * (i + 1)));
         }
         firstOpen = block.timestamp;
+        founders = MockFounders(pool_.FOUNDERS());
+        kindling = pool_.KINDLING();
+        if (kindling != address(0)) {
+            token.mint(kindling, 1e30);
+            minted += 1e30;
+            vm.prank(kindling);
+            token.approve(address(pool), type(uint256).max);
+        }
         compounder = pool_.COMPOUNDER();
         if (compounder != address(0)) {
             token.mint(compounder, 1e30);
@@ -260,6 +278,42 @@ contract ForgeHandler is Test {
         return false;
     }
 
+    /// The founder record changes its answer for the owner, then anyone refreshes the position.
+    function refreshFounder(uint256 seed, uint256 coin) external {
+        if (ids.length == 0 || address(founders) == address(0)) return;
+        uint256 id = ids[seed % ids.length];
+        founders.set(pool.positionOf(id).owner, coin % 3 != 0);
+        try pool.refreshFounder(id) {
+            ++refreshes;
+        } catch {}
+        _after();
+    }
+
+    /// Kindling opens a contributor's position at the standard fee.
+    function openKindling(uint256 who, uint256 amount) external {
+        if (ids.length >= 6 || kindling == address(0)) return;
+        vm.prank(kindling);
+        try pool.openKindling(users[who % 3], bound(amount, 1e15, 1e24)) returns (uint256 id) {
+            ids.push(id);
+            ++kindled;
+        } catch {}
+        _after();
+    }
+
+    function founderAt(uint256 id, uint256 t) external view returns (bool flag) {
+        uint256[] storage times = founderTimes[id];
+        for (uint256 k; k < times.length && times[k] <= t; ++k) flag = founderFlags[id][k];
+    }
+
+    /// Whether the founder flag changed strictly inside (a, b).
+    function founderChangedWithin(uint256 id, uint256 a, uint256 b) external view returns (bool) {
+        uint256[] storage times = founderTimes[id];
+        for (uint256 k; k < times.length; ++k) {
+            if (times[k] > a && times[k] < b) return true;
+        }
+        return false;
+    }
+
     /// The compounder returns earned LP to a lot: usually a used slot, sometimes any slot.
     function addToLot(uint256 seed, uint256 slot, uint256 amount) external {
         if (ids.length == 0 || compounder == address(0)) return;
@@ -312,6 +366,12 @@ contract ForgeHandler is Test {
                 pool.epochMeasure(ids[i], 0, pool.positionOf(ids[i]).lastCheckpoint);
             if (s < lastS[ids[i]] || w < lastW[ids[i]] || ss > s || sw > w) monotoneBroken = true;
             (lastS[ids[i]], lastW[ids[i]]) = (s, w);
+            bool founder = pool.positionOf(ids[i]).founder; // every change happens at now
+            if (founder != lastFounder[ids[i]]) {
+                founderTimes[ids[i]].push(block.timestamp);
+                founderFlags[ids[i]].push(founder);
+                lastFounder[ids[i]] = founder;
+            }
             uint256 bonus = pool.positionOf(ids[i]).ordinaryBonus; // every change happens at now
             if (bonus != lastBonus[ids[i]]) {
                 bonusTimes[ids[i]].push(block.timestamp);
@@ -327,6 +387,7 @@ contract ForgeHandler is Test {
     function userBalances() external view returns (uint256 total) {
         for (uint256 i; i < 3; ++i) total += token.balanceOf(users[i]);
         if (compounder != address(0)) total += token.balanceOf(compounder);
+        if (kindling != address(0)) total += token.balanceOf(kindling);
     }
 }
 
@@ -344,7 +405,17 @@ contract ForgePoolInvariantTest is Test {
     function setUp() public {
         vm.warp(1_700_000_000);
         token = new MockERC20("Receipt", "RCPT");
-        pool = new ForgePool(IERC20(address(token)), true, collector, boost, makeAddr("deeds"), address(0), makeAddr("compounder"));
+        pool = new ForgePool(
+            IERC20(address(token)),
+            true,
+            collector,
+            boost,
+            makeAddr("deeds"),
+            address(0),
+            makeAddr("compounder"),
+            makeAddr("kindling"),
+            address(new MockFounders())
+        );
         handler = new ForgeHandler(pool, token, collector);
         targetContract(address(handler));
     }
@@ -441,11 +512,12 @@ contract ForgePoolInvariantTest is Test {
                 for (uint256 k; k < head.records; ++k) {
                     Record memory r = pool.historyAt(id, j, k);
                     if (r.amount == 0) continue;
-                    assertLe(r.streak, r.since, "anchor at or before the segment");
+                    uint256 streak = r.streak & (ForgeMeasures.FOUNDER_FLAG - 1); // First Flame rides bit 39
+                    assertLe(streak, r.since, "anchor at or before the segment");
                     (uint256 nextSince, uint256 nextStreak) = k + 1 < head.records
-                        ? (pool.historyAt(id, j, k + 1).since, pool.historyAt(id, j, k + 1).streak)
+                        ? (pool.historyAt(id, j, k + 1).since, pool.historyAt(id, j, k + 1).streak & (ForgeMeasures.FOUNDER_FLAG - 1))
                         : (head.since, p.streakStart);
-                    if (nextStreak != r.streak && p.closedAt == 0) {
+                    if (nextStreak != streak && p.closedAt == 0) {
                         assertGe(nextStreak, nextSince, "no Streak reset inside an active segment");
                     }
                 }
@@ -456,6 +528,28 @@ contract ForgePoolInvariantTest is Test {
     /// Each active record segment has one ordinary bonus (ADR 0008): the one in effect when it
     /// began, with no change strictly inside it. An open active head began at or after the
     /// last change, so the current bonus is its own.
+    /// First Flame (ADR 0018): each record carries the founder flag of its start, and the flag never
+    /// changes inside a record segment or under an active head.
+    function invariant_founderAnchorsAlignWithRecords() public view {
+        for (uint256 i; i < handler.idCount(); ++i) {
+            uint256 id = handler.ids(i);
+            ForgePoolBase.Position memory p = pool.positionOf(id);
+            for (uint256 j; j < 32; ++j) {
+                Lot memory head = pool.lotOf(id, j);
+                if (head.amount != 0 && p.closedAt == 0) {
+                    assertFalse(handler.founderChangedWithin(id, head.since, type(uint256).max), "founder changed under a head");
+                }
+                for (uint256 k; k < head.records; ++k) {
+                    Record memory r = pool.historyAt(id, j, k);
+                    if (r.amount == 0) continue;
+                    uint256 end = k + 1 < head.records ? pool.historyAt(id, j, k + 1).since : head.since;
+                    assertEq((r.streak & ForgeMeasures.FOUNDER_FLAG) != 0, handler.founderAt(id, r.since), "record carries the flag of its start");
+                    assertFalse(handler.founderChangedWithin(id, r.since, end), "no founder change inside a segment");
+                }
+            }
+        }
+    }
+
     function invariant_bonusAnchorsAlignWithRecords() public view {
         for (uint256 i; i < handler.idCount(); ++i) {
             uint256 id = handler.ids(i);

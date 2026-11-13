@@ -52,8 +52,12 @@ import {ForgePoolAnnex} from "./ForgePoolAnnex.sol";
 ///         Source-lot additions (ADR 0017): the immutable COMPOUNDER returns internally earned LP
 ///         to an active lot at that lot's own age, with no fee and no new slot.
 ///
-///         Annex (ADR 0012): Seals, BOOST's bonus, Deed listing and settlement, fee collection
-///         and source-lot additions run in ForgePoolAnnex, which this pool deploys at construction and calls
+///         Kindling and First Flame (ADR 0018): the immutable KINDLING opens contributors'
+///         positions at the standard fee; a founder record (FOUNDERS) gives its wallets' positions
+///         a financial-Heat offset, carried in each record's anchor and never in a lot's age.
+///
+///         Annex (ADR 0012): Seals, BOOST's bonus, Deed listing and settlement, fee collection,
+///         source-lot additions and First Flame's refresh run in ForgePoolAnnex, which this pool deploys at construction and calls
 ///         by DELEGATECALL. Principal paths, exits and views stay here.
 contract ForgePool is ForgePoolBase {
     using SafeERC20 for IERC20;
@@ -69,9 +73,13 @@ contract ForgePool is ForgePoolBase {
         address boost,
         address deeds,
         address flow,
-        address compounder
-    ) ForgePoolBase(stakeToken, isLp, feeCollector, boost, deeds, flow, compounder) {
-        ANNEX = address(new ForgePoolAnnex(stakeToken, isLp, feeCollector, boost, deeds, flow, compounder));
+        address compounder,
+        address kindling,
+        address founders
+    ) ForgePoolBase(stakeToken, isLp, feeCollector, boost, deeds, flow, compounder, kindling, founders) {
+        ANNEX = address(
+            new ForgePoolAnnex(stakeToken, isLp, feeCollector, boost, deeds, flow, compounder, kindling, founders)
+        );
     }
 
     // ── principal paths ───────────────────────────────────────────────────
@@ -94,6 +102,15 @@ contract ForgePool is ForgePoolBase {
         if (msg.sender != FLOW || FLOW == address(0)) revert NotFlow();
         if (owner == address(0)) revert ZeroAddress();
         return _open(owner, amount, true);
+    }
+
+    /// @notice KINDLING only: open a contributor's auto-staked position for `owner` with LP pulled
+    ///         from Kindling, at the standard 1% deposit fee (spec v5.5 §3, §78; ADR 0018). It starts
+    ///         like any position: age 0, a Streak from now, nothing backdated.
+    function openKindling(address owner, uint256 amount) external nonReentrant returns (uint256 id) {
+        if (msg.sender != KINDLING || KINDLING == address(0)) revert NotKindling();
+        if (owner == address(0)) revert ZeroAddress();
+        return _open(owner, amount, false);
     }
 
     /// @notice FLOW only: add a fee-free lot of same-route LP to `owner`'s own position; the
@@ -284,6 +301,11 @@ contract ForgePool is ForgePoolBase {
 
     /// @notice See ForgePoolAnnex.addToLot.
     function addToLot(uint256, uint256, uint256) external {
+        _annex();
+    }
+
+    /// @notice See ForgePoolAnnex.refreshFounder.
+    function refreshFounder(uint256) external returns (bool) {
         _annex();
     }
 

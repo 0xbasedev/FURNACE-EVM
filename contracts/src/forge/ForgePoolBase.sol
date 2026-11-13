@@ -10,6 +10,11 @@ import {FurnaceParams as P} from "../generated/FurnaceParams.sol";
 import {LapseHeap} from "./LapseHeap.sol";
 import {Lot, Record, Seal, SealStatus, SlotMeasure, ForgeMeasures} from "./ForgeMeasures.sol";
 
+/// @notice The founder record First Flame reads (spec v5.5 §2): Ignition's wallet-bound badge.
+interface IFounders {
+    function isFounder(address wallet) external view returns (bool);
+}
+
 /// @title ForgePoolBase
 /// @notice ForgePool's storage, configuration, events, errors and internal logic, shared by
 ///         ForgePool and the ForgePoolAnnex it runs by DELEGATECALL (ADR 0012). The storage
@@ -82,10 +87,11 @@ abstract contract ForgePoolBase is ReentrancyGuardTransient {
         uint40 closedAt; // emergency exit; measures stop here, records stay
         uint8 sealCount; // the latest Seal is `_seals[id][sealCount]`
         uint32 transfers; // completed Deed sales: entries in `_owners[id]`
-        // Wallet-bound phantom terms (spec §2), set by the Kindling hooks (not built); they never
-        // enter a lot's age (ADR 0011). Settlement clears the two flags, so the buyer's segments
-        // carry neither; the head start's amount stays, for the seller's records that do.
-        bool founder; // First Flame's 15-day floor applies
+        // Wallet-bound phantom terms (spec §2); they never enter a lot's age (ADR 0011). First Flame
+        // follows the owner's founder record through `refreshFounder` (ADR 0018); the head start is
+        // not built. Settlement clears the two flags, so the buyer's segments carry neither; the
+        // head start's amount stays, for the seller's records that do.
+        bool founder; // First Flame: financial Heat reads FIRST_FLAME_AGE older
         bool headStartActive; // the head start applies
         uint32 headStart; // the head start, in seconds of financial age
         uint40 lastTapAt; // the last Tap request (spec §9)
@@ -119,6 +125,12 @@ abstract contract ForgePoolBase is ReentrancyGuardTransient {
     ///         to its source lot at that lot's age (spec v5.5 §4, §7; ADR 0017). The same single
     ///         consumer Flow names for the Compound waiver. Zero on a single-asset pool.
     address public immutable COMPOUNDER;
+    /// @notice Kindling: the only caller of `openKindling`, which opens a contributor's auto-staked
+    ///         position at the standard deposit fee (spec v5.5 §3; ADR 0018). Zero on a single-asset pool.
+    address public immutable KINDLING;
+    /// @notice The founder record (Ignition's First Flame badge), read by `refreshFounder`. Zero:
+    ///         nobody holds First Flame in this pool (ADR 0018).
+    address public immutable FOUNDERS;
 
     uint256 public positionCount;
     /// @notice Principal that earns now. Lapsed slices not yet processed are still
@@ -153,6 +165,7 @@ abstract contract ForgePoolBase is ReentrancyGuardTransient {
     event ListingChanged(uint256 indexed id, uint32 listing);
     event DeedSettled(uint256 indexed id, address indexed seller, address indexed buyer);
     event AddedToLot(uint256 indexed id, uint256 slot, uint256 amount);
+    event FounderSet(uint256 indexed id, bool founder);
 
     error ZeroAddress();
     error UnknownPosition(uint256 id);
@@ -189,6 +202,8 @@ abstract contract ForgePoolBase is ReentrancyGuardTransient {
     error NotCompounder();
     error CompounderNeedsLp();
     error NotActiveLot(uint256 id, uint256 slot);
+    error NotKindling();
+    error KindlingNeedsLp();
     error Listed(uint256 id);
     error NotListed(uint256 id);
     error NoTap(uint256 id);
@@ -202,7 +217,9 @@ abstract contract ForgePoolBase is ReentrancyGuardTransient {
         address boost,
         address deeds,
         address flow,
-        address compounder
+        address compounder,
+        address kindling,
+        address founders
     ) {
         if (
             address(stakeToken) == address(0) || feeCollector == address(0) || boost == address(0)
@@ -210,6 +227,7 @@ abstract contract ForgePoolBase is ReentrancyGuardTransient {
         ) revert ZeroAddress();
         if (flow != address(0) && !isLp) revert FlowNeedsLp(); // the exemption is for LP formation
         if (compounder != address(0) && !isLp) revert CompounderNeedsLp(); // single assets pay liquid EMBER (§102)
+        if (kindling != address(0) && !isLp) revert KindlingNeedsLp(); // Kindling stakes EMBER/USDC LP (§63)
         if (P.MAX_LOTS_PER_POSITION != MAX_LOTS || P.WITHDRAW_TIER_COUNT != 5) revert ConfigMismatch();
         STAKE_TOKEN = stakeToken;
         IS_LP = isLp;
@@ -218,6 +236,8 @@ abstract contract ForgePoolBase is ReentrancyGuardTransient {
         DEEDS = deeds;
         FLOW = flow;
         COMPOUNDER = compounder;
+        KINDLING = kindling;
+        FOUNDERS = founders;
     }
 
     // ── internals ─────────────────────────────────────────────────────────
@@ -439,7 +459,7 @@ abstract contract ForgePoolBase is ReentrancyGuardTransient {
         next.seal = _tag(id, p, slot);
         if (p.historyMask & bit != 0 && head.since != next.since) {
             _history[id][slot][head.records] = Record(
-                head.since, head.amount, head.age, uint24(head.participated), head.seal, p.streakStart, p.ordinaryBonus
+                head.since, head.amount, head.age, uint24(head.participated), head.seal, _streakAnchor(p), p.ordinaryBonus
             );
             next.records = head.records + 1;
         }
@@ -609,7 +629,12 @@ abstract contract ForgePoolBase is ReentrancyGuardTransient {
     }
 
     function _anchor(Position storage p) internal view returns (uint256) {
-        return ForgeMeasures.anchorOf(p.streakStart, p.ordinaryBonus);
+        return ForgeMeasures.anchorOf(_streakAnchor(p), p.ordinaryBonus);
+    }
+
+    /// @dev The Streak start a record carries, with First Flame's flag while the owner holds it.
+    function _streakAnchor(Position storage p) internal view returns (uint40) {
+        return p.founder ? p.streakStart | uint40(ForgeMeasures.FOUNDER_FLAG) : p.streakStart;
     }
 
     /// @dev Freeze `take` of slot j at its current age; true if the lot keeps a remainder.

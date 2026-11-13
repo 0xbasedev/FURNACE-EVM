@@ -5,11 +5,12 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {FurnaceParams as P} from "../generated/FurnaceParams.sol";
 import {Lot, Seal, SealStatus} from "./ForgeMeasures.sol";
-import {ForgePoolBase} from "./ForgePoolBase.sol";
+import {ForgePoolBase, IFounders} from "./ForgePoolBase.sol";
 
 /// @title ForgePoolAnnex
 /// @notice ForgePool's cold paths (ADR 0012): Seals, BOOST's bonus, Deed listing and
-///         settlement, fee collection, and the compounder's source-lot additions (ADR 0017).
+///         settlement, fee collection, the compounder's source-lot additions (ADR 0017) and
+///         First Flame's refresh (ADR 0018).
 ///         Each ForgePool deploys its own annex with its own constructor arguments, so the
 ///         annex's immutables equal the pool's, and runs these functions by DELEGATECALL: in
 ///         the pool's storage, as the pool, for the pool's caller. Principal only ever arrives
@@ -26,8 +27,10 @@ contract ForgePoolAnnex is ForgePoolBase {
         address boost,
         address deeds,
         address flow,
-        address compounder
-    ) ForgePoolBase(stakeToken, isLp, feeCollector, boost, deeds, flow, compounder) {}
+        address compounder,
+        address kindling,
+        address founders
+    ) ForgePoolBase(stakeToken, isLp, feeCollector, boost, deeds, flow, compounder, kindling, founders) {}
 
     /// @notice Seal the position's current lots for `track`'s term (ADR 0006). Later
     ///         deposits never join; a pending cooling request pauses the Seal and extends
@@ -90,6 +93,30 @@ contract ForgePoolAnnex is ForgePoolBase {
         _increaseActive(amount, uint40(block.timestamp));
         emit AddedToLot(id, slot, amount);
         if (units != 0) _setBonus(id, p, units * custody / (custody + amount), type(uint256).max);
+    }
+
+    // ── First Flame (ADR 0018) ────────────────────────────────────────────
+
+    /// @notice Anyone: set the position's First Flame flag to its owner's founder record (spec v5.5
+    ///         §2). A founder's financial Heat reads FIRST_FLAME_AGE older in W and the sealed W;
+    ///         participation, the Ashfall clock and weight, Seal membership and lot ages never see it.
+    ///         Every active segment closes at now first, so each record has one founder state. A
+    ///         source that reverts or answers malformed counts as no founder. A Deed sale clears
+    ///         the flag; the buyer's own record applies once refreshed. Returns the flag.
+    function refreshFounder(uint256 id) external nonReentrant returns (bool founder) {
+        Position storage p = _touch(id);
+        if (p.closedAt != 0) revert Closed(id);
+        founder = _isFounder(p.owner);
+        if (founder == p.founder) return founder;
+        _rewriteActive(id, p, 0, 1, BOOST_RECORD_LIMIT);
+        p.founder = founder;
+        emit FounderSet(id, founder);
+    }
+
+    function _isFounder(address wallet) private view returns (bool) {
+        if (FOUNDERS == address(0)) return false;
+        (bool ok, bytes memory ret) = FOUNDERS.staticcall(abi.encodeCall(IFounders.isFounder, (wallet)));
+        return ok && ret.length == 32 && abi.decode(ret, (uint256)) == 1;
     }
 
     // ── Deeds (ADR 0011) ──────────────────────────────────────────────────

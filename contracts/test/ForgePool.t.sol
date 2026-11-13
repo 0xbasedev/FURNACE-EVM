@@ -12,6 +12,7 @@ import {HeatMath} from "../src/libraries/HeatMath.sol";
 import {FurnaceParams as P} from "../src/generated/FurnaceParams.sol";
 import {ForgeVectors} from "./utils/ForgeVectors.sol";
 import {MockERC20, FeeOnTransferERC20} from "./utils/MockERC20.sol";
+import {MockFounders} from "./utils/MockFounders.sol";
 
 using ForgeView for ForgePool;
 using ForgeView for ForgePoolHarness;
@@ -22,7 +23,7 @@ address constant HARNESS_COMPOUNDER = address(0xC0FFEE);
 
 contract ForgePoolHarness is ForgePool {
     constructor(IERC20 stakeToken, bool isLp, address feeCollector, address boost, address deeds)
-        ForgePool(stakeToken, isLp, feeCollector, boost, deeds, address(0), isLp ? HARNESS_COMPOUNDER : address(0))
+        ForgePool(stakeToken, isLp, feeCollector, boost, deeds, address(0), isLp ? HARNESS_COMPOUNDER : address(0), address(0), address(0))
     {}
 
     function setNextTicketIdForTest(uint256 id, uint32 value) external {
@@ -47,13 +48,28 @@ abstract contract ForgeFixture is ForgeVectors {
     address deeds = makeAddr("deeds");
     /// @dev The compounder of an LP pool (ADR 0017); a single-asset pool has none.
     address compounder = makeAddr("compounder");
+    /// @dev Kindling on an LP pool, and the founder record every pool reads (ADR 0018).
+    address kindling = makeAddr("kindling");
+    MockFounders founders;
 
     uint256 constant FUND = 1e30;
 
     function _deploy(bool lp) internal {
         token = new MockERC20("Receipt", "RCPT");
-        pool = new ForgePool(IERC20(address(token)), lp, collector, boost, deeds, address(0), lp ? compounder : address(0));
+        founders = new MockFounders();
+        pool = new ForgePool(
+            IERC20(address(token)),
+            lp,
+            collector,
+            boost,
+            deeds,
+            address(0),
+            lp ? compounder : address(0),
+            lp ? kindling : address(0),
+            address(founders)
+        );
         _fund(compounder);
+        _fund(kindling);
     }
 
     function _user(uint256 pos) internal pure returns (address) {
@@ -86,7 +102,9 @@ contract ForgePoolDifferentialTest is ForgeFixture {
         Unlist,
         Settle,
         Tap,
-        AddToLot
+        AddToLot,
+        OpenKindling,
+        RefreshFounder
     }
 
     /// @dev Wallets beyond the openers, which only buy Deeds (scripts/forge-scenarios.ts BUYERS).
@@ -150,10 +168,18 @@ contract ForgePoolDifferentialTest is ForgeFixture {
     function test_scenario_adds0() public { _replay("adds0"); }
     function test_scenario_adds1() public { _replay("adds1"); }
     function test_scenario_adds2() public { _replay("adds2"); }
+    function test_scenario_firstFlameHeat() public { _replay("firstFlameHeat"); }
+    function test_scenario_firstFlameRevokeAndDeed() public { _replay("firstFlameRevokeAndDeed"); }
+    function test_scenario_firstFlameSeal() public { _replay("firstFlameSeal"); }
+    function test_scenario_kindlingPositions() public { _replay("kindlingPositions"); }
+    function test_scenario_kindlingSingleAsset() public { _replay("kindlingSingleAsset"); }
+    function test_scenario_flame0() public { _replay("flame0"); }
+    function test_scenario_flame1() public { _replay("flame1"); }
+    function test_scenario_flame2() public { _replay("flame2"); }
 
     /// Every generated scenario has a test above; a new one fails this until added.
     function test_everyScenarioIsReplayed() public view {
-        assertEq(vm.parseJsonStringArray(forgeJson, ".names").length, 52, "add a test_scenario_* for each new scenario");
+        assertEq(vm.parseJsonStringArray(forgeJson, ".names").length, 60, "add a test_scenario_* for each new scenario");
     }
 
     function test_provisionalConstantsMatchModel() public {
@@ -180,7 +206,9 @@ contract ForgePoolDifferentialTest is ForgeFixture {
             vm.warp(time);
             string memory where = string.concat(name, " step ", vm.toString(i));
             // The owner acts for its position; read before expectRevert claims the next call.
-            address actor = kind == Kind.Open ? _user(pos) : pool.ownerOf(pos);
+            address actor = kind == Kind.Open || kind == Kind.OpenKindling ? _user(pos) : pool.ownerOf(pos);
+            // The founder record answers for the owner before the call (not inside expectRevert's call).
+            if (kind == Kind.RefreshFounder) founders.set(actor, arg == 1);
             if (reverts) vm.expectRevert();
             _act(kind, pos, arg, actor, reverts);
 
@@ -229,6 +257,16 @@ contract ForgePoolDifferentialTest is ForgeFixture {
         if (kind == Kind.AddToLot) {
             vm.prank(compounder);
             pool.addToLot(pos, arg >> 128, uint128(arg));
+            return;
+        }
+        if (kind == Kind.OpenKindling) {
+            vm.prank(kindling);
+            uint256 id = pool.openKindling(actor, arg);
+            if (!reverts) assertEq(id, pos, "position id");
+            return;
+        }
+        if (kind == Kind.RefreshFounder) {
+            pool.refreshFounder(pos);
             return;
         }
         vm.prank(actor);
@@ -303,8 +341,8 @@ contract ForgePoolDifferentialTest is ForgeFixture {
         n = _put4(w, n, _wallet(p.owner), p.listing, p.transfers, pool.ownedSince(id));
         ForgePoolBase.Ownership memory prev;
         if (p.transfers != 0) prev = pool.ownershipAt(id, p.transfers - 1);
-        (w[n], w[n + 1], w[n + 2]) = (_wallet(prev.owner), prev.until, p.lastTapAt);
-        return n + 3;
+        (w[n], w[n + 1], w[n + 2], w[n + 3]) = (_wallet(prev.owner), prev.until, p.lastTapAt, p.founder ? 1 : 0);
+        return n + 4;
     }
 
     function _wallet(address who) internal pure returns (uint256) {
@@ -368,18 +406,18 @@ contract ForgePoolTest is ForgeFixture {
 
     function test_constructorRejectsZeroAddresses() public {
         vm.expectRevert(ForgePoolBase.ZeroAddress.selector);
-        new ForgePool(IERC20(address(0)), true, collector, boost, deeds, address(0), address(0));
+        new ForgePool(IERC20(address(0)), true, collector, boost, deeds, address(0), address(0), address(0), address(0));
         vm.expectRevert(ForgePoolBase.ZeroAddress.selector);
-        new ForgePool(IERC20(address(token)), true, address(0), boost, deeds, address(0), address(0));
+        new ForgePool(IERC20(address(token)), true, address(0), boost, deeds, address(0), address(0), address(0), address(0));
         vm.expectRevert(ForgePoolBase.ZeroAddress.selector);
-        new ForgePool(IERC20(address(token)), true, collector, address(0), deeds, address(0), address(0));
+        new ForgePool(IERC20(address(token)), true, collector, address(0), deeds, address(0), address(0), address(0), address(0));
         vm.expectRevert(ForgePoolBase.ZeroAddress.selector);
-        new ForgePool(IERC20(address(token)), true, collector, boost, address(0), address(0), address(0));
+        new ForgePool(IERC20(address(token)), true, collector, boost, address(0), address(0), address(0), address(0), address(0));
     }
 
     function test_feeOnTransferTokenIsRejected() public {
         FeeOnTransferERC20 skim = new FeeOnTransferERC20();
-        ForgePool skimPool = new ForgePool(IERC20(address(skim)), false, collector, boost, deeds, address(0), address(0));
+        ForgePool skimPool = new ForgePool(IERC20(address(skim)), false, collector, boost, deeds, address(0), address(0), address(0), address(0));
         skim.mint(alice, 1e18);
         vm.startPrank(alice);
         skim.approve(address(skimPool), type(uint256).max);
@@ -481,7 +519,7 @@ contract ForgePoolTest is ForgeFixture {
 
     function test_emergencyExitIgnoresTheFeeCollector() public {
         // Exits never call the fee collector, so one that always reverts cannot block them.
-        ForgePool hostile = new ForgePool(IERC20(address(token)), true, address(new Reverter()), boost, deeds, address(0), address(0));
+        ForgePool hostile = new ForgePool(IERC20(address(token)), true, address(new Reverter()), boost, deeds, address(0), address(0), address(0), address(0));
         vm.startPrank(alice);
         token.approve(address(hostile), type(uint256).max);
         uint256 id = hostile.open(100e18);
@@ -807,6 +845,10 @@ contract ForgePoolTest is ForgeFixture {
         assertEq(annex.FLOW(), pool.FLOW());
         assertEq(annex.COMPOUNDER(), pool.COMPOUNDER());
         assertEq(pool.COMPOUNDER(), compounder, "the fixture's LP pool names its compounder");
+        assertEq(annex.KINDLING(), pool.KINDLING());
+        assertEq(annex.FOUNDERS(), pool.FOUNDERS());
+        assertEq(pool.KINDLING(), kindling);
+        assertEq(pool.FOUNDERS(), address(founders));
     }
 
     /// Every delegated function returns the annex's values and reverts with the annex's exact
@@ -881,7 +923,7 @@ contract ForgePoolTest is ForgeFixture {
 
     /// With no compounder set, nobody can add, not even a caller that is the zero address.
     function test_addToLot_zeroCompounderAddsNothing() public {
-        ForgePool none = new ForgePool(IERC20(address(token)), true, collector, boost, deeds, address(0), address(0));
+        ForgePool none = new ForgePool(IERC20(address(token)), true, collector, boost, deeds, address(0), address(0), address(0), address(0));
         vm.startPrank(alice);
         token.approve(address(none), type(uint256).max);
         uint256 id = none.open(100e18);
@@ -893,8 +935,8 @@ contract ForgePoolTest is ForgeFixture {
 
     function test_compounderNeedsAnLpPool() public {
         vm.expectRevert(ForgePoolBase.CompounderNeedsLp.selector);
-        new ForgePool(IERC20(address(token)), false, collector, boost, deeds, address(0), compounder);
-        ForgePool single = new ForgePool(IERC20(address(token)), false, collector, boost, deeds, address(0), address(0));
+        new ForgePool(IERC20(address(token)), false, collector, boost, deeds, address(0), compounder, address(0), address(0));
+        ForgePool single = new ForgePool(IERC20(address(token)), false, collector, boost, deeds, address(0), address(0), address(0), address(0));
         assertEq(single.COMPOUNDER(), address(0));
     }
 
@@ -1036,6 +1078,171 @@ contract ForgePoolTest is ForgeFixture {
         _add(id, 0, uint256(type(uint96).max) - 99e18); // exactly full
         (uint256 amount,,,) = pool.lotAt(id, 0);
         assertEq(amount, type(uint96).max);
+    }
+
+    // ── Kindling positions and First Flame (ADR 0018) ─────────────────────
+
+    function test_openKindling_atTheStandardFee() public {
+        uint256 fees = pool.feesOwed(0);
+        uint256 sent = token.balanceOf(kindling);
+        uint256 own = token.balanceOf(alice);
+        vm.expectEmit(address(pool));
+        emit ForgePoolBase.Opened(1, alice);
+        vm.prank(kindling);
+        uint256 id = pool.openKindling(alice, 1000e18);
+        assertEq(pool.ownerOf(id), alice, "the contributor owns it");
+        assertEq(pool.feesOwed(0) - fees, 10e18, "the 1% deposit fee, booked");
+        assertEq(sent - token.balanceOf(kindling), 1000e18, "pulled from Kindling");
+        assertEq(token.balanceOf(alice), own, "not from the contributor");
+        (uint256 amount, uint256 age, uint256 part,) = pool.lotAt(id, 0);
+        assertEq(abi.encode(amount, age, part), abi.encode(990e18, 0, 0), "a fresh lot: nothing backdated");
+        assertEq(pool.positionOf(id).streakStart, block.timestamp, "a Streak from now");
+        vm.prank(alice);
+        pool.deposit(id, 100e18); // the contributor's own position from here
+        assertEq(pool.lotCount(id), 2);
+    }
+
+    function test_openKindling_onlyKindling() public {
+        vm.expectRevert(ForgePoolBase.NotKindling.selector);
+        vm.prank(alice);
+        pool.openKindling(alice, 100e18);
+        vm.expectRevert(ForgePoolBase.ZeroAddress.selector);
+        vm.prank(kindling);
+        pool.openKindling(address(0), 100e18);
+        ForgePool none =
+            new ForgePool(IERC20(address(token)), true, collector, boost, deeds, address(0), address(0), address(0), address(0));
+        vm.expectRevert(ForgePoolBase.NotKindling.selector);
+        vm.prank(address(0));
+        none.openKindling(alice, 100e18);
+    }
+
+    function test_kindlingNeedsAnLpPool() public {
+        vm.expectRevert(ForgePoolBase.KindlingNeedsLp.selector);
+        new ForgePool(IERC20(address(token)), false, collector, boost, deeds, address(0), address(0), kindling, address(0));
+        // First Flame applies in every pool: a single-asset pool may name the founder record.
+        ForgePool single = new ForgePool(
+            IERC20(address(token)), false, collector, boost, deeds, address(0), address(0), address(0), address(founders)
+        );
+        assertEq(single.FOUNDERS(), address(founders));
+    }
+
+    function _twins() internal returns (uint256 a, uint256 b) {
+        vm.prank(alice);
+        a = pool.open(1000e18);
+        vm.prank(bob);
+        b = pool.open(1000e18);
+        founders.set(alice, true);
+    }
+
+    /// A founder's financial Heat reads 15 days older. S, lot ages, participation and the Ashfall
+    /// weight do not change.
+    function test_firstFlame_offsetsFinancialHeatOnly() public {
+        (uint256 a, uint256 b) = _twins();
+        vm.expectEmit(address(pool));
+        emit ForgePoolBase.FounderSet(a, true);
+        assertTrue(pool.refreshFounder(a));
+        assertFalse(pool.refreshFounder(b));
+        uint256 t0 = block.timestamp;
+        skip(60 days);
+        pool.poke(a);
+        pool.poke(b);
+        (uint256 sa, uint256 wa,,, uint256 qa) = pool.epochMeasure(a, t0, block.timestamp);
+        (uint256 sb, uint256 wb,,, uint256 qb) = pool.epochMeasure(b, t0, block.timestamp);
+        assertEq(sa, sb, "stake-seconds are equal");
+        assertEq(wa, 990e18 * HeatMath.integrateHeat(P.FIRST_FLAME_AGE, 60 days, 0), "Heat from day 15");
+        assertEq(wb, 990e18 * HeatMath.integrateHeat(0, 60 days, 0), "Heat from day 0");
+        assertGt(qa, 0);
+        assertEq(qa, qb, "the Ashfall weight never sees it");
+        (, uint256 ageA, uint256 partA,) = pool.lotAt(a, 0);
+        (, uint256 ageB, uint256 partB,) = pool.lotAt(b, 0);
+        assertEq(abi.encode(ageA, partA), abi.encode(ageB, partB), "lot age and participation are untouched");
+    }
+
+    function test_firstFlame_saturatesAtTheAgeCap() public {
+        (uint256 a, uint256 b) = _twins();
+        skip(360 days);
+        pool.refreshFounder(a);
+        pool.poke(b);
+        uint256 t0 = block.timestamp;
+        skip(10 days);
+        pool.poke(a);
+        pool.poke(b);
+        (, uint256 wa,,,) = pool.epochMeasure(a, t0, block.timestamp);
+        (, uint256 wb,,,) = pool.epochMeasure(b, t0, block.timestamp);
+        assertEq(wa, 990e18 * HeatMath.integrateHeat(P.HEAT_AGE_CAP, 10 days, 0), "capped from the start");
+        assertEq(wb, 990e18 * HeatMath.integrateHeat(360 days, 10 days, 0));
+    }
+
+    function test_firstFlame_sealedHeatToo() public {
+        (uint256 a,) = _twins();
+        vm.prank(alice);
+        pool.seal(a, 0);
+        pool.refreshFounder(a);
+        uint256 t0 = block.timestamp;
+        skip(5 days);
+        pool.poke(a);
+        (, uint256 w,, uint256 ws,) = pool.epochMeasure(a, t0, block.timestamp);
+        assertEq(ws, w, "the sealed W reads the offset too");
+        assertEq(w, 990e18 * HeatMath.integrateHeat(P.FIRST_FLAME_AGE, 5 days, 0));
+    }
+
+    /// The flag follows the record, a sale clears it, and an unchanged answer writes nothing.
+    function test_firstFlame_followsTheRecordAndNeverTransfers() public {
+        (uint256 a,) = _twins();
+        pool.refreshFounder(a);
+        uint256 recs = pool.lotOf(a, 0).records;
+        skip(1 days);
+        assertTrue(pool.refreshFounder(a));
+        assertEq(pool.lotOf(a, 0).records, recs, "an unchanged flag rewrites no record");
+        founders.set(alice, false);
+        assertFalse(pool.refreshFounder(a), "revoked");
+        skip(1 days);
+        founders.set(alice, true);
+        pool.refreshFounder(a);
+        vm.prank(deeds);
+        uint32 listing = pool.list(a, alice);
+        skip(1 days);
+        vm.prank(deeds);
+        pool.settle(a, bob, listing);
+        assertFalse(pool.positionOf(a).founder, "a sale clears it: First Flame does not transfer");
+        assertFalse(pool.refreshFounder(a), "bob holds no founder record");
+        founders.set(bob, true);
+        assertTrue(pool.refreshFounder(a), "until he does");
+        vm.prank(bob);
+        pool.emergencyExit(a);
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.Closed.selector, a));
+        pool.refreshFounder(a);
+    }
+
+    /// A founder record that reverts, has no code or answers malformed counts as none.
+    function test_firstFlame_brokenRecordsCountAsNone() public {
+        address[4] memory sources = [address(new Reverter()), makeAddr("codeless"), address(new TwoFounders()), address(0)];
+        for (uint256 i; i < sources.length; ++i) {
+            ForgePool p2 =
+                new ForgePool(IERC20(address(token)), true, collector, boost, deeds, address(0), address(0), address(0), sources[i]);
+            vm.startPrank(alice);
+            token.approve(address(p2), type(uint256).max);
+            uint256 id = p2.open(100e18);
+            vm.stopPrank();
+            assertFalse(p2.refreshFounder(id), "no founder");
+            assertFalse(p2.positionOf(id).founder);
+        }
+    }
+
+    function test_gas_refreshFounder() public {
+        vm.startPrank(alice);
+        uint256 id = pool.open(1e18);
+        for (uint256 i = 1; i < 32; ++i) pool.deposit(id, 1e18);
+        vm.stopPrank();
+        founders.set(alice, true);
+        skip(1 days);
+        uint256 g = gasleft();
+        pool.refreshFounder(id);
+        emit log_named_uint("refreshFounder, rewriting 32 lots", g - gasleft());
+        vm.prank(kindling);
+        g = gasleft();
+        pool.openKindling(bob, 100e18);
+        emit log_named_uint("openKindling", g - gasleft());
     }
 
     /// The addition alone, and with a bonus to dilute across 32 lots (the worst case).
@@ -1418,6 +1625,13 @@ contract ForgePoolTest is ForgeFixture {
         g = gasleft();
         pool.settle(id, bob, listing);
         emit log_named_uint("settle (32 lots)", g - gasleft());
+    }
+}
+
+/// @dev Answers 2 for every wallet: not a boolean, so no founder (ADR 0018).
+contract TwoFounders {
+    function isFounder(address) external pure returns (uint256) {
+        return 2;
     }
 }
 

@@ -11,8 +11,10 @@ export const FUND = 10n ** 30n;
 const E = 10n ** 18n;
 const HOUR = 3_600n;
 
-export enum Kind { Open, Deposit, Request, Execute, Cancel, Emergency, Poke, Collect, Seal, Boost, List, Unlist, Settle, Tap, AddToLot }
+export enum Kind { Open, Deposit, Request, Execute, Cancel, Emergency, Poke, Collect, Seal, Boost, List, Unlist, Settle, Tap, AddToLot, OpenKindling, RefreshFounder }
 /** AddToLot: arg = slot << 128 | amount, sent by the compounder (ADR 0017).
+ *  OpenKindling: arg = amount, sent by Kindling for the next position's wallet (ADR 0018).
+ *  RefreshFounder: arg = 1 if the founder record names the owner, else 0 (ADR 0018).
  *  List: arg = the seller wallet DEEDS names. Unlist: arg 0 = the owner, 1 = DEEDS. Settle: arg =
  *  the buyer wallet; the listing named is the one the market recorded at its last List. */
 export interface Action { kind: Kind; time: bigint; pos: number; arg: bigint }
@@ -28,7 +30,7 @@ function words(s: Sim, positions: number, now: bigint): bigint[] {
   const out: bigint[] = [];
   for (let id = 1; id <= positions; id++) {
     const p = m.positions[id - 1];
-    if (!p) { out.push(...Array(33 + 5 * MAX_LOTS).fill(0n)); continue; }
+    if (!p) { out.push(...Array(34 + 5 * MAX_LOTS).fill(0n)); continue; }
     out.push(p.S, p.W, BigInt(p.lotCount), BigInt(p.reserved), BigInt(p.pending.length), p.paused, p.streakStart, p.last,
       p.closed ? 1n : 0n, p.ashfallForfeited ? 1n : 0n, p.plan?.start ?? 0n, p.plan?.reference ?? 0n, p.plan?.requested ?? 0n, BigInt(p.nextTicket - 1));
     const seal = p.seals[p.seals.length - 1];
@@ -37,7 +39,7 @@ function words(s: Sim, positions: number, now: bigint): bigint[] {
     out.push(p.Q / RAY, p.bonus); // Ashfall weight, accrued independently; the contract's comes from records
     const prev = p.owners[p.owners.length - 1];
     out.push(BigInt(p.owner), BigInt(p.listing), BigInt(p.owners.length), m.ownedSince(p), BigInt(prev?.owner ?? 0), prev?.until ?? 0n);
-    out.push(p.lastTapAt);
+    out.push(p.lastTapAt, p.founder ? 1n : 0n);
     p.lots.forEach((l, j) => out.push(l.amount, l.age, l.part, BigInt(l.heldBy), BigInt(p.heads.get(j)?.seal ?? 0)));
     for (const tid of p.pending) {
       const t = p.tickets.get(tid)!;
@@ -82,6 +84,11 @@ function apply(s: Sim, a: Action): { sim: Sim; reverted: boolean } {
       case Kind.Settle: m.settle(a.pos, Number(a.arg), market[a.pos - 1] ?? 0, a.time); return;
       case Kind.Tap: m.request(a.pos, a.arg, a.time, true); return;
       case Kind.AddToLot: m.addToLot(a.pos, Number(a.arg >> 128n), a.arg & ((1n << 128n) - 1n), a.time); return;
+      case Kind.OpenKindling: {
+        if (a.pos !== m.positions.length + 1) throw new Error('scenario: OpenKindling must create the next position id');
+        m.openKindling(a.arg, a.time); return; // Kindling pays, not the wallet
+      }
+      case Kind.RefreshFounder: m.refreshFounder(a.pos, a.arg === 1n, a.time); return;
     }
   });
   if (r.reverted) return { sim: s, reverted: true };
@@ -99,7 +106,7 @@ interface Scenario { name: string; lp: boolean; positions: number; actions: Acti
 function record(sc: Scenario) {
   let sim: Sim = { model: new ForgeModel(sc.lp), users: Array(sc.positions + BUYERS).fill(FUND), collector: 0n, market: [] };
   const flat: string[] = [], hash: string[] = [], probe: string[] = [];
-  let reverts = 0, boosted = 0, sold = 0, tapped = 0, added = 0;
+  let reverts = 0, boosted = 0, sold = 0, tapped = 0, added = 0, founded = 0;
   sc.actions.forEach((a, i) => { if (i > 0 && a.time < sc.actions[i - 1].time) throw new Error(`${sc.name}: time runs backwards at step ${i}`); });
   for (const [i, a] of sc.actions.entries()) {
     let r: ReturnType<typeof apply>;
@@ -110,13 +117,14 @@ function record(sc: Scenario) {
     else if (a.kind === Kind.Tap) tapped++;
     else if (a.kind === Kind.AddToLot) added++;
     if (sim.model.positions.some((p) => p.bonus > 0n && p.lots.some((l) => l.amount > 0n))) boosted++;
+    if (sim.model.positions.some((p) => p.founder && !p.closed && p.lots.some((l) => l.amount > 0n))) founded++;
     flat.push(String(a.kind), String(a.time), String(a.pos), String(a.arg), r.reverted ? '1' : '0');
     hash.push(hashWords(words(sim, sc.positions, a.time)));
     const m = sim.model, p1 = m.positions[0];
     probe.push(...[p1?.S ?? 0n, p1?.W ?? 0n, m.active, m.frozen, m.occupiedAt(a.time), p1?.SS ?? 0n].map(String));
   }
   const ashfall = sim.model.positions.filter((p) => p.Q > 0n).length;
-  return { lp: sc.lp, positions: sc.positions, steps: sc.actions.length, reverts, ashfall, boosted, sold, tapped, added, actions: flat, hash, probe };
+  return { lp: sc.lp, positions: sc.positions, steps: sc.actions.length, reverts, ashfall, boosted, sold, tapped, added, founded, actions: flat, hash, probe };
 }
 
 // ── scripted scenarios ───────────────────────────────────────────────────
@@ -509,6 +517,65 @@ scripted.push(
     A(Kind.Poke, at(20n), 1),
   ] },
 );
+// ── Kindling positions and First Flame (ADR 0018). ──
+scripted.push(
+  { name: 'firstFlameHeat', lp: true, positions: 2, actions: [
+    // Twins: same stake, same time; only position 1's owner is a founder. W differs, S and the
+    // Ashfall weight do not: the 15 days are financial Heat only.
+    A(Kind.Open, at(0n), 1, 1000n * E),
+    A(Kind.Open, at(0n), 2, 1000n * E),
+    A(Kind.RefreshFounder, at(0n, 1n), 1, 1n),
+    A(Kind.RefreshFounder, at(0n, 1n), 2, 0n), // no change: no record rewrite
+    A(Kind.Poke, at(10n), 1),
+    A(Kind.Poke, at(10n), 2),
+    A(Kind.Deposit, at(20n), 1, 500n * E), // a fresh lot reads day 15 too
+    A(Kind.Poke, at(45n), 1),
+    A(Kind.Poke, at(45n), 2),
+    A(Kind.Poke, at(400n), 1), // past the age cap: the offset saturates
+    A(Kind.Poke, at(400n), 2),
+  ] },
+  { name: 'firstFlameRevokeAndDeed', lp: true, positions: 1, actions: [
+    A(Kind.Open, at(0n), 1, 1000n * E),
+    A(Kind.RefreshFounder, at(1n), 1, 1n),
+    A(Kind.RefreshFounder, at(5n), 1, 0n), // the record no longer names the owner
+    A(Kind.RefreshFounder, at(6n), 1, 1n),
+    A(Kind.List, at(10n), 1, 1n),
+    A(Kind.RefreshFounder, at(10n, 1n), 1, 1n), // listed: allowed, nothing changes
+    A(Kind.Settle, at(11n), 1, 2n), // the seller's segments keep the flag; the buyer's do not
+    A(Kind.RefreshFounder, at(12n), 1, 0n), // the buyer is no founder
+    A(Kind.RefreshFounder, at(20n), 1, 1n), // until the record names the buyer
+    A(Kind.Emergency, at(30n), 1),
+    A(Kind.RefreshFounder, at(31n), 1, 0n), // Closed
+    A(Kind.Poke, at(40n), 1),
+  ] },
+  { name: 'firstFlameSeal', lp: true, positions: 1, actions: [
+    A(Kind.Open, at(0n), 1, 1000n * E),
+    A(Kind.Seal, at(1n), 1, 0n),
+    A(Kind.RefreshFounder, at(2n), 1, 1n), // the sealed W reads the offset too
+    A(Kind.Boost, at(3n), 1, MAX_BONUS_UNITS / 3n),
+    A(Kind.Request, at(10n), 1, 50n * E), // pauses the Seal
+    A(Kind.Cancel, at(11n), 1, 1n),
+    A(Kind.Poke, at(50n), 1),
+  ] },
+  { name: 'kindlingPositions', lp: true, positions: 3, actions: [
+    A(Kind.OpenKindling, at(0n), 1, 1000n * E), // 1% fee booked, like any deposit
+    A(Kind.OpenKindling, at(0n, 1n), 2, MIN_STAKE_LP), // below the minimum after the fee
+    A(Kind.Open, at(1n), 2, 100n * E),
+    A(Kind.OpenKindling, at(2n), 3, 300n * E),
+    A(Kind.Deposit, at(5n), 1, 100n * E), // the contributor's own top-up
+    A(Kind.RefreshFounder, at(6n), 3, 1n),
+    A(Kind.Request, at(10n), 1, 99n * E),
+    A(Kind.Execute, at(10n, 6n), 1, 1n),
+    A(Kind.Collect, at(11n), 0),
+    A(Kind.Poke, at(40n), 3),
+  ] },
+  { name: 'kindlingSingleAsset', lp: false, positions: 1, actions: [
+    A(Kind.OpenKindling, at(0n), 1, 1000n * E), // no Kindling on a single-asset pool
+    A(Kind.Open, at(1n), 1, 1000n * E),
+    A(Kind.RefreshFounder, at(2n), 1, 1n), // First Flame applies in every pool
+    A(Kind.Poke, at(40n), 1),
+  ] },
+);
 // At 32 lots an addition still fits: it uses no slot. A 33rd deposit does not.
 {
   const actions: Action[] = [A(Kind.Open, at(0n), 1, E)];
@@ -551,7 +618,7 @@ for (const n of [16, 17]) {
 // ── seeded random scenarios ──────────────────────────────────────────────
 /** `deeds` adds List, Unlist and Settle actions; without it the stream of draws, and so every
  *  action, is exactly the walk ADR 0010's mutations were checked against. */
-function randomScenario(name: string, seed: bigint, steps: number, lp: boolean, deeds = false, taps = false, adds = false): Scenario {
+function randomScenario(name: string, seed: bigint, steps: number, lp: boolean, deeds = false, taps = false, adds = false, founders = false): Scenario {
   let x = seed;
   const rnd = (n: bigint) => { x = (x * 6364136223846793005n + 1442695040888963407n) & ((1n << 64n) - 1n); return (x >> 11n) % n; };
   const positions = 3;
@@ -565,7 +632,10 @@ function randomScenario(name: string, seed: bigint, steps: number, lp: boolean, 
     const opened = m.positions.length;
     const pos = opened === 0 ? 1 : Number(rnd(BigInt(Math.min(opened + 1, positions)))) + 1;
     let a: Action;
-    if (pos > opened) a = A(Kind.Open, now, opened + 1, rnd(1000n * E) + MIN_STAKE_LP * 2n);
+    if (pos > opened) a = founders && rnd(3n) === 0n
+      ? A(Kind.OpenKindling, now, opened + 1, rnd(1000n * E) + MIN_STAKE_LP * 2n)
+      : A(Kind.Open, now, opened + 1, rnd(1000n * E) + MIN_STAKE_LP * 2n);
+    else if (founders && rnd(100n) < 15n) a = A(Kind.RefreshFounder, now, pos, rnd(4n) === 0n ? 0n : 1n);
     else if (adds && rnd(100n) < 20n) {
       // A source-lot addition: mostly to a used slot, now and then to any slot or of nothing.
       const p = m.positions[pos - 1];
@@ -633,6 +703,9 @@ const random = [
   randomScenario('adds0', 0xadd0n, 150, true, false, false, true),
   randomScenario('adds1', 0xadd1n, 150, true, true, false, true),
   randomScenario('adds2', 0xadd2n, 200, true, false, true, true),
+  randomScenario('flame0', 0xf1a0n, 150, true, false, false, false, true),
+  randomScenario('flame1', 0xf1a1n, 150, true, true, true, true, true),
+  randomScenario('flame2', 0xf1a2n, 150, false, true, false, false, true),
 ];
 
 export function forgeVectors() {
@@ -649,6 +722,8 @@ export function forgeVectors() {
   for (const n of ['taps0', 'taps1', 'taps2']) if (scenarios[n].tapped < 3) throw new Error(`${n}: too few Taps (${scenarios[n].tapped})`);
   // And the source-lot additions: every addition walk lands additions.
   for (const n of ['adds0', 'adds1', 'adds2']) if (scenarios[n].added < 5) throw new Error(`${n}: too few additions (${scenarios[n].added})`);
+  // And First Flame: every founder walk keeps a founder's position earning for many steps.
+  for (const n of ['flame0', 'flame1', 'flame2']) if (scenarios[n].founded < 20) throw new Error(`${n}: too few founder steps (${scenarios[n].founded})`);
   return {
     maxPendingTickets: MAX_PENDING, maxLots: MAX_LOTS, tiers: TIERS.map((t) => [String(t.maxPct), String(t.seconds)]),
     fund: String(FUND), names: all.map((s) => s.name), scenarios,
