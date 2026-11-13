@@ -61,7 +61,7 @@ Status: accepted for this repository. Not audited, not deployed.
 - **[P] Stoke takes all of `unclaimed`.** `DECISIONS.md` gives the automatic Cast reservation priority ("Automatic Cast reservation comes first, optional Stoke from the remainder").
   - Once Casting is designed, a Stoke may take only what Casting leaves.
   - Until then this reading is provisional, and it is a deploy blocker together with Casting.
-- **Stoke into LP** needs a funded matching reservation and the pool's source-lot additions (ADR 0010). Both are later builds.
+- **Stoke into LP** needs a funded matching reservation and the pool's source-lot additions (ADR 0010). The additions are built (ADR 0017: `addToLot`, callable only by the pool's `COMPOUNDER`). The reservation and the compounder are not.
 
 ## Gas (`pnpm gas`, isolated)
 
