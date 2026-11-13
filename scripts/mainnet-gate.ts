@@ -18,12 +18,14 @@ import cfg, { CREATEX_FACTORY, DEPLOYER as PLACEHOLDER_DEPLOYER } from '../canon
 export const CREATEX_CODEHASH = '0xbd8a7ea8cfca7b4e5f5041d7d4b17bc317c5ce42cfbc42066a00cf26b43eb53f';
 /** The testnet kit's chains, which can never be the mainnet. */
 const TESTNET_CHAIN_IDS = new Set([4441, 31337]);
-const MODULE_SLOTS = ['Treasury', 'Guardian', 'Kindling', 'FeeRouter', 'Hearth', 'Stakers', 'QuoteYield', 'Flow', 'Compounder', 'Deeds', 'MatchReserve', 'SealedPot', 'Valuation', 'PyreLedger', 'FeeRebate', 'Founders', 'Ignition'] as const;
+const MODULE_SLOTS = ['Treasury', 'Guardian', 'Kindling', 'GenesisFeeEscrow', 'PermanentLiquidity', 'FeeRouter', 'Hearth', 'Stakers', 'QuoteYield', 'Flow', 'Compounder', 'Deeds', 'MatchReserve', 'SealedPot', 'Valuation', 'PyreLedger', 'FeeRebate', 'Founders', 'Ignition'] as const;
 /** What each slot is on the testnet, for the blocker's wording. */
 const TESTNET_NOTE: Record<(typeof MODULE_SLOTS)[number], string> = {
   Treasury: "on the testnet it is the operator's wallet",
   Guardian: "on the testnet it is the operator's wallet",
-  Kindling: "each pair's initializer and pool 0's openKindling caller (ADR 0018); on the testnet it is the operator's wallet",
+  Kindling: "built (ADR 0021): the Mantle's KINDLING, BlastPool's initializer and pool 0's openKindling caller; the testnet kit deploys it with FURNACE_TESTNET_KINDLING=1 (else the operator stands in), the mainnet needs its mined address and a START after Ignition",
+  GenesisFeeEscrow: "built (ADR 0021): Kindling's dedicated immutable fee and principal custody, naming Kindling and the Treasury; the mainnet needs its mined address",
+  PermanentLiquidity: "built (ADR 0021): the irretrievable LP sink for Kindling's 10% and the later idle auto-pairing; the mainnet needs its mined address",
   FeeRouter: 'the Vent, built (ADR 0020); the testnet kit deploys it, the mainnet needs its mined address, registered with the Mantle as a Protocol burner',
   Hearth: "the Vent's 10% Hearth share of Forge fees; on the testnet it is the operator's wallet",
   Stakers: "the Vent's 25% stakers' share of emergency-exit fees (ADR 0020 [P]); on the testnet it is the operator's wallet",

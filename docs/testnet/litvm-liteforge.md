@@ -47,15 +47,21 @@ The stand-ins live in `contracts/script/testnet/` and never in `contracts/src`. 
 **The pairs are an add-on.** Forge pools 0 and 1 stake the pairs' predicted addresses, whether the pairs exist yet or not. By default they deploy in the same run. With `FURNACE_TESTNET_PAIRS=later` they are left out: pools 0 and 1 then refuse deposits (an address with no code) and settle empty epochs, until `pnpm testnet:pairs:deploy` deploys the pairs at those addresses from the same deployer. Nothing migrates. A CREATE3 address does not commit to code, so until the pairs exist the deployer alone decides what takes those addresses; ADR 0015 lists the two ways to close that window on mainnet.
 
 **The operator's wallet** holds every slot whose module is not built. It is the deployer unless `FURNACE_TESTNET_OPERATOR` says otherwise. So it:
-- is Kindling: it can call `mintKindlingSeed()` once and receive 420,000 test EMBER;
+- is Kindling by default: it can call `mintKindlingSeed()` once and receive 420,000 test EMBER (with `FURNACE_TESTNET_KINDLING=1` the real Kindling holds this slot instead; see below);
 - is the Treasury, which receives vesting;
 - is the Deed market, the only caller of `list` and `settle`;
 - is ForgeEmissions' match reserve and Sealed-pot consumer;
-- is each pair's **initializer** (Kindling's slot: the first deposit, which sets the price) and its **guardian** (it can pause swaps, never redemptions);
+- is each pair's **initializer** (Kindling's slot: the first deposit, which sets the price; in the real Kindling mode, BlastPool's is Kindling) and its **guardian** (it can pause swaps, never redemptions);
 - receives what the Vent owes the Hearth, the Treasury, the emergency stakers and the Quote-yield distributor, and is the Vent's Deed market and compounder (the only one who may draw its match reserve);
 - is Flow's **compounder**, the only caller of the Compound waiver (the Stoke-into-LP consumer is not built).
 
 **The Vent** ([ADR 0020](../adr/0020-vent.md)) is real: every pool's fee collector and every pair's fee router, registered with the Mantle as a Protocol burner.
+
+**Kindling** ([ADR 0021](../adr/0021-kindling.md)) has two modes.
+- **By default the operator stands in for it**, so the smoke run can seed both pairs at once.
+- **With `FURNACE_TESTNET_KINDLING=1`** the real Kindling, its GenesisFeeEscrow and the permanent LP sink deploy at their predicted addresses, and Kindling becomes the Mantle's seed recipient, BlastPool's initializer and pool 0's Kindling slot. The operator is the escrow's Treasury.
+  - No EMBER exists until the event settles. So the smoke run only contributes the operator's $25,000 wallet cap, and BlastPool stays closed until then.
+  - The $100,000 minimum needs at least four wallets. Testers bring their own; the kit never holds their keys.
 
 On mainnet each operator slot is an immutable contract at a mined address. That is why this kit refuses any chain outside its testnet list (4441, and 31337 for local runs).
 
@@ -92,6 +98,7 @@ On mainnet each operator slot is an immutable contract at a mined address. That 
 - `FURNACE_TESTNET_START`: the Mantle's start; default now
 - `FURNACE_TESTNET_USDC`, `FURNACE_TESTNET_WETH`: existing testnet tokens instead of the stand-ins (the smoke actions mint them, so they must be mintable)
 - `FURNACE_TESTNET_PAIRS=later`: leave the EMBER pairs for `testnet:pairs:deploy`
+- `FURNACE_TESTNET_KINDLING=1`: deploy the real Kindling, escrow and sink (ADR 0021); `FURNACE_TESTNET_KINDLING_START` sets when its 24 hours begin (default: the Mantle START). In this mode the smoke actions are a pool-3 stake, a contribution of the wallet cap to Kindling and a cooling request
 - `FURNACE_TESTNET_SMOKE=1`: first liquidity in both pairs (50,000 EMBER with 50,000 tUSDC; 20,000 EMBER with 10 tWETH), one position in each pool, a buy and a sell on BlastPool, a 100 tUSDC zap staked fee-free through Flow into the pool-0 position, 1 LP returned to that position's first lot by the operator as compounder, a Kindling position opened by the operator as Kindling, First Flame marked for the operator and refreshed on the pool-0 position, a 30-day head start granted to that position's first lot by the operator as Ignition, a Capstone deposit and a cooling request
 
 ## After deploying
@@ -100,7 +107,14 @@ On mainnet each operator slot is an immutable contract at a mined address. That 
 - **To see Boost raise a bonus**, set a rate as the operator, for example `TestnetValuation.setRate(0, 5e26)` (0.5 EMBER per stake unit), then call `Boost.refresh(0, id)`.
 - **Test tokens**: `TestnetToken.mint(to, amount)` on tUSDC and tWETH.
 - **Through Flow.** `Flow.swap`, `zapIn`, `zapAndStake` (position 0 opens one; any other id adds to your own) and `zapOut`, each with a deadline and a minimum. To see a rebate, have the operator call `TestnetFeeRebate.setRebate(wallet, 50)`: that wallet's swaps then book half the protocol share.
-- **Kindling and First Flame.** The operator stands in for Kindling on pool 0: `ForgePool.openKindling(owner, amount)` opens a contributor's position at the standard 1% fee. `TestnetFounders.setFounder(wallet, true)` marks a founder; anyone then calls `refreshFounder(id)` on that wallet's positions, whose financial Heat then reads 15 days older (ADR 0018).
+- **The real Kindling** (`FURNACE_TESTNET_KINDLING=1`).
+  - During its 24 hours, anyone with tUSDC calls `Kindling.contribute(gross)` after approving the exact amount. `cancel(amount)` returns net principal until settlement.
+  - After the deadline, `pnpm testnet:kindling:settle --account <keystore> --sender <address>` (anyone may run it) does one of three things:
+    - it settles, if at least $100,000 is accepted and BlastPool is ready, and the caller earns 5 bps of the raise;
+    - it fails the event, if the raise is below the minimum or 72 hours have passed;
+    - otherwise it waits, and says why.
+  - It then claims the caller's own pool 0 position or refund. Anyone can call `materialize(wallet)` or `refund(wallet)` for anyone; the LP or the USDC only ever goes to that wallet.
+- **Kindling and First Flame.** By default the operator stands in for Kindling on pool 0: `ForgePool.openKindling(owner, amount)` opens a contributor's position at the standard 1% fee. `TestnetFounders.setFounder(wallet, true)` marks a founder; anyone then calls `refreshFounder(id)` on that wallet's positions, whose financial Heat then reads 15 days older (ADR 0018).
 - **The head start.** The operator stands in for Ignition on every pool: `ForgePool.grantHeadStart(id, slot, seconds)` dates one active lot back by `seconds`, once per position. It stacks with First Flame and leaves with a sale (ADR 0019).
 - **The Vent.** Anyone may call `Vent.collectAll()` to pull every pool's and pair's fees, then `Vent.vent(0)` (BlastPool) or `vent(1)` to buy EMBER back with the burn lane's quote and burn it. It returns a reason instead of buying when it is unsafe or early: 5,000 tUSDC or 24 hours of waiting first, a 30-minute TWAP (keep it fresh with `checkpoint()`), spot within 2% of it, and at most 0.5% of the reserve per call and per 30-minute window. `release(recipient, token)` pays the operator what each recipient is owed.
 - **Source-lot additions.** The operator stands in for the compounder on pools 0 and 1: `ForgePool.addToLot(id, slot, amount)` returns LP to an active lot at that lot's own age, with no fee and no new slot (ADR 0017). The real compounder, which would fund this from earned rewards and the match reserve, is not built.
@@ -124,13 +138,14 @@ Each action asks first for an approval of exactly the amount it spends, unless a
   - salts bound to deployer, chain and version, and a reused version refused before it spends gas;
   - refusal off the testnet list and without the real CreateX;
   - the smoke actions, then a whole first epoch settled with every pool earning;
-  - the Vent: once the TWAP matures and the 24-hour clock runs, a real buyback burns EMBER for Ashfall credit, a release pays the Treasury's stand-in, and an emergency exit never touches it.
+  - the Vent: once the TWAP matures and the 24-hour clock runs, a real buyback burns EMBER for Ashfall credit, a release pays the Treasury's stand-in, and an emergency exit never touches it;
+  - the real Kindling: its wiring, the smoke run's contribution, four more wallets, settlement on the real core that opens BlastPool at the raise's price and sinks 10% of the LP, materialization into pool 0 and those positions earning; and a failed event that refunds principal plus every fee while the seed stays reserved.
 - **The add-on**, offline: with the pairs left out, pools 0 and 1 refuse deposits and the first epoch settles with them empty; after the pairs deploy at the predicted addresses, pool 0 takes LP and earns. A stranger with the same salts lands on another address, and a second deployment is refused.
-- **`pnpm testnet:dry-run`**, on a fork of chain 4441, with the pairs, Flow, the Vent and the smoke actions (the zap-and-stake, a source-lot addition, a Kindling position, a First Flame refresh, a head-start grant, a Vent collection and a buyback that defers on the fresh pair included): every predicted address matched the one CreateX returned and the wiring checks passed. That was 52 transactions, 89.4M gas, the largest 12.48M (a ForgePool, whose initcode embeds its annex).
+- **`pnpm testnet:dry-run`**, on a fork of chain 4441, with the pairs, Flow, the Vent and the smoke actions (the zap-and-stake, a source-lot addition, a Kindling position, a First Flame refresh, a head-start grant, a Vent collection and a buyback that defers on the fresh pair included): every predicted address matched the one CreateX returned and the wiring checks passed. That was 52 transactions, 89.4M gas, the largest 12.48M (a ForgePool, whose initcode embeds its annex). With `FURNACE_TESTNET_KINDLING=1` it was 29 transactions and 90.3M gas.
 - **If the dry run fails with "refused stream"**, the RPC is refusing forge's burst of requests; a single `eth_chainId` still answers. Retry a little later: the Flow rehearsal got through on its fourth attempt.
 
 ## Not shown by the testnet
 
 - Anything about mainnet economics. The stake tokens are faucet tokens, and the rates are set by hand.
-- The behaviour of unbuilt modules: Relics (which decides a wallet's rebate tier), the compounder, the Deed market, Kindling, Ignition, the Hearth and the Vent's other recipients, and the valuation source.
+- The behaviour of unbuilt modules: Relics (which decides a wallet's rebate tier), the compounder, the Deed market, Ignition, the Hearth and the Vent's other recipients, and the valuation source.
 - Audit status. None of this is audited.

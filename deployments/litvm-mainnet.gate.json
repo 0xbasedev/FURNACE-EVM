@@ -13,6 +13,8 @@
     "Treasury": null,
     "Guardian": null,
     "Kindling": null,
+    "GenesisFeeEscrow": null,
+    "PermanentLiquidity": null,
     "FeeRouter": null,
     "Hearth": null,
     "Stakers": null,

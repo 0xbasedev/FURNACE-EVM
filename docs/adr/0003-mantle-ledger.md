@@ -47,7 +47,7 @@ The invariant `accounted + reserved ≤ 21M` is fuzzed. `totalSupply ≤ account
 | Question | Default here | Alternative | Status |
 |---|---|---|---|
 | When does Treasury vesting start? | At the Mantle `START` (epoch 0) | At successful Kindling settlement | **Confirmed** by the project owner, 2026-10-25 |
-| What happens to the seed reservation if Kindling fails? | Stays reserved forever; there is no release path | Kindling releases it on terminal failure | **Confirmed** by the project owner, 2026-10-25 |
+| What happens to the seed reservation if Kindling fails? | Stays reserved forever; there is no release path | Kindling releases it on terminal failure | **Confirmed** by the project owner, 2026-10-25. Kindling (ADR 0021) calls `mintKindlingSeed` only inside a successful settlement; a failed event never mints, and the kit test checks the reservation stays |
 | Who handles Ashfall rollover? | The Mantle queue, via `rollAshfall` from the Forge | The Forge keeps its own pot | Provisional |
 | Is unpaid base kept reserved? | Released when the distributor calls `releaseBase` | Kept reserved forever | Provisional |
 | Raw / unsolicited burns | Never recognized | A permissionless sync to `totalSupply` (rejected: it can't attribute a category, and becomes unsafe once transport exists) | Provisional |

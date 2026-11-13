@@ -35,6 +35,18 @@
     "file": "Vent.json",
     "testnetOnly": false
   },
+  "Kindling": {
+    "file": "Kindling.json",
+    "testnetOnly": false
+  },
+  "GenesisFeeEscrow": {
+    "file": "GenesisFeeEscrow.json",
+    "testnetOnly": false
+  },
+  "PermanentLiquidity": {
+    "file": "PermanentLiquidity.json",
+    "testnetOnly": false
+  },
   "TestnetToken": {
     "file": "TestnetToken.json",
     "testnetOnly": true

@@ -55,7 +55,7 @@ Status: accepted for this repository. Not audited, not deployed.
 - The pair calls nothing on the router. Until the router collects, the fees sit in the pair, outside the reserves.
 
 **6. Liquidity.**
-- **The first deposit sets the price, and only `INITIALIZER` may make it.** That is Kindling on mainnet. Anyone could otherwise front-run Kindling at a bad price, and Kindling's own minimum amounts would then make its launch revert.
+- **The first deposit sets the price, and only `INITIALIZER` may make it.** That is Kindling on mainnet. Anyone could otherwise front-run Kindling at a bad price, and Kindling's own minimum amounts would then make its launch revert. Kindling is built in ADR 0021: it opens BlastPool with the 420,000-EMBER seed and the net raise, after checking the pair names it and has no LP or reserves.
 - **The first deposit mints `√(ember · quote · 10^(18 − quote decimals))` receipt units.** The quote is scaled to 18 decimals, so a receipt unit means about the same on both pairs. (Unscaled, 0.0001 LP, the Forge's `MIN_STAKE_LP`, would be about $200 of an EMBER/USDC pair at parity.)
   - 1,000 units go to the config's burn address. They are a floor under the share price, not permanent liquidity.
 - **Later deposits.** `addLiquidity(emberDesired, quoteDesired, emberMin, quoteMin, to)` takes the largest amounts at the current ratio. It mints the smaller of the two pro-rata shares, rounding down, so rounding always favours existing holders.
