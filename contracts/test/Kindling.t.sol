@@ -14,6 +14,7 @@ import {
     MockQuote,
     MockFeeOnTransferQuote,
     MockCallbackQuote,
+    MockToggleTaxQuote,
     MockKindlingMantle,
     MockKindlingPool,
     MockVenuePair,
@@ -468,6 +469,52 @@ contract KindlingTest is KindlingRig {
         uint256 id = w.k.materialize(_wallet(1));
         assertEq(w.pool.ownerOf(id), _wallet(1));
         assertGe(w.pool.stakedOf(_wallet(1)), P.MIN_STAKE_LP, "clears the pool minimum");
+    }
+
+    /// @dev One unit past either cap is refused; the boundaries themselves are admitted (the
+    ///      replay's `caps` scenario and the test above).
+    function test_oneUnitPastACapIsRefused() public {
+        vm.warp(T0);
+        World memory w = _world(T0);
+        _contribute(w, _wallet(0), 24_999e6 + 1);
+        vm.prank(_wallet(0));
+        vm.expectRevert(abi.encodeWithSelector(Kindling.WalletCap.selector, 25_000e6 + 1, 25_000e6));
+        w.k.contribute(1e6);
+        _crowd(w, "whale", 199, 25_000e6);
+        assertEq(w.k.accepted(), 4_999_999e6 + 1);
+        vm.prank(_wallet(1));
+        vm.expectRevert(abi.encodeWithSelector(Kindling.RaiseCap.selector, 5_000_000e6 + 1, 5_000_000e6));
+        w.k.contribute(1e6);
+    }
+
+    /// @dev At exactly the minimum the event is settleable, so it cannot be failed early.
+    function test_atExactlyTheMinimumTheEventSettlesAndCannotBeFailed() public {
+        vm.warp(T0);
+        World memory w = _world(T0);
+        _crowd(w, "crowd", 4, 25_000e6);
+        assertEq(w.k.accepted(), w.k.MIN_RAISE());
+        vm.warp(T0 + 1 days);
+        vm.expectRevert(Kindling.StillSettleable.selector);
+        w.k.fail();
+        w.k.settle();
+    }
+
+    /// @dev A quote that starts taxing transfers after the raise (USDC is upgradeable) cannot open
+    ///      the pool short: settlement refuses, changes nothing, and works once the tax is gone.
+    function test_aQuoteThatStartsTaxingCannotOpenThePoolShort() public {
+        vm.warp(T0);
+        MockToggleTaxQuote q = new MockToggleTaxQuote();
+        World memory w = _worldWith(q, T0, P.EMBER_KINDLING_SEED, true);
+        _crowd(w, "crowd", 4, 25_000e6);
+        vm.warp(T0 + 1 days);
+        q.setTax(true);
+        vm.expectRevert(abi.encodeWithSelector(Kindling.QuoteMismatch.selector, 96_030e6));
+        w.k.settle();
+        assertEq(uint256(w.k.status()), uint256(Kindling.Status.Live));
+        q.setTax(false);
+        w.k.settle();
+        (, uint112 rQ,) = w.pair.getReserves();
+        assertEq(rQ, 97_000e6, "the whole net raise");
     }
 
     // ── the venue ─────────────────────────────────────────────────────────
