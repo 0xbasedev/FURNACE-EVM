@@ -104,7 +104,12 @@ Status: accepted for this repository. Not audited, not deployed.
 - **Rehearsal.** `pnpm testnet:dry-run` on a fork of LiteForge, with the smoke actions, ran 44 transactions: 79.7M gas, about 0.0016 zkLTC at 0.02 gwei.
   - The largest transaction is a ForgePool deployment at 10.98M, up from 10.44M, because its initcode embeds the larger annex.
   - The smoke addition cost 98,917 gas.
-- **Mutations:** see the PR.
+- **Mutations:** 24 planted bugs, run in a separate worktree so the main tree never holds one. **All 24 are caught**, none needing a new test. They cover:
+  - the caller: open to anyone, open to a zero compounder, a compounder on a single-asset pool, the annex or the immutable left without the compounder, a stub that does not delegate;
+  - the refusals: a zero amount, a closed position, a listed one, an unbounded slot, an empty slot, the record limit;
+  - the lot's state: a fresh age, fresh participation, a backdated head, a new slot instead of the source lot, a Streak reset;
+  - the books: active principal not raised, a fee charged and booked, nothing pulled, the dilution dropped or wrong;
+  - the kit: a compounder on every pool, or on none.
 
 ## Consequences
 
