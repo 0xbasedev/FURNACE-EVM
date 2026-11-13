@@ -171,6 +171,16 @@ Every call is its own transaction, so storage starts cold, as it does for a real
   - A closed or listed position, or an empty or wholly frozen slot, refuses.
 - **Unchanged.** Every exit, and storage (`pnpm check:layout`).
 
+## Kindling positions and First Flame (added with ADR 0018)
+
+- **The arguments.** ForgePool takes an eighth and a ninth constructor argument: `KINDLING` (LP pools only; `KindlingNeedsLp`) and `FOUNDERS`, the founder record. The annex takes the same ones.
+- **`openKindling(owner, amount)`.** `KINDLING` only. It is `open` for `owner`, with LP pulled from Kindling at the standard 1% deposit fee and nothing backdated.
+- **`refreshFounder(id)`.** Anyone may call it; it runs in the annex.
+  - It sets the position's First Flame flag to its owner's founder record, after closing every active segment at now.
+  - The flag rides bit 39 of each record's Streak anchor.
+  - The measures read financial Heat 15 days older in W and the sealed W, and nowhere else.
+- **Unchanged.** Every exit, every lot's age and participation, and storage (`pnpm check:layout`).
+
 ## Consequences and limits
 
 - **Not yet implemented** (as of this ADR; most of these have since landed in later ADRs):
@@ -179,6 +189,6 @@ Every call is its own transaction, so storage starts cold, as it does for a real
   - Taps (youngest-first, no haircut, quota);
   - Deeds (transfer with an 80% age carry and a Streak reset);
   - Capstone and Pyre ordinary bonuses (`integrateHeat` already takes the bonus);
-  - founder phantom age.
+  - founder phantom age (First Flame since built; see above and ADR 0018; the head start is not).
 - Matching the model proves the port is consistent with this ADR's readings. It does not make any [P] rule canonical.
 - Nothing here is audited or deployed.
