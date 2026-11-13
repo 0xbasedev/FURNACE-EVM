@@ -86,7 +86,14 @@ Status: accepted for this repository. Not audited, not deployed.
 - **Rehearsal.** `pnpm testnet:dry-run` on a fork of LiteForge, with the smoke actions, ran 49 transactions: 85.3M gas, about 0.0017 zkLTC at 0.02 gwei.
   - The largest transaction is a ForgePool deployment at 12.48M.
   - The grant cost 70,132.
-- **Mutations:** see the PR.
+- **`pnpm check`:** 351/351 Forge tests, in a clean worktree.
+- **Mutations:** 23 planted bugs, run in a separate worktree so the main tree never holds one. **All 23 are caught**, none needing a new test. They cover:
+  - the grant's gates: any caller, a zero `IGNITION`, zero or uncapped seconds, a closed or listed position, a second grant, an empty or wholly frozen slot;
+  - its write: no segment close at grant, every slot masked;
+  - the mask's travel: a freed slot keeping the bit, a slice returning to a free slot dropping it;
+  - the anchors: the mask read while inactive, the seconds dropped, the wrong flag bit, `measureSlot` without the slot anchor;
+  - the measures: the head start ignored or applied to every lot, no stacking with First Flame, the flag leaking into the Ashfall clock;
+  - the sale keeping the head start, and the kit without `IGNITION`.
 
 ## Consequences
 
