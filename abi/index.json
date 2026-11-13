@@ -46,5 +46,9 @@
   "TestnetFeeRebate": {
     "file": "TestnetFeeRebate.json",
     "testnetOnly": true
+  },
+  "TestnetFounders": {
+    "file": "TestnetFounders.json",
+    "testnetOnly": true
   }
 }

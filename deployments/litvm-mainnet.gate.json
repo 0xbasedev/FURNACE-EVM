@@ -21,7 +21,8 @@
     "SealedPot": null,
     "Valuation": null,
     "PyreLedger": null,
-    "FeeRebate": null
+    "FeeRebate": null,
+    "Founders": null
   },
   "audits": []
 }

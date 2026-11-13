@@ -4,6 +4,7 @@ pragma solidity 0.8.28;
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IValuation, IPyreLedger} from "../../src/forge/Boost.sol";
 import {IFeeRebate} from "../../src/flow/Flow.sol";
+import {IFounders} from "../../src/forge/ForgePoolBase.sol";
 
 // TESTNET ONLY. These contracts stand in for modules that are not built, or not deployed on the
 // target testnet, so the built core (EMBER, the Mantle, ForgePool, ForgeEmissions, Boost) can be
@@ -107,5 +108,26 @@ contract TestnetFeeRebate is IFeeRebate {
         if (msg.sender != OPERATOR) revert NotOperator();
         rebatePctOf[wallet] = pct;
         emit RebateSet(wallet, pct);
+    }
+}
+
+/// @notice Stands in for Ignition's First Flame record, which is not built. The operator marks
+///         founder wallets by hand; a pool's `refreshFounder` reads it (ADR 0018).
+contract TestnetFounders is IFounders {
+    address public immutable OPERATOR;
+    mapping(address wallet => bool) public isFounder;
+
+    event FounderMarked(address indexed wallet, bool founder);
+
+    error NotOperator();
+
+    constructor(address operator) {
+        OPERATOR = operator;
+    }
+
+    function setFounder(address wallet, bool founder) external {
+        if (msg.sender != OPERATOR) revert NotOperator();
+        isFounder[wallet] = founder;
+        emit FounderMarked(wallet, founder);
     }
 }

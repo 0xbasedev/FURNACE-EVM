@@ -34,6 +34,8 @@ export const DEPOSIT_FEE_PCT = BigInt(cfg.forge.fees.depositPct);
 export const WITHDRAW_FEE_PCT = BigInt(cfg.forge.fees.withdrawPct);
 export const EMERGENCY_FEE_PCT = BigInt(cfg.forge.emergencyExit.feePct);
 export const MIN_STAKE_LP = parseUnits(cfg.forge.minStakeLp, 18);
+/** First Flame (ADR 0018): a founder's financial Heat reads this much older (an offset, never in participation). */
+export const FIRST_FLAME_AGE = BigInt(cfg.ignition.founderBadge.phantomAgeBonusDays) * DAY;
 export const SEAL_TRACKS = cfg.forge.convictionTracks.tracks.map((t) => ({ seconds: BigInt(t.days) * DAY, bonus: ray(String(t.bonus)) }));
 export const SEAL_GAP = BigInt(cfg.emissions.epochSeconds); // [P] ForgePool.seal
 /** Tap tiers (spec §9): the Relics with a Tap perk, by Streak. ADR 0014. */
@@ -75,12 +77,16 @@ export interface Position {
   owner: number; listing: number; owners: { owner: number; until: bigint }[];
   /** The last Tap request (ADR 0014). */
   lastTapAt: bigint;
+  /** First Flame (ADR 0018): the owner's founder record, as last refreshed; a sale clears it. */
+  founder: boolean;
 }
-export interface Rec { since: bigint; amount: bigint; age: bigint; part: bigint; seal: number; streak: bigint; bonus: bigint }
+export interface Rec { since: bigint; amount: bigint; age: bigint; part: bigint; seal: number; streak: bigint; bonus: bigint; founder: boolean }
 const UINT96_MAX = (1n << 96n) - 1n;
 export interface Occ { time: bigint; cum: bigint; on: boolean }
 
 const emptyLot = (): Lot => ({ amount: 0n, age: 0n, part: 0n, heldBy: 0 });
+/** The age financial Heat reads: First Flame adds its offset, capped like any age (ADR 0018). */
+const heatAge = (age: bigint, founder: boolean) => min(age + (founder ? FIRST_FLAME_AGE : 0n), AGE_CAP);
 const deadline = (t: Ticket) => t.maturity + WINDOW;
 
 export class ForgeModel {
@@ -160,7 +166,7 @@ export class ForgeModel {
       const seal = this.running(p);
       p.lots.forEach((lot, j) => {
         if (lot.amount === 0n) return;
-        const s = lot.amount * d, w = lot.amount * integrateHeat(lot.age, d, p.bonus * BONUS_UNIT);
+        const s = lot.amount * d, w = lot.amount * integrateHeat(heatAge(lot.age, p.founder), d, p.bonus * BONUS_UNIT);
         const q = ashfallWeight(lot.amount, lot.age, lot.part, p.streakStart, a, b, p.bonus);
         const sealed = seal !== undefined && has(seal.cohort, j);
         p.S += s; p.W += w; p.Q += q;
@@ -280,9 +286,9 @@ export class ForgeModel {
     const head = p.heads.get(j);
     if (head && head.since !== t) {
       if (!p.history.has(j)) p.history.set(j, []);
-      p.history.get(j)!.push({ ...head, streak: p.streakStart, bonus: p.bonus });
+      p.history.get(j)!.push({ ...head, streak: p.streakStart, bonus: p.bonus, founder: p.founder });
     }
-    p.heads.set(j, { since: t, amount: lot.amount, age: lot.age, part: lot.part, seal: this.tag(p, j), streak: 0n, bonus: 0n });
+    p.heads.set(j, { since: t, amount: lot.amount, age: lot.age, part: lot.part, seal: this.tag(p, j), streak: 0n, bonus: 0n, founder: false });
   }
 
   // ── Seals (mirror of ForgePool's Seal transitions) ───────────────────────
@@ -344,8 +350,8 @@ export class ForgeModel {
       const end = i + 1 < n ? hist[i + 1].since : i + 1 === n ? head.since : 1n << 255n;
       if (end <= t0 || r.amount === 0n) continue;
       const a = r.since > t0 ? r.since : t0, b = end < t1 ? end : t1;
-      const age = min(r.age + (a - r.since), AGE_CAP);
       const bonus = i < n ? r.bonus : p.bonus; // a head carries the position's current anchors
+      const age = heatAge(min(r.age + (a - r.since), AGE_CAP), i < n ? r.founder : p.founder);
       let s = r.amount * (b - a), w = r.amount * integrateHeat(age, b - a, bonus * BONUS_UNIT);
       out.s += s; out.w += w;
       if (ashfall) out.q += ashfallWeight(r.amount, r.age + (a - r.since), r.part + (a - r.since), i < n ? r.streak : p.streakStart, a, b, bonus);
@@ -380,7 +386,7 @@ export class ForgeModel {
       epochS: new Map(), epochW: new Map(), historySlots: new Set(), openedAt: now, closedAt: 0n,
       heads: new Map(), history: new Map(),
       seals: [], SS: 0n, SW: 0n, epochSS: new Map(), epochSW: new Map(), Q: 0n, epochQ: new Map(),
-      owner, listing: 0, owners: [], lastTapAt: 0n,
+      owner, listing: 0, owners: [], lastTapAt: 0n, founder: false,
     };
     this.positions.push(p);
     this.addLot(p, amount, now);
@@ -412,6 +418,20 @@ export class ForgeModel {
     this.recordHead(p, slot);
     this.increaseActive(amount, now);
     if (units !== 0n) this.rebonus(p, units * (active + frozen) / (active + frozen + amount));
+  }
+  /** KINDLING only (ForgePool.openKindling, ADR 0018): a contributor's position at the standard fee. */
+  openKindling(amount: bigint, now: bigint, owner = this.positions.length + 1): number {
+    need(this.lp, 'NotKindling');
+    return this.open(amount, now, owner);
+  }
+  /** Anyone (ForgePoolAnnex.refreshFounder, ADR 0018): the flag follows the owner's founder record,
+   *  `isFounder`, after every active segment closes at now. */
+  refreshFounder(id: number, isFounder: boolean, now: bigint) {
+    const p = this.touch(id, now);
+    need(!p.closed, 'Closed');
+    if (isFounder === p.founder) return;
+    p.lots.forEach((lot, j) => { if (lot.amount !== 0n) this.recordHead(p, j); });
+    p.founder = isFounder;
   }
   /** BOOST sets the ordinary bonus (ForgePool.setOrdinaryBonus); a closed position keeps its own. */
   setBonus(id: number, units: bigint, now: bigint) {
@@ -568,7 +588,7 @@ export class ForgeModel {
       lot.age = deedAge(lot.age);
       this.recordHead(p, j);
     });
-    p.owner = buyer; p.streakStart = now; p.bonus = 0n; p.plan = null;
+    p.owner = buyer; p.streakStart = now; p.bonus = 0n; p.plan = null; p.founder = false;
     p.listing++;
   }
   ownedSince(p: Position): bigint { return p.owners.length ? p.owners[p.owners.length - 1].until : p.openedAt; }

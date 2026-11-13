@@ -24,7 +24,9 @@ struct Lot {
 
 /// @dev A superseded head, valid from `since` until the next record's `since`.
 ///      `streak` is the position's Streak start and `ordinaryBonus` its Capstone + Pyre
-///      bonus (units of ORDINARY_BONUS_UNIT_RAY) while the head was current. A Streak
+///      bonus (units of ORDINARY_BONUS_UNIT_RAY) while the head was current. Bit 39 of
+///      `streak` (FOUNDER_FLAG; a timestamp never reaches it) marks a First Flame owner: the
+///      segment's financial Heat reads FIRST_FLAME_AGE older, and nothing else changes (ADR 0018). A Streak
 ///      reset or a bonus change rewrites each active head at that instant first, so an
 ///      active segment never spans one; a head's own anchors are the position's current
 ///      values (ADR 0007, ADR 0008). `participated` saturates at the Ashfall minimum.
@@ -118,8 +120,11 @@ library ForgeMeasures {
         return P.SEAL_TRACK_3_BONUS_RAY;
     }
 
-    /// @notice Packs a position's current Streak start and ordinary bonus: the anchors of
-    ///         its heads.
+    /// @notice Bit 39 of a record's `streak`: the owner held First Flame (ADR 0018).
+    uint256 internal constant FOUNDER_FLAG = 1 << 39;
+
+    /// @notice Packs a position's current Streak start (with the founder flag) and ordinary
+    ///         bonus: the anchors of its heads.
     function anchorOf(uint256 streakStart, uint256 ordinaryBonus) internal pure returns (uint256) {
         return streakStart | (ordinaryBonus << 40);
     }
@@ -208,7 +213,9 @@ library ForgeMeasures {
         if (segEnd <= c.t0 || r.amount == 0) return true;
         uint256 a = r.since > c.t0 ? r.since : c.t0;
         uint256 b = segEnd < c.t1 ? segEnd : c.t1;
-        uint256 age = Math.min(r.age + (a - r.since), P.HEAT_AGE_CAP);
+        // First Flame reads financial Heat older; participation and the Ashfall clock never see it.
+        uint256 phantom = (uint256(r.streak) & FOUNDER_FLAG) != 0 ? P.FIRST_FLAME_AGE : 0;
+        uint256 age = Math.min(r.age + (a - r.since) + phantom, P.HEAT_AGE_CAP);
         uint256 s = uint256(r.amount) * (b - a);
         uint256 w = uint256(r.amount) * HeatMath.integrateHeat(age, b - a, _bonusRay(r));
         m.stakeSeconds += s;
@@ -232,7 +239,7 @@ library ForgeMeasures {
     ///      have both reached their minimums. Participation grows 1:1 while the lot is
     ///      active, so the eligible part is [e, b] for one start e.
     function _ashfallSegment(Record memory r, uint256 a, uint256 b, SlotMeasure memory m) private pure {
-        uint256 e = uint256(r.streak) + P.ASHFALL_MIN_STREAK;
+        uint256 e = (uint256(r.streak) & (FOUNDER_FLAG - 1)) + P.ASHFALL_MIN_STREAK;
         uint256 part = r.participated + (a - r.since);
         if (part < P.ASHFALL_MIN_PARTICIPATION) e = Math.max(e, a + (P.ASHFALL_MIN_PARTICIPATION - part));
         e = Math.max(e, a);

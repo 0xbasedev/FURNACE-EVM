@@ -11,6 +11,7 @@ import {ForgeLens} from "../src/forge/ForgeLens.sol";
 import {Lot, Record, Seal} from "../src/forge/ForgeMeasures.sol";
 import {FurnaceParams as P} from "../src/generated/FurnaceParams.sol";
 import {MockERC20} from "./utils/MockERC20.sol";
+import {MockFounders} from "./utils/MockFounders.sol";
 import {ForgeHandler} from "./ForgePoolInvariant.t.sol";
 
 using ForgeView for ForgePool;
@@ -18,9 +19,10 @@ using ForgeView for ForgePool;
 /// @dev The pool's own storage, returned by Solidity's accessors, and the views ForgePool
 ///      used to define itself (before ADR 0010): the reference ForgeView must reproduce.
 contract ForgePoolViewHarness is ForgePool {
-    /// A compounder, so the handler's source-lot additions run through the decoding check too.
+    /// A compounder and a founder record, so the handler's source-lot additions and First Flame
+    /// refreshes run through the decoding check too.
     constructor(IERC20 token, address collector, address boost, address deeds)
-        ForgePool(token, true, collector, boost, deeds, address(0), address(0xC0FFEE))
+        ForgePool(token, true, collector, boost, deeds, address(0), address(0xC0FFEE), address(0), address(new MockFounders()))
     {}
 
     function rawPosition(uint256 id) external view returns (Position memory) {

@@ -19,8 +19,9 @@ const CONTRACTS = [
   ['TestnetValuation', 'TestnetStandIns.sol'],
   ['TestnetPyreLedger', 'TestnetStandIns.sol'],
   ['TestnetFeeRebate', 'TestnetStandIns.sol'],
+  ['TestnetFounders', 'TestnetStandIns.sol'],
 ];
-const TESTNET_ONLY = new Set(['TestnetToken', 'TestnetValuation', 'TestnetPyreLedger', 'TestnetFeeRebate']);
+const TESTNET_ONLY = new Set(['TestnetToken', 'TestnetValuation', 'TestnetPyreLedger', 'TestnetFeeRebate', 'TestnetFounders']);
 const check = process.argv.includes('--check');
 
 const files = new Map();

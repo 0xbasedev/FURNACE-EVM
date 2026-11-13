@@ -36,6 +36,16 @@
         "name": "compounder",
         "type": "address",
         "internalType": "address"
+      },
+      {
+        "name": "kindling",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "founders",
+        "type": "address",
+        "internalType": "address"
       }
     ],
     "stateMutability": "nonpayable"
@@ -133,6 +143,19 @@
   },
   {
     "type": "function",
+    "name": "FOUNDERS",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "IS_LP",
     "inputs": [],
     "outputs": [
@@ -140,6 +163,19 @@
         "name": "",
         "type": "bool",
         "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "KINDLING",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
       }
     ],
     "stateMutability": "view"
@@ -620,6 +656,30 @@
   },
   {
     "type": "function",
+    "name": "openKindling",
+    "inputs": [
+      {
+        "name": "owner",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "id",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "poke",
     "inputs": [
       {
@@ -643,6 +703,25 @@
       }
     ],
     "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "refreshFounder",
+    "inputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "nonpayable"
   },
   {
     "type": "function",
@@ -965,6 +1044,25 @@
         "type": "uint256",
         "indexed": false,
         "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "FounderSet",
+    "inputs": [
+      {
+        "name": "id",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "founder",
+        "type": "bool",
+        "indexed": false,
+        "internalType": "bool"
       }
     ],
     "anonymous": false
@@ -1295,6 +1393,11 @@
   },
   {
     "type": "error",
+    "name": "KindlingNeedsLp",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "Listed",
     "inputs": [
       {
@@ -1370,6 +1473,11 @@
   {
     "type": "error",
     "name": "NotFlow",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NotKindling",
     "inputs": []
   },
   {
