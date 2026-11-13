@@ -8,6 +8,7 @@
 //   contracts/test/fixtures/settlement-vectors.json  settlement scenarios (scripts/settlement-scenarios.ts)
 //   contracts/test/fixtures/pair-vectors.json    EmberPair scenarios (scripts/pair-model.ts)
 //   contracts/test/fixtures/flow-vectors.json    Flow zap scenarios (scripts/flow-model.ts)
+//   contracts/test/fixtures/vent-vectors.json    Vent scenarios (scripts/vent-model.ts)
 // Integer references (accounting.ts, BigInt) are matched EXACTLY by the Solidity
 // ports; the float display helper heatMultiplier within 1e-12.
 // pnpm gen --check exits non-zero if either output is stale (CI gate).
@@ -25,6 +26,7 @@ import { settlementVectors } from './settlement-scenarios';
 import { capstoneUnits, pyreUnits, checkAgainstCanonical, PYRE_TIERS, RATIO_FOR_MAX } from './boost-model';
 import { pairVectors, LP_PPM, BUY, SELL, D as PPM_ONE } from './pair-model';
 import { flowVectors } from './flow-model';
+import { ventVectors } from './vent-model';
 import { keccak_256 } from '@noble/hashes/sha3.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
 
@@ -35,6 +37,7 @@ const FORGE_VECTORS = 'contracts/test/fixtures/forge-vectors.json';
 const SETTLEMENT_VECTORS = 'contracts/test/fixtures/settlement-vectors.json';
 const PAIR_VECTORS = 'contracts/test/fixtures/pair-vectors.json';
 const FLOW_VECTORS = 'contracts/test/fixtures/flow-vectors.json';
+const VENT_VECTORS = 'contracts/test/fixtures/vent-vectors.json';
 const DAY = 86_400n;
 
 /** Exact decimal → fixed-point integer string (shortest round-trip, never toFixed noise). */
@@ -370,6 +373,61 @@ rebateTiers.forEach((t, i) => {
   c('uint256', `FLOW_REBATE_TIER_${i}_PCT`, t.pct, `${t.key}: % of the protocol swap share`);
 });
 
+section('The Vent: fee lanes, the protected buyback, its window (spec v5.5 §13; ADR 0020)');
+// Liabilities are booked at receipt and converted later. The burn lane buys EMBER back in the
+// fee's own pair under a TWAP band, a slippage floor, a per-call chunk and a cumulative window
+// measured against the window's fixed starting reserve; a failed check defers, never reverts.
+const fl = cfg.fees, bl = fl.burnLane, ventExec = cfg.execution.vent;
+const ventPolicy: [string, unknown, unknown][] = [
+  ['fees.burnLane.method', bl.method, 'unwindAndBuyback'],
+  ['fees.burnLane.allowlistedRoutersOnly', bl.allowlistedRoutersOnly, true],
+  ['fees.burnLane.deferIfUnsafe', bl.deferIfUnsafe, true],
+  ['fees.feeVault.enabled', fl.feeVault.enabled, true],
+  ['fees.liquidityLane.method', fl.liquidityLane.method, 'matchReserve'],
+  ['fees.tokenFees.burnPct', fl.tokenFees.burnPct, 100],
+  ['execution.vent.reserveReference', ventExec.reserveReference, 'fixedWindowStart'],
+  ['execution.vent.atDeferralLimit', ventExec.atDeferralLimit, 'alertNeverWeakenGuards'],
+  ['execution.vent.principalExitRequiresVent', ventExec.principalExitRequiresVent, false],
+];
+for (const [path, got, want] of ventPolicy) if (got !== want) throw new Error(`the Vent implements ${path} = ${String(want)}, config has ${String(got)}`);
+const pctSplit = (name: string, parts: number[]) => {
+  if (!parts.every((p) => Number.isInteger(p) && p >= 0) || parts.reduce((a, b) => a + b, 0) !== 100) throw new Error(`${name} must be whole percents summing to 100`);
+};
+const em = f.emergencyExit.routing, deedFee = f.deeds.feeRouting;
+pctSplit('fees.vent', [fl.vent.burnPct, fl.vent.liquidityPct, fl.vent.hearthPct, fl.vent.treasuryPct]);
+pctSplit('forge.emergencyExit.routing', [em.burnPct, em.liquidityPct, em.stakersPct]);
+pctSplit('forge.deeds.feeRouting', [deedFee.burnPct, deedFee.liquidityPct]);
+if (bl.twapSeconds !== twap) throw new Error('the Vent reads the pairs\' own TWAP window');
+if (ventExec.aggregateWindowSeconds !== bl.twapSeconds) throw new Error('the Vent window is the TWAP window');
+const chunkBps = parseUnits(String(bl.maxChunkPctOfReserve), 2);
+if (!(chunkBps > 0n && chunkBps <= 100n)) throw new Error('fees.burnLane.maxChunkPctOfReserve must be in (0, 1]%');
+if (!(bl.slippageCapBps > 0 && bl.slippageCapBps <= 100)) throw new Error('fees.burnLane.slippageCapBps must be in (0, 100]');
+if (!(bl.avgPriceBandBps > 0 && bl.avgPriceBandBps <= 500)) throw new Error('fees.burnLane.avgPriceBandBps must be in (0, 500]');
+if (!(ventExec.aggregateMaxReserveBps > 0 && BigInt(ventExec.aggregateMaxReserveBps) <= 100n)) throw new Error('execution.vent.aggregateMaxReserveBps must be in (0, 100]');
+// A buy of at most the chunk moves the price by about twice the chunk; with the slippage floor
+// that keeps every executed buyback far inside the price-impact cap, which is therefore implied.
+if (!(2n * chunkBps + BigInt(bl.slippageCapBps) < BigInt(bl.maxPriceImpactBps))) throw new Error('the chunk and slippage floor must imply fees.burnLane.maxPriceImpactBps');
+if (!(Number.isInteger(fl.feeVault.minBatchUsd) && fl.feeVault.minBatchUsd > 0)) throw new Error('fees.feeVault.minBatchUsd must be a whole number of dollars');
+c('uint256', 'VENT_BURN_PCT', fl.vent.burnPct, 'standard Forge fees: burn lane');
+c('uint256', 'VENT_LIQUIDITY_PCT', fl.vent.liquidityPct, 'match reserve: EMBER burned, quote held');
+c('uint256', 'VENT_HEARTH_PCT', fl.vent.hearthPct, 'owed in kind to the Hearth');
+c('uint256', 'VENT_TREASURY_PCT', fl.vent.treasuryPct, 'owed in kind to the Treasury');
+c('uint256', 'EMERGENCY_BURN_PCT', em.burnPct, 'emergency-exit fees');
+c('uint256', 'EMERGENCY_LIQUIDITY_PCT', em.liquidityPct);
+c('uint256', 'EMERGENCY_STAKERS_PCT', em.stakersPct, 'owed in kind to the stakers\' distributor [P]');
+c('uint256', 'DEED_FEE_BURN_PCT', deedFee.burnPct, 'Deed market fees');
+c('uint256', 'DEED_FEE_LIQUIDITY_PCT', deedFee.liquidityPct);
+c('uint256', 'VENT_BAND_BPS', bl.avgPriceBandBps, 'spot within this of the TWAP');
+c('uint256', 'VENT_SLIPPAGE_BPS', bl.slippageCapBps, 'minimum out: the TWAP value less this, fees included');
+c('uint256', 'VENT_CHUNK_BPS', chunkBps, `${bl.maxChunkPctOfReserve}% of the current quote reserve per call`);
+c('uint256', 'VENT_PRICE_IMPACT_BPS', bl.maxPriceImpactBps, 'implied by the chunk and the slippage floor');
+c('uint256', 'VENT_WINDOW_SECONDS', ventExec.aggregateWindowSeconds, 'aligned windows [P]');
+c('uint256', 'VENT_WINDOW_MAX_BPS', ventExec.aggregateMaxReserveBps, 'of the window\'s fixed starting quote reserve');
+c('uint256', 'VENT_ORACLE_MAX_AGE', 2 * bl.twapSeconds, 'a longer TWAP span is stale: defer [P]');
+c('uint256', 'VENT_MIN_BATCH_USD', fl.feeVault.minBatchUsd, 'whole dollars, in a USD-stablecoin quote only [P]');
+c('uint256', 'VENT_MAX_WAIT', BigInt(fl.feeVault.maxWaitHours) * 3600n, `${fl.feeVault.maxWaitHours} h`);
+c('uint256', 'VENT_ALERT_AFTER', BigInt(bl.maxDeferralHours) * 3600n, `${bl.maxDeferralHours} h: an alert, never a weaker guard`);
+
 section(`Deterministic deployment registry (CREATE3). PROVISIONAL while the deployer is ${cfg.deployment.evm.deployer}`);
 lines.push('    //    Only MINED entries become constants; unmined modules are constructor/initializer inputs.');
 c('address', 'CREATEX', CREATEX_FACTORY);
@@ -512,7 +570,7 @@ vectors.squaredPrimitive.ray = vectors.squaredPrimitive.ageSeconds.map((a, i) =>
 const vectorsJson = JSON.stringify(vectors, null, 2) + '\n';
 
 // ── write or check ───────────────────────────────────────────────────────
-const outputs: [string, string][] = [[PARAMS, params], [SCHEDULE, scheduleSol], [VECTORS, vectorsJson], [FORGE_VECTORS, JSON.stringify(forgeVectors(), null, 1) + '\n'], [SETTLEMENT_VECTORS, JSON.stringify(settlementVectors(), null, 1) + '\n'], [PAIR_VECTORS, JSON.stringify(pairVectors(), null, 1) + '\n'], [FLOW_VECTORS, JSON.stringify(flowVectors(), null, 1) + '\n']];
+const outputs: [string, string][] = [[PARAMS, params], [SCHEDULE, scheduleSol], [VECTORS, vectorsJson], [FORGE_VECTORS, JSON.stringify(forgeVectors(), null, 1) + '\n'], [SETTLEMENT_VECTORS, JSON.stringify(settlementVectors(), null, 1) + '\n'], [PAIR_VECTORS, JSON.stringify(pairVectors(), null, 1) + '\n'], [FLOW_VECTORS, JSON.stringify(flowVectors(), null, 1) + '\n'], [VENT_VECTORS, JSON.stringify(ventVectors(), null, 1) + '\n']];
 if (process.argv.includes('--check')) {
   let stale = 0;
   for (const [p, body] of outputs) {

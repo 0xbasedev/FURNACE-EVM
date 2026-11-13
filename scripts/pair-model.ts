@@ -29,38 +29,102 @@ export function fees(g: bigint, side: typeof BUY, share: bigint): Fees {
   return { lp, burn, liquidity, quoteYield, total: lp + burn + liquidity + quoteYield };
 }
 
+const U32 = 1n << 32n, U256 = 1n << 256n, U112 = (1n << 112n) - 1n;
+/** Observations are written at most every sixth of the TWAP window, into a ring of 8. */
+export const OBSERVATION_PERIOD = BigInt(cfg.fees.burnLane.twapSeconds / 6);
+export const OBSERVATIONS = 8;
+
 export class PairModel {
   rE = 0n; rQ = 0n; supply = 0n; lpBalance = 0n;
   burn = 0n; liquidity = 0n; quoteYield = 0n;
+  paused = false;
+  /** The oracle: the block time the next call runs at, the cumulative price and its ring. */
+  now = 0n; updatedAt = 0n; cum = 0n; latest = 0; count = 0;
+  obs = Array.from({ length: OBSERVATIONS }, () => ({ ts: 0n, cum: 0n }));
   readonly quoteScale: bigint;
   constructor(readonly quoteDecimals: number) { this.quoteScale = 10n ** BigInt(18 - quoteDecimals); }
 
   private book(f: Fees) { this.burn += f.burn; this.liquidity += f.liquidity; this.quoteYield += f.quoteYield; }
 
-  buy(quoteIn: bigint, share: bigint): bigint[] {
+  /** What a buy returns now, reverting as the pair's `quoteBuy` would. */
+  previewBuy(quoteIn: bigint, share: bigint): { out: bigint; f: Fees } {
+    need(!this.paused, 'SwapsPaused');
     need(quoteIn > 0n, 'ZeroAmount');
+    need(quoteIn <= U112, 'ReserveOverflow');
     need(this.supply > 0n, 'NoLiquidity');
     const f = fees(quoteIn, BUY, share);
     need(f.total < quoteIn, 'TooSmall');
     const net = quoteIn - f.total;
     const out = (this.rE * net) / (this.rQ + net);
     need(out > 0n, 'ZeroOutput');
-    this.rQ += net + f.lp;
+    return { out, f };
+  }
+
+  buy(quoteIn: bigint, share: bigint, minOut = 0n): bigint[] {
+    const { out, f } = this.previewBuy(quoteIn, share);
+    need(out >= minOut, 'Slippage');
+    this.updateOracle();
+    this.rQ += quoteIn - f.total + f.lp;
     this.rE -= out;
+    this.stamp();
     this.book(f);
     return [out, f.total, f.lp];
   }
 
   sell(emberIn: bigint, share: bigint): bigint[] {
+    need(!this.paused, 'SwapsPaused');
     need(emberIn > 0n, 'ZeroAmount');
+    need(emberIn <= U112, 'ReserveOverflow');
     need(this.supply > 0n, 'NoLiquidity');
     const gross = (this.rQ * emberIn) / (this.rE + emberIn);
     const f = fees(gross, SELL, share);
     need(f.total < gross, 'TooSmall');
+    this.updateOracle();
     this.rE += emberIn;
     this.rQ = this.rQ - gross + f.lp;
+    this.stamp();
     this.book(f);
     return [gross - f.total, f.total, f.lp];
+  }
+
+  // ── the oracle (EmberPair `_updateOracle`, `checkpoint`, `consult`) ──
+  private price() { return (this.rQ << 112n) / this.rE; }
+  /** Before every reserve change, with the reserves as they were. */
+  private updateOracle() {
+    const ts = this.now % U32, dt = (ts - this.updatedAt + U32) % U32;
+    if (dt !== 0n && this.rE !== 0n) this.cum = (this.cum + this.price() * dt) % U256;
+    if (this.count === 0 || (ts - this.obs[this.latest].ts + U32) % U32 >= OBSERVATION_PERIOD) {
+      const next = this.count === 0 ? 0 : (this.latest + 1) % OBSERVATIONS;
+      this.obs[next] = { ts, cum: this.cum };
+      this.latest = next;
+      if (this.count < OBSERVATIONS) this.count++;
+    }
+  }
+  private stamp() { this.updatedAt = this.now % U32; }
+
+  checkpoint(): bigint[] {
+    need(this.supply > 0n, 'NoLiquidity');
+    this.updateOracle();
+    this.stamp();
+    return [0n, 0n, 0n];
+  }
+
+  currentCumulative(): [bigint, bigint] {
+    const ts = this.now % U32, dt = (ts - this.updatedAt + U32) % U32;
+    const c = dt !== 0n && this.rE !== 0n ? (this.cum + this.price() * dt) % U256 : this.cum;
+    return [c, ts];
+  }
+
+  /** EMBER's average price (UQ112.112) since the newest observation at least `window` old. */
+  consult(window: bigint): [bigint, bigint] {
+    need(window !== 0n, 'BadWindow');
+    const [cumNow, ts] = this.currentCumulative();
+    for (let k = 0; k < this.count; k++) {
+      const o = this.obs[(this.latest + OBSERVATIONS - k) % OBSERVATIONS];
+      const elapsed = (ts - o.ts + U32) % U32;
+      if (elapsed >= window) return [((cumNow - o.cum + U256) % U256) / elapsed, elapsed];
+    }
+    throw new Revert('OracleNotReady');
   }
 
   add(emberDesired: bigint, quoteDesired: bigint): bigint[] {
@@ -68,7 +132,8 @@ export class PairModel {
     if (this.supply === 0n) {
       const l = isqrt(emberDesired * quoteDesired * this.quoteScale);
       need(l > MINIMUM_LIQUIDITY, 'LiquidityTooLow');
-      this.rE = emberDesired; this.rQ = quoteDesired;
+      this.updateOracle();
+      this.rE = emberDesired; this.rQ = quoteDesired; this.stamp();
       this.supply = l; this.lpBalance += l - MINIMUM_LIQUIDITY;
       return [emberDesired, quoteDesired, l - MINIMUM_LIQUIDITY];
     }
@@ -76,7 +141,9 @@ export class PairModel {
     if (q > quoteDesired) { q = quoteDesired; e = (quoteDesired * this.rE) / this.rQ; }
     const l = min((e * this.supply) / this.rE, (q * this.supply) / this.rQ);
     need(l > 0n, 'ZeroLiquidity');
+    this.updateOracle();
     this.rE += e; this.rQ += q; this.supply += l; this.lpBalance += l;
+    this.stamp();
     return [e, q, l];
   }
 
@@ -85,7 +152,9 @@ export class PairModel {
     const e = (l * this.rE) / this.supply, q = (l * this.rQ) / this.supply;
     need(e > 0n || q > 0n, 'ZeroOutput');
     if (l > this.lpBalance) throw new Error('scenario redeems more than it holds');
+    this.updateOracle();
     this.lpBalance -= l; this.supply -= l; this.rE -= e; this.rQ -= q;
+    this.stamp();
     return [e, q, 0n];
   }
 

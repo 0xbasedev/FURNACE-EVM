@@ -14,6 +14,7 @@ import {Boost, IValuation, IPyreLedger} from "../src/forge/Boost.sol";
 import {ForgeLens} from "../src/forge/ForgeLens.sol";
 import {EmberPair} from "../src/pairs/EmberPair.sol";
 import {Flow, IFeeRebate} from "../src/flow/Flow.sol";
+import {Vent, IVentFeePool, IVentPair, IVentMantle} from "../src/vent/Vent.sol";
 import {
     TestnetToken, TestnetValuation, TestnetPyreLedger, TestnetFeeRebate, TestnetFounders
 } from "./testnet/TestnetStandIns.sol";
@@ -64,6 +65,7 @@ abstract contract FurnaceTestnet {
         IERC20[2] pairQuote; // tUSDC (or FURNACE_TESTNET_USDC), tWETH (or FURNACE_TESTNET_WETH)
         bool pairsLive;
         Flow flow; // at its predicted address; the pairs and pools 0 and 1 name it
+        Vent vent; // at its predicted address; every pool's fee collector, every pair's fee router
         TestnetFeeRebate rebates;
         TestnetFounders founders;
         TestnetValuation valuation;
@@ -105,6 +107,7 @@ abstract contract FurnaceTestnet {
         address[4] pool;
         address[2] pair;
         address flow;
+        address vent;
     }
 
     function _poolLabel(uint256 i) internal pure returns (string memory) {
@@ -124,6 +127,7 @@ abstract contract FurnaceTestnet {
         for (uint256 i; i < 4; ++i) pl.pool[i] = _predict(deployer, _salt(deployer, version, _poolLabel(i)));
         for (uint256 i; i < 2; ++i) pl.pair[i] = _predict(deployer, _salt(deployer, version, _pairLabel(i)));
         pl.flow = _predict(deployer, _salt(deployer, version, "Flow"));
+        pl.vent = _predict(deployer, _salt(deployer, version, "Vent"));
     }
 
     function _create3(Plan memory pl, string memory label, address predicted, bytes memory initCode)
@@ -181,6 +185,7 @@ abstract contract FurnaceTestnet {
         if (o.pairsNow) _deployPairs(pl, d);
         _deployPools(pl, d);
         _deployFlow(pl, d);
+        _deployVent(pl, d);
         _deployEmissionsAndBoost(pl, d);
         d.lens = new ForgeLens();
         _checkWiring(d);
@@ -190,24 +195,27 @@ abstract contract FurnaceTestnet {
         d.ember = EmberToken(
             _create3(pl, "EmberToken", pl.ember, abi.encodePacked(type(EmberToken).creationCode, abi.encode(pl.mantle)))
         );
-        address[] memory registrars = new address[](1);
-        Mantle.BurnCategory[] memory categories = new Mantle.BurnCategory[](1);
+        // Boost burns Capstone fees; the Vent burns every other protocol fee (ADR 0020). Both are
+        // Protocol registrars, fixed here for good.
+        address[] memory registrars = new address[](2);
+        Mantle.BurnCategory[] memory categories = new Mantle.BurnCategory[](2);
         (registrars[0], categories[0]) = (pl.boost, Mantle.BurnCategory.Protocol);
+        (registrars[1], categories[1]) = (pl.vent, Mantle.BurnCategory.Protocol);
         bytes memory args =
             abi.encode(IEmberMintBurn(pl.ember), pl.emissions, d.operator, d.operator, d.start, registrars, categories);
         d.mantle = Mantle(_create3(pl, "Mantle", pl.mantle, abi.encodePacked(type(Mantle).creationCode, args)));
     }
 
-    /// @notice The two EMBER pairs at their predicted addresses. They name Flow's predicted
-    ///         address; the operator holds the fee router, guardian and initializer slots
-    ///         (Kindling and the Vent are not built).
+    /// @notice The two EMBER pairs at their predicted addresses. They name Flow's and the Vent's
+    ///         predicted addresses; the operator holds the guardian and initializer slots
+    ///         (Kindling is not built).
     function _deployPairs(Plan memory pl, Deployment memory d) internal {
         if (pl.pair[0].code.length != 0) revert PairsAlreadyLive(pl.pair[0]);
         string[2] memory names = ["Furnace Testnet Blast Furnace EMBER/USDC LP", "Furnace Testnet Smelter EMBER/WETH LP"];
         string[2] memory symbols = ["tBLAST-LP", "tSMELT-LP"];
         for (uint256 i; i < 2; ++i) {
             bytes memory args = abi.encode(
-                names[i], symbols[i], IERC20(pl.ember), d.pairQuote[i], d.operator, pl.flow, d.operator, d.operator
+                names[i], symbols[i], IERC20(pl.ember), d.pairQuote[i], pl.vent, pl.flow, d.operator, d.operator
             );
             d.pairs[i] = EmberPair(
                 _create3(pl, _pairLabel(i), pl.pair[i], abi.encodePacked(type(EmberPair).creationCode, args))
@@ -223,7 +231,8 @@ abstract contract FurnaceTestnet {
             if (address(p.EMBER()) != address(d.stake[2]) || address(p.QUOTE()) != address(d.pairQuote[i])) {
                 revert Miswired("pair tokens");
             }
-            if (p.FEE_ROUTER() != d.operator || p.GUARDIAN() != d.operator) revert Miswired("pair slots");
+            if (p.FEE_ROUTER() != _predict(d.deployer, _salt(d.deployer, d.saltVersion, "Vent"))) revert Miswired("pair FEE_ROUTER");
+            if (p.GUARDIAN() != d.operator) revert Miswired("pair slots");
             if (p.FLOW() != _predict(d.deployer, _salt(d.deployer, d.saltVersion, "Flow"))) revert Miswired("pair FLOW");
             if (p.INITIALIZER() != d.operator) revert Miswired("pair initializer");
         }
@@ -241,10 +250,11 @@ abstract contract FurnaceTestnet {
             // Every pool reads the same founder record for First Flame (ADR 0018).
             address kindling = i == 0 ? d.operator : address(0);
             // The operator stands in for Ignition, the head start's granter, on every pool (ADR 0019).
+            // The Vent collects every pool's fees (ADR 0020).
             bytes memory args = abi.encode(
                 d.stake[i],
                 isLp[i],
-                d.operator,
+                pl.vent,
                 pl.boost,
                 d.operator,
                 flow,
@@ -273,6 +283,18 @@ abstract contract FurnaceTestnet {
         d.flow = Flow(_create3(pl, "Flow", pl.flow, abi.encodePacked(type(Flow).creationCode, args)));
     }
 
+    /// @notice The Vent reads only the Mantle's registrar record at construction, so it deploys
+    ///         before or after the pairs. The operator stands in for the Hearth, the Treasury, the
+    ///         stakers' and Quote-yield distributors, the Deed market and the compounder.
+    function _deployVent(Plan memory pl, Deployment memory d) internal {
+        IVentFeePool[4] memory pools;
+        for (uint256 i; i < 4; ++i) pools[i] = IVentFeePool(pl.pool[i]);
+        IVentPair[2] memory pairs = [IVentPair(pl.pair[0]), IVentPair(pl.pair[1])];
+        address op = d.operator;
+        bytes memory args = abi.encode(IERC20(pl.ember), IVentMantle(pl.mantle), pools, pairs, op, op, op, op, op, op);
+        d.vent = Vent(_create3(pl, "Vent", pl.vent, abi.encodePacked(type(Vent).creationCode, args)));
+    }
+
     function _deployEmissionsAndBoost(Plan memory pl, Deployment memory d) internal {
         bytes memory args =
             abi.encode(IMantleDistribution(pl.mantle), IERC20(pl.ember), d.pools, pl.boost, d.operator, d.operator);
@@ -290,6 +312,7 @@ abstract contract FurnaceTestnet {
         if (address(d.mantle.EMBER()) != address(d.ember)) revert Miswired("Mantle.EMBER");
         if (d.mantle.DISTRIBUTOR() != address(d.emissions)) revert Miswired("Mantle.DISTRIBUTOR");
         if (d.mantle.registrarCategory(address(d.boost)) != Mantle.BurnCategory.Protocol) revert Miswired("Mantle registrar");
+        if (d.mantle.registrarCategory(address(d.vent)) != Mantle.BurnCategory.Protocol) revert Miswired("Mantle Vent registrar");
         if (d.emissions.CAPSTONE() != address(d.boost)) revert Miswired("ForgeEmissions.CAPSTONE");
         for (uint256 i; i < 4; ++i) {
             ForgePool p = d.pools[i];
@@ -301,7 +324,15 @@ abstract contract FurnaceTestnet {
             if (p.KINDLING() != (i == 0 ? d.operator : address(0))) revert Miswired("pool KINDLING");
             if (p.FOUNDERS() != address(d.founders)) revert Miswired("pool FOUNDERS");
             if (p.IGNITION() != d.operator) revert Miswired("pool IGNITION");
+            if (p.FEE_COLLECTOR() != address(d.vent)) revert Miswired("pool FEE_COLLECTOR");
         }
+        Vent v = d.vent;
+        if (address(v.EMBER()) != address(d.ember) || address(v.MANTLE()) != address(d.mantle)) revert Miswired("Vent core");
+        if (address(v.POOL_0()) != address(d.pools[0]) || address(v.POOL_1()) != address(d.pools[1])) revert Miswired("Vent pools");
+        if (address(v.POOL_2()) != address(d.pools[2]) || address(v.POOL_3()) != address(d.pools[3])) revert Miswired("Vent pools");
+        if (address(v.PAIR_0()) != address(d.pairs[0]) || address(v.PAIR_1()) != address(d.pairs[1])) revert Miswired("Vent pairs");
+        if (v.HEARTH() != d.operator || v.TREASURY() != d.operator || v.STAKERS() != d.operator) revert Miswired("Vent recipients");
+        if (v.QUOTE_YIELD() != d.operator || v.DEEDS() != d.operator || v.COMPOUNDER() != d.operator) revert Miswired("Vent slots");
         Flow f = d.flow;
         if (address(f.PAIR0()) != address(d.pairs[0]) || address(f.PAIR1()) != address(d.pairs[1])) revert Miswired("Flow pairs");
         if (address(f.POOL0()) != address(d.pools[0]) || address(f.POOL1()) != address(d.pools[1])) revert Miswired("Flow pools");
@@ -348,6 +379,10 @@ abstract contract FurnaceTestnet {
                 d.pools[0].refreshFounder(ids[0]);
                 // And, standing in for Ignition, grants that position's first lot a 30-day head start.
                 d.pools[0].grantHeadStart(ids[0], 0, 30 days);
+                // The Vent collects every fee taken so far. A buyback in a pair this young
+                // defers (no 30-minute TWAP yet): the quote waits, fail closed (ADR 0020).
+                d.vent.collectAll();
+                d.vent.vent(0);
             }
             d.boost.deposit(d.pairsLive ? 0 : 2, d.pairsLive ? ids[0] : ids[2], 100e18); // a Capstone
         }
@@ -413,6 +448,7 @@ contract DeployTestnet is Script, FurnaceTestnet {
             console2.log("  annex          ", d.pools[i].ANNEX());
         }
         console2.log("Flow             ", address(d.flow));
+        console2.log("Vent             ", address(d.vent));
         console2.log("TestnetFeeRebate ", address(d.rebates));
         console2.log("TestnetFounders  ", address(d.founders));
         console2.log("ForgeLens        ", address(d.lens));
@@ -439,6 +475,7 @@ contract DeployTestnet is Script, FurnaceTestnet {
         vm.serializeAddress(k, "SmelterPoolQuote", address(d.pairQuote[1]));
         vm.serializeBool(k, "pairsLive", d.pairsLive);
         vm.serializeAddress(k, "Flow", address(d.flow));
+        vm.serializeAddress(k, "Vent", address(d.vent));
         vm.serializeAddress(k, "TestnetFeeRebate", address(d.rebates));
         vm.serializeAddress(k, "TestnetFounders", address(d.founders));
         for (uint256 i; i < 4; ++i) {
