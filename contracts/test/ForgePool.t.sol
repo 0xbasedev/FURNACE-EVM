@@ -17,9 +17,12 @@ using ForgeView for ForgePool;
 using ForgeView for ForgePoolHarness;
 
 /// @dev Test-only subclass: jumps a position's ticket or record counter towards its limit.
+/// @dev The harness's compounder on an LP pool (ADR 0017).
+address constant HARNESS_COMPOUNDER = address(0xC0FFEE);
+
 contract ForgePoolHarness is ForgePool {
     constructor(IERC20 stakeToken, bool isLp, address feeCollector, address boost, address deeds)
-        ForgePool(stakeToken, isLp, feeCollector, boost, deeds, address(0))
+        ForgePool(stakeToken, isLp, feeCollector, boost, deeds, address(0), isLp ? HARNESS_COMPOUNDER : address(0))
     {}
 
     function setNextTicketIdForTest(uint256 id, uint32 value) external {
@@ -42,12 +45,15 @@ abstract contract ForgeFixture is ForgeVectors {
     address collector = makeAddr("feeRouter");
     address boost = makeAddr("boost");
     address deeds = makeAddr("deeds");
+    /// @dev The compounder of an LP pool (ADR 0017); a single-asset pool has none.
+    address compounder = makeAddr("compounder");
 
     uint256 constant FUND = 1e30;
 
     function _deploy(bool lp) internal {
         token = new MockERC20("Receipt", "RCPT");
-        pool = new ForgePool(IERC20(address(token)), lp, collector, boost, deeds, address(0));
+        pool = new ForgePool(IERC20(address(token)), lp, collector, boost, deeds, address(0), lp ? compounder : address(0));
+        _fund(compounder);
     }
 
     function _user(uint256 pos) internal pure returns (address) {
@@ -79,7 +85,8 @@ contract ForgePoolDifferentialTest is ForgeFixture {
         List,
         Unlist,
         Settle,
-        Tap
+        Tap,
+        AddToLot
     }
 
     /// @dev Wallets beyond the openers, which only buy Deeds (scripts/forge-scenarios.ts BUYERS).
@@ -134,10 +141,19 @@ contract ForgePoolDifferentialTest is ForgeFixture {
     function test_scenario_taps0() public { _replay("taps0"); }
     function test_scenario_taps1() public { _replay("taps1"); }
     function test_scenario_taps2() public { _replay("taps2"); }
+    function test_scenario_addToLotBasics() public { _replay("addToLotBasics"); }
+    function test_scenario_addToLotCooling() public { _replay("addToLotCooling"); }
+    function test_scenario_addToLotSeal() public { _replay("addToLotSeal"); }
+    function test_scenario_addToLotDeeds() public { _replay("addToLotDeeds"); }
+    function test_scenario_addToLotSingleAsset() public { _replay("addToLotSingleAsset"); }
+    function test_scenario_addToLotCapacity() public { _replay("addToLotCapacity"); }
+    function test_scenario_adds0() public { _replay("adds0"); }
+    function test_scenario_adds1() public { _replay("adds1"); }
+    function test_scenario_adds2() public { _replay("adds2"); }
 
     /// Every generated scenario has a test above; a new one fails this until added.
     function test_everyScenarioIsReplayed() public view {
-        assertEq(vm.parseJsonStringArray(forgeJson, ".names").length, 43, "add a test_scenario_* for each new scenario");
+        assertEq(vm.parseJsonStringArray(forgeJson, ".names").length, 52, "add a test_scenario_* for each new scenario");
     }
 
     function test_provisionalConstantsMatchModel() public {
@@ -208,6 +224,11 @@ contract ForgePoolDifferentialTest is ForgeFixture {
         if (kind == Kind.Boost) {
             vm.prank(boost);
             pool.setOrdinaryBonus(pos, arg);
+            return;
+        }
+        if (kind == Kind.AddToLot) {
+            vm.prank(compounder);
+            pool.addToLot(pos, arg >> 128, uint128(arg));
             return;
         }
         vm.prank(actor);
@@ -347,18 +368,18 @@ contract ForgePoolTest is ForgeFixture {
 
     function test_constructorRejectsZeroAddresses() public {
         vm.expectRevert(ForgePoolBase.ZeroAddress.selector);
-        new ForgePool(IERC20(address(0)), true, collector, boost, deeds, address(0));
+        new ForgePool(IERC20(address(0)), true, collector, boost, deeds, address(0), address(0));
         vm.expectRevert(ForgePoolBase.ZeroAddress.selector);
-        new ForgePool(IERC20(address(token)), true, address(0), boost, deeds, address(0));
+        new ForgePool(IERC20(address(token)), true, address(0), boost, deeds, address(0), address(0));
         vm.expectRevert(ForgePoolBase.ZeroAddress.selector);
-        new ForgePool(IERC20(address(token)), true, collector, address(0), deeds, address(0));
+        new ForgePool(IERC20(address(token)), true, collector, address(0), deeds, address(0), address(0));
         vm.expectRevert(ForgePoolBase.ZeroAddress.selector);
-        new ForgePool(IERC20(address(token)), true, collector, boost, address(0), address(0));
+        new ForgePool(IERC20(address(token)), true, collector, boost, address(0), address(0), address(0));
     }
 
     function test_feeOnTransferTokenIsRejected() public {
         FeeOnTransferERC20 skim = new FeeOnTransferERC20();
-        ForgePool skimPool = new ForgePool(IERC20(address(skim)), false, collector, boost, deeds, address(0));
+        ForgePool skimPool = new ForgePool(IERC20(address(skim)), false, collector, boost, deeds, address(0), address(0));
         skim.mint(alice, 1e18);
         vm.startPrank(alice);
         skim.approve(address(skimPool), type(uint256).max);
@@ -460,7 +481,7 @@ contract ForgePoolTest is ForgeFixture {
 
     function test_emergencyExitIgnoresTheFeeCollector() public {
         // Exits never call the fee collector, so one that always reverts cannot block them.
-        ForgePool hostile = new ForgePool(IERC20(address(token)), true, address(new Reverter()), boost, deeds, address(0));
+        ForgePool hostile = new ForgePool(IERC20(address(token)), true, address(new Reverter()), boost, deeds, address(0), address(0));
         vm.startPrank(alice);
         token.approve(address(hostile), type(uint256).max);
         uint256 id = hostile.open(100e18);
@@ -783,6 +804,9 @@ contract ForgePoolTest is ForgeFixture {
         assertEq(annex.FEE_COLLECTOR(), pool.FEE_COLLECTOR());
         assertEq(annex.BOOST(), pool.BOOST());
         assertEq(annex.DEEDS(), pool.DEEDS());
+        assertEq(annex.FLOW(), pool.FLOW());
+        assertEq(annex.COMPOUNDER(), pool.COMPOUNDER());
+        assertEq(pool.COMPOUNDER(), compounder, "the fixture's LP pool names its compounder");
     }
 
     /// Every delegated function returns the annex's values and reverts with the annex's exact
@@ -827,6 +851,227 @@ contract ForgePoolTest is ForgeFixture {
         assertEq(pool.feesOwed(0), 1e18, "the pool's fees are untouched");
         assertEq(token.balanceOf(address(annex)), 0);
         assertEq(pool.listingOf(id), 0);
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.UnknownPosition.selector, id));
+        vm.prank(compounder);
+        annex.addToLot(id, 0, 1e18);
+    }
+
+    // ── source-lot additions (ADR 0017) ───────────────────────────────────
+
+    function _openAged(uint256 amount, uint256 ageDays) internal returns (uint256 id) {
+        vm.prank(alice);
+        id = pool.open(amount);
+        skip(ageDays * 1 days);
+    }
+
+    function _add(uint256 id, uint256 slot, uint256 amount) internal {
+        vm.prank(compounder);
+        pool.addToLot(id, slot, amount);
+    }
+
+    function test_addToLot_onlyTheCompounder() public {
+        uint256 id = _openAged(100e18, 1);
+        for (uint256 i; i < 3; ++i) {
+            address caller = [alice, boost, address(0)][i];
+            vm.expectRevert(ForgePoolBase.NotCompounder.selector);
+            vm.prank(caller);
+            pool.addToLot(id, 0, 1e18);
+        }
+    }
+
+    /// With no compounder set, nobody can add, not even a caller that is the zero address.
+    function test_addToLot_zeroCompounderAddsNothing() public {
+        ForgePool none = new ForgePool(IERC20(address(token)), true, collector, boost, deeds, address(0), address(0));
+        vm.startPrank(alice);
+        token.approve(address(none), type(uint256).max);
+        uint256 id = none.open(100e18);
+        vm.stopPrank();
+        vm.expectRevert(ForgePoolBase.NotCompounder.selector);
+        vm.prank(address(0));
+        none.addToLot(id, 0, 1e18);
+    }
+
+    function test_compounderNeedsAnLpPool() public {
+        vm.expectRevert(ForgePoolBase.CompounderNeedsLp.selector);
+        new ForgePool(IERC20(address(token)), false, collector, boost, deeds, address(0), compounder);
+        ForgePool single = new ForgePool(IERC20(address(token)), false, collector, boost, deeds, address(0), address(0));
+        assertEq(single.COMPOUNDER(), address(0));
+    }
+
+    /// The addition takes the lot's own age and participation, books no fee, uses no slot,
+    /// keeps the Streak and grows active principal by exactly what the compounder sent.
+    function test_addToLot_atTheSourceLotsAge() public {
+        uint256 id = _openAged(1000e18, 50);
+        vm.prank(alice);
+        pool.deposit(id, 500e18); // slot 1, age 0
+        skip(10 days);
+        uint256 fees = pool.feesOwed(0);
+        uint256 active = pool.activePrincipal();
+        uint256 streak = pool.positionOf(id).streakStart;
+        uint256 sent = token.balanceOf(compounder);
+        vm.expectEmit(address(pool));
+        emit ForgePoolBase.AddedToLot(id, 0, 200e18);
+        _add(id, 0, 200e18);
+        (uint256 amount, uint256 age, uint256 part, uint256 heldBy) = pool.lotAt(id, 0);
+        assertEq(amount, 990e18 + 200e18, "the whole addition, no fee");
+        assertEq(age, 60 days, "the source lot's age");
+        assertEq(part, P.ASHFALL_MIN_PARTICIPATION, "and its participation");
+        assertEq(heldBy, 0);
+        assertEq(pool.lotOf(id, 0).since, block.timestamp, "a new head from now");
+        (, age, part,) = pool.lotAt(id, 1);
+        assertEq(age, 10 days, "the other lot is untouched");
+        assertEq(pool.lotCount(id), 2, "no slot used");
+        assertEq(pool.feesOwed(0), fees, "no fee booked");
+        assertEq(pool.activePrincipal(), active + 200e18);
+        assertEq(pool.positionOf(id).streakStart, streak, "the Streak is kept");
+        assertEq(sent - token.balanceOf(compounder), 200e18, "pulled from the compounder");
+        assertEq(token.balanceOf(address(pool)), pool.activePrincipal() + pool.frozenPrincipal() + pool.feesOwed(0));
+        skip(5 days);
+        pool.poke(id);
+        (, age,,) = pool.lotAt(id, 0);
+        assertEq(age, 65 days, "and it keeps ageing from there");
+    }
+
+    /// An addition is measured from its instant onward, at the lot's Heat: S and W over the
+    /// past are unchanged, and the next interval integrates the larger amount at the old age.
+    function test_addToLot_measuresOnlyFromNow() public {
+        uint256 id = _openAged(1000e18, 40);
+        pool.poke(id);
+        uint256 t1 = block.timestamp;
+        (uint256 s0, uint256 w0,,,) = pool.epochMeasure(id, 0, t1);
+        _add(id, 0, 100e18);
+        skip(1 days);
+        pool.poke(id);
+        (uint256 s1, uint256 w1,,,) = pool.epochMeasure(id, 0, t1);
+        assertEq(abi.encode(s1, w1), abi.encode(s0, w0), "the past is unchanged");
+        (uint256 s2, uint256 w2,,,) = pool.epochMeasure(id, t1, block.timestamp);
+        assertEq(s2, 1090e18 * 1 days);
+        assertEq(w2, 1090e18 * HeatMath.integrateHeat(40 days, 1 days, 0));
+    }
+
+    function test_addToLot_keepsTheSealCohort() public {
+        uint256 id = _openAged(1000e18, 1);
+        vm.prank(alice);
+        uint256 k = pool.seal(id, 0);
+        skip(1 days);
+        _add(id, 0, 100e18);
+        assertEq(pool.lotOf(id, 0).seal, k, "the source cohort's tag");
+        skip(1 days);
+        pool.poke(id);
+        (uint256 s,, uint256 ss,,) = pool.epochMeasure(id, block.timestamp - 1 days, block.timestamp);
+        assertEq(ss, s, "the addition earns under the Seal");
+    }
+
+    function test_addToLot_refusals() public {
+        uint256 id = _openAged(100e18, 1);
+        vm.startPrank(compounder);
+        vm.expectRevert(ForgePoolBase.ZeroAmount.selector);
+        pool.addToLot(id, 0, 0);
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.NotActiveLot.selector, id, 1));
+        pool.addToLot(id, 1, 1e18); // never used
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.NotActiveLot.selector, id, 32));
+        pool.addToLot(id, 32, 1e18);
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.UnknownPosition.selector, 9));
+        pool.addToLot(9, 0, 1e18);
+        vm.stopPrank();
+        // Wholly frozen: the slot is reserved for its slice, not active.
+        vm.prank(alice);
+        uint32 t = pool.requestCooling(id, 99e18);
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.NotActiveLot.selector, id, 0));
+        _add(id, 0, 1e18);
+        vm.prank(alice);
+        pool.cancelCooling(id, t);
+        _add(id, 0, 1e18); // active again
+        // Listed: the reward travels with the Deed instead.
+        vm.prank(deeds);
+        pool.list(id, alice);
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.Listed.selector, id));
+        _add(id, 0, 1e18);
+        vm.prank(alice);
+        pool.unlist(id);
+        // Closed: never resurrected (§98).
+        vm.prank(alice);
+        pool.emergencyExit(id);
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.Closed.selector, id));
+        _add(id, 0, 1e18);
+    }
+
+    function test_addToLot_partlyCoolingLotGrows() public {
+        uint256 id = _openAged(1000e18, 10);
+        vm.prank(alice);
+        pool.requestCooling(id, 99e18);
+        _add(id, 0, 9e18);
+        (uint256 amount,,,) = pool.lotAt(id, 0);
+        assertEq(amount, 891e18 + 9e18);
+        assertEq(pool.frozenPrincipal(), 99e18, "the ticket is untouched");
+    }
+
+    /// At 32 lots a deposit has no slot, but an addition needs none.
+    function test_addToLot_usesNoSlotAtCapacity() public {
+        uint256 id = _openAged(1e18, 0);
+        vm.startPrank(alice);
+        for (uint256 i = 1; i < 32; ++i) pool.deposit(id, 1e18);
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.LotCapacity.selector, id));
+        pool.deposit(id, 1e18);
+        vm.stopPrank();
+        _add(id, 31, 5e18);
+        assertEq(pool.lotCount(id), 32);
+    }
+
+    /// A bonus is diluted exactly as a deposit of the same size would dilute it.
+    function test_addToLot_dilutesTheBonusLikeADeposit() public {
+        uint256 id = _openAged(100e18, 1);
+        vm.prank(boost);
+        pool.setOrdinaryBonus(id, 50_000);
+        vm.expectEmit(address(pool));
+        emit ForgePoolBase.OrdinaryBonusSet(id, 12_500); // 50000 · 99 / (99 + 297)
+        _add(id, 0, 297e18);
+        assertEq(pool.positionOf(id).ordinaryBonus, 12_500);
+    }
+
+    function test_addToLot_amountWidthIsChecked() public {
+        uint256 id = _openAged(100e18, 1);
+        vm.expectRevert(); // SafeCast: the lot's amount is a uint96
+        _add(id, 0, uint256(type(uint96).max) - 99e18 + 1);
+        _add(id, 0, uint256(type(uint96).max) - 99e18); // exactly full
+        (uint256 amount,,,) = pool.lotAt(id, 0);
+        assertEq(amount, type(uint96).max);
+    }
+
+    /// The addition alone, and with a bonus to dilute across 32 lots (the worst case).
+    function test_gas_addToLot() public {
+        uint256 id = _openAged(100e18, 0);
+        vm.startPrank(alice);
+        for (uint256 i = 1; i < 32; ++i) pool.deposit(id, 1e18);
+        vm.stopPrank();
+        skip(1 days);
+        vm.prank(compounder);
+        uint256 g = gasleft();
+        pool.addToLot(id, 0, 1e18);
+        emit log_named_uint("addToLot, no bonus", g - gasleft());
+        vm.prank(boost);
+        pool.setOrdinaryBonus(id, 50_000);
+        skip(1 days);
+        vm.prank(compounder);
+        g = gasleft();
+        pool.addToLot(id, 0, 1e18);
+        emit log_named_uint("addToLot, diluting a bonus across 32 lots", g - gasleft());
+    }
+
+    function test_addToLot_respectsTheRecordLimit() public {
+        ForgePoolHarness h = new ForgePoolHarness(IERC20(address(token)), true, collector, boost, deeds);
+        vm.startPrank(alice);
+        token.approve(address(h), type(uint256).max);
+        uint256 id = h.open(100e18);
+        vm.stopPrank();
+        token.mint(HARNESS_COMPOUNDER, 10e18);
+        vm.prank(HARNESS_COMPOUNDER);
+        token.approve(address(h), type(uint256).max);
+        h.setRecordsForTest(id, 0, uint24(h.BOOST_RECORD_LIMIT()));
+        skip(1 days);
+        vm.prank(HARNESS_COMPOUNDER);
+        vm.expectRevert(abi.encodeWithSelector(ForgePoolBase.RecordLimit.selector, id, 0));
+        h.addToLot(id, 0, 1e18);
     }
 
     // ── Taps (ADR 0014) ───────────────────────────────────────────────────

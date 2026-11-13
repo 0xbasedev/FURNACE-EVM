@@ -75,6 +75,11 @@ contract DeployTestnetTest is Test, FurnaceTestnet {
         assertEq(d.pools[2].FLOW(), address(0), "no fee-free stake into the EMBER pool");
         assertEq(d.pools[3].FLOW(), address(0), "nor the USDC pool");
         assertEq(d.flow.COMPOUNDER(), operator, "the compounder slot is the operator's");
+        // Source-lot additions (ADR 0017): the same compounder, on the LP pools only.
+        assertEq(d.pools[0].COMPOUNDER(), operator, "the compounder adds to pool 0's lots");
+        assertEq(d.pools[1].COMPOUNDER(), operator);
+        assertEq(d.pools[2].COMPOUNDER(), address(0), "the EMBER pool pays liquid EMBER instead");
+        assertEq(d.pools[3].COMPOUNDER(), address(0), "and so does the USDC pool");
         assertEq(address(d.flow.REBATES()), address(d.rebates));
     }
 
@@ -126,6 +131,7 @@ contract DeployTestnetTest is Test, FurnaceTestnet {
         d.boost.refresh(0, ids[0]);
         vm.stopPrank();
         assertGt(d.pools[0].positionOf(ids[0]).ordinaryBonus, 0, "the Capstone raised the bonus");
+        assertEq(d.pools[0].lotCount(ids[0]), 2, "the opening lot and the zap's; the addition took no slot");
 
         vm.warp(d.start + P.EPOCH_SECONDS);
         d.mantle.finalizeEpoch();

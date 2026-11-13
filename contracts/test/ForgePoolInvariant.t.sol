@@ -39,6 +39,11 @@ contract ForgeHandler is Test {
     bool public tapBroken;
     uint256 public taps;
     uint256 public tapExecutions;
+    /// Source-lot additions (ADR 0017): a ghost flag set if an addition ever moved a lot's age or
+    /// participation, used a slot, booked a fee, touched the Streak or added a different amount.
+    address public compounder;
+    bool public addBroken;
+    uint256 public adds;
 
     constructor(ForgePool pool_, MockERC20 token_, address collector_) {
         (pool, token, collector) = (pool_, token_, collector_);
@@ -53,6 +58,13 @@ contract ForgeHandler is Test {
             ids.push(pool.open(1e18 * (i + 1)));
         }
         firstOpen = block.timestamp;
+        compounder = pool_.COMPOUNDER();
+        if (compounder != address(0)) {
+            token.mint(compounder, 1e30);
+            minted += 1e30;
+            vm.prank(compounder);
+            token.approve(address(pool), type(uint256).max);
+        }
     }
 
     function idCount() external view returns (uint256) {
@@ -248,6 +260,35 @@ contract ForgeHandler is Test {
         return false;
     }
 
+    /// The compounder returns earned LP to a lot: usually a used slot, sometimes any slot.
+    function addToLot(uint256 seed, uint256 slot, uint256 amount) external {
+        if (ids.length == 0 || compounder == address(0)) return;
+        uint256 id = ids[seed % ids.length];
+        uint32 used = pool.positionOf(id).usedMask;
+        if (slot % 4 != 0 && used != 0) {
+            uint256 j = slot % 32; // usually a used slot: the next one from here
+            while (used & (1 << j) == 0) j = (j + 1) % 32;
+            slot = j;
+        } else {
+            slot = slot % 40;
+        }
+        amount = bound(amount, 0, 1e24);
+        pool.poke(id); // the lot's state at now, for the comparison below
+        (uint256 a0, uint256 age0, uint256 part0,) = pool.lotAt(id, slot % 32);
+        (uint256 lots0, uint256 streak0, uint256 fees0) =
+            (pool.lotCount(id), pool.positionOf(id).streakStart, pool.feesOwed(0));
+        vm.prank(compounder);
+        try pool.addToLot(id, slot, amount) {
+            ++adds;
+            (uint256 a1, uint256 age1, uint256 part1,) = pool.lotAt(id, slot);
+            if (
+                a1 != a0 + amount || age1 != age0 || part1 != part0 || pool.lotCount(id) != lots0
+                    || pool.positionOf(id).streakStart != streak0 || pool.feesOwed(0) != fees0 || a0 == 0
+            ) addBroken = true;
+        } catch {}
+        _after();
+    }
+
     function poke(uint256 seed) external {
         if (ids.length == 0) return;
         pool.poke(ids[seed % ids.length]);
@@ -285,6 +326,7 @@ contract ForgeHandler is Test {
 
     function userBalances() external view returns (uint256 total) {
         for (uint256 i; i < 3; ++i) total += token.balanceOf(users[i]);
+        if (compounder != address(0)) total += token.balanceOf(compounder);
     }
 }
 
@@ -302,7 +344,7 @@ contract ForgePoolInvariantTest is Test {
     function setUp() public {
         vm.warp(1_700_000_000);
         token = new MockERC20("Receipt", "RCPT");
-        pool = new ForgePool(IERC20(address(token)), true, collector, boost, makeAddr("deeds"), address(0));
+        pool = new ForgePool(IERC20(address(token)), true, collector, boost, makeAddr("deeds"), address(0), makeAddr("compounder"));
         handler = new ForgeHandler(pool, token, collector);
         targetContract(address(handler));
     }
@@ -439,6 +481,12 @@ contract ForgePoolInvariantTest is Test {
         if (handler.firstOpen() != 0) {
             assertLe(pool.occupiedSecondsAt(block.timestamp), block.timestamp - handler.firstOpen());
         }
+    }
+
+    /// A source-lot addition keeps its lot's age and participation, uses no slot, books no fee and
+    /// leaves the Streak alone (ADR 0017).
+    function invariant_additionsKeepTheSourceLot() public view {
+        assertFalse(handler.addBroken());
     }
 
     /// A Tap never haircuts a survivor or resets the Streak, and draws the youngest lots first.

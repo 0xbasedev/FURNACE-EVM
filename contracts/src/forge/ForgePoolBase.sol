@@ -115,6 +115,10 @@ abstract contract ForgePoolBase is ReentrancyGuardTransient {
     /// @notice Flow: the only caller of the fee-free `openFor` / `depositFor`, for LP it formed
     ///         in the same call (spec v5.5 §4; ADR 0016). Zero on a single-asset pool.
     address public immutable FLOW;
+    /// @notice The compounder: the only caller of `addToLot`, which returns internally earned LP
+    ///         to its source lot at that lot's age (spec v5.5 §4, §7; ADR 0017). The same single
+    ///         consumer Flow names for the Compound waiver. Zero on a single-asset pool.
+    address public immutable COMPOUNDER;
 
     uint256 public positionCount;
     /// @notice Principal that earns now. Lapsed slices not yet processed are still
@@ -148,6 +152,7 @@ abstract contract ForgePoolBase is ReentrancyGuardTransient {
     event OrdinaryBonusSet(uint256 indexed id, uint256 units);
     event ListingChanged(uint256 indexed id, uint32 listing);
     event DeedSettled(uint256 indexed id, address indexed seller, address indexed buyer);
+    event AddedToLot(uint256 indexed id, uint256 slot, uint256 amount);
 
     error ZeroAddress();
     error UnknownPosition(uint256 id);
@@ -181,18 +186,30 @@ abstract contract ForgePoolBase is ReentrancyGuardTransient {
     error NotDeeds();
     error NotFlow();
     error FlowNeedsLp();
+    error NotCompounder();
+    error CompounderNeedsLp();
+    error NotActiveLot(uint256 id, uint256 slot);
     error Listed(uint256 id);
     error NotListed(uint256 id);
     error NoTap(uint256 id);
     error TapTooSoon(uint256 readyAt);
     error TapQuotaExceeded(uint256 amount, uint256 quota);
 
-    constructor(IERC20 stakeToken, bool isLp, address feeCollector, address boost, address deeds, address flow) {
+    constructor(
+        IERC20 stakeToken,
+        bool isLp,
+        address feeCollector,
+        address boost,
+        address deeds,
+        address flow,
+        address compounder
+    ) {
         if (
             address(stakeToken) == address(0) || feeCollector == address(0) || boost == address(0)
                 || deeds == address(0)
         ) revert ZeroAddress();
         if (flow != address(0) && !isLp) revert FlowNeedsLp(); // the exemption is for LP formation
+        if (compounder != address(0) && !isLp) revert CompounderNeedsLp(); // single assets pay liquid EMBER (§102)
         if (P.MAX_LOTS_PER_POSITION != MAX_LOTS || P.WITHDRAW_TIER_COUNT != 5) revert ConfigMismatch();
         STAKE_TOKEN = stakeToken;
         IS_LP = isLp;
@@ -200,6 +217,7 @@ abstract contract ForgePoolBase is ReentrancyGuardTransient {
         BOOST = boost;
         DEEDS = deeds;
         FLOW = flow;
+        COMPOUNDER = compounder;
     }
 
     // ── internals ─────────────────────────────────────────────────────────

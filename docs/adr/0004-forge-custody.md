@@ -162,10 +162,20 @@ Every call is its own transaction, so storage starts cold, as it does for a real
 - **Flow calls them only with LP it formed in the same call** (`zapAndStake`).
 - **Unchanged.** `open` and `deposit` themselves still charge 1%. Storage is unchanged too (`pnpm check:layout`).
 
+## Source-lot additions (added with ADR 0017)
+
+- **The argument.** ForgePool takes a seventh constructor argument, an immutable `COMPOUNDER`. Only an LP pool may set it (`CompounderNeedsLp`), and the annex takes the same one.
+- **The call.** `addToLot(id, slot, amount)` accepts only `COMPOUNDER` and pulls from it. It runs in the annex.
+  - It adds to an existing active lot, at that lot's own age and participation, with no fee charged or booked and no new slot.
+  - The Streak and the slot's Seal tag are kept. A bonus is diluted as by `deposit`.
+  - A closed or listed position, or an empty or wholly frozen slot, refuses.
+- **Unchanged.** Every exit, and storage (`pnpm check:layout`).
+
 ## Consequences and limits
 
 - **Not yet implemented** (as of this ADR; most of these have since landed in later ADRs):
   - the authenticated Flow LP deposit-fee exemption (since built; see above and ADR 0016);
+  - source-lot additions for Casting and Stoke into LP (since built; see above and ADR 0017);
   - Taps (youngest-first, no haircut, quota);
   - Deeds (transfer with an 80% age carry and a Streak reset);
   - Capstone and Pyre ordinary bonuses (`integrateHeat` already takes the bonus);

@@ -36,7 +36,7 @@ abstract contract SettlementFixture is Test {
         bool[4] memory lp = [true, true, false, false];
         for (uint256 i; i < 4; ++i) {
             stake[i] = new MockERC20("Stake", "STK");
-            pools[i] = new ForgePool(IERC20(address(stake[i])), lp[i], feeRouter, boost, makeAddr("deeds"), address(0));
+            pools[i] = new ForgePool(IERC20(address(stake[i])), lp[i], feeRouter, boost, makeAddr("deeds"), address(0), address(0));
         }
         uint256 nonce = vm.getNonce(address(this));
         address mantleAt = vm.computeCreateAddress(address(this), nonce + 1);

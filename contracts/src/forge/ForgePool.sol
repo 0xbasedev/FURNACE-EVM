@@ -49,8 +49,11 @@ import {ForgePoolAnnex} from "./ForgePoolAnnex.sol";
 ///         no wallet-bound terms and a fresh cooling plan, and the seller joins the ownership
 ///         log that proves each owner's tenure.
 ///
-///         Annex (ADR 0012): Seals, BOOST's bonus, Deed listing and settlement, and fee
-///         collection run in ForgePoolAnnex, which this pool deploys at construction and calls
+///         Source-lot additions (ADR 0017): the immutable COMPOUNDER returns internally earned LP
+///         to an active lot at that lot's own age, with no fee and no new slot.
+///
+///         Annex (ADR 0012): Seals, BOOST's bonus, Deed listing and settlement, fee collection
+///         and source-lot additions run in ForgePoolAnnex, which this pool deploys at construction and calls
 ///         by DELEGATECALL. Principal paths, exits and views stay here.
 contract ForgePool is ForgePoolBase {
     using SafeERC20 for IERC20;
@@ -59,10 +62,16 @@ contract ForgePool is ForgePoolBase {
     /// @notice This pool's annex: its cold paths, run in this pool's storage (ADR 0012).
     address public immutable ANNEX;
 
-    constructor(IERC20 stakeToken, bool isLp, address feeCollector, address boost, address deeds, address flow)
-        ForgePoolBase(stakeToken, isLp, feeCollector, boost, deeds, flow)
-    {
-        ANNEX = address(new ForgePoolAnnex(stakeToken, isLp, feeCollector, boost, deeds, flow));
+    constructor(
+        IERC20 stakeToken,
+        bool isLp,
+        address feeCollector,
+        address boost,
+        address deeds,
+        address flow,
+        address compounder
+    ) ForgePoolBase(stakeToken, isLp, feeCollector, boost, deeds, flow, compounder) {
+        ANNEX = address(new ForgePoolAnnex(stakeToken, isLp, feeCollector, boost, deeds, flow, compounder));
     }
 
     // ── principal paths ───────────────────────────────────────────────────
@@ -270,6 +279,11 @@ contract ForgePool is ForgePoolBase {
 
     /// @notice See ForgePoolAnnex.collectFees.
     function collectFees() external returns (uint256, uint256, uint256) {
+        _annex();
+    }
+
+    /// @notice See ForgePoolAnnex.addToLot.
+    function addToLot(uint256, uint256, uint256) external {
         _annex();
     }
 
