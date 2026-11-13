@@ -1,0 +1,52 @@
+/* The dApp's layout on the simulator's creamsicle tokens (apps/forge-sim/src/styles/app.css). */
+.app { max-width: 880px; }
+.topbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.wallet { display: flex; gap: 8px; align-items: center; }
+.notice.demo { border-style: dashed; }
+.notice-ico { flex: none; margin-top: 2px; color: var(--accent); }
+.field > .seg { justify-self: start; }
+@media (max-width: 560px) { .brand h1 { font-size: 2.25rem; } }
+.tabs { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 18px; }
+.surface.single { grid-template-columns: minmax(0, 1fr); margin-top: 14px; }
+.panel { display: grid; gap: 14px; }
+.panel.hero { border-color: color-mix(in oklab, var(--accent) 45%, var(--line)); }
+.input.big { font: 650 var(--step-2) / 1.1 var(--body); padding: 12px 14px; }
+.btn.big { padding: 12px 18px; font-weight: 650; }
+.btn:disabled { opacity: 0.55; cursor: not-allowed; }
+.btn.warn { border-color: var(--warn); color: var(--warn); }
+.row.split { justify-content: space-between; align-items: flex-end; }
+.row.between { justify-content: space-between; }
+.nudges { display: grid; gap: 6px; }
+.unit.muted, .muted { color: var(--ink-3); }
+.warn-text { color: var(--warn); }
+.bad-text { color: var(--danger); }
+.pill.good { color: var(--good); }
+
+/* The nudge: the fee-free route beside the deposit it beats. */
+.routes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.route { display: grid; gap: 6px; padding: 14px; border-radius: var(--radius); border: 1px solid var(--line); background: var(--surface-2); min-width: 0; }
+.route.recommended { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; background: color-mix(in oklab, var(--accent) 8%, var(--surface)); }
+.route-v { font: 700 var(--step-3) / 1 var(--body); letter-spacing: -0.02em; overflow-wrap: anywhere; }
+.route-v.muted { color: var(--ink-3); }
+.route .s { margin: 0; font-size: var(--step--1); color: var(--ink-2); }
+@media (max-width: 560px) { .routes { grid-template-columns: minmax(0, 1fr); } }
+
+/* The fee, lane by lane. */
+.lanes { display: flex; gap: 3px; min-height: 64px; }
+.lane { min-width: 72px; flex-basis: 0; padding: 8px; border-radius: 4px; display: grid; gap: 2px; align-content: start; font-size: var(--step--1); background: var(--surface-2); border-top: 3px solid var(--line); }
+.lane b { font: 650 var(--step--1) var(--mono); }
+.lane i { font-style: normal; color: var(--ink-3); }
+.lane.lp { border-top-color: var(--accent); }
+.lane.burn { border-top-color: var(--danger); }
+.lane.liq { border-top-color: var(--good); }
+.lane.qy { border-top-color: var(--warn); }
+@media (max-width: 560px) { .lanes { flex-wrap: wrap; } .lane { flex: 1 1 40%; } }
+
+.positions { display: grid; gap: 12px; }
+.position { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); }
+
+.tx { margin: 0; font-size: var(--step--1); }
+.tx.pending { color: var(--ink-2); }
+.tx.done { color: var(--good); }
+.tx.failed { color: var(--danger); overflow-wrap: anywhere; }
+.tx a { margin-left: 8px; color: inherit; }
