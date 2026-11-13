@@ -252,7 +252,16 @@ contract VentTest is VentRig {
         vm.prank(deeds);
         vm.expectRevert(Vent.NotDeeds.selector);
         none.bookDeedFee(IERC20(address(w.usdc)), 1);
-        // DEEDS books at 50/50; a token that skims is refused.
+        // A token that delivers less than it claims is refused.
+        w.usdc.mint(deeds, 1);
+        vm.startPrank(deeds);
+        w.usdc.approve(address(w.vent), 1);
+        vm.mockCall(address(w.usdc), abi.encodeCall(IERC20.balanceOf, (address(w.vent))), abi.encode(uint256(0)));
+        vm.expectRevert(Vent.NonStandardToken.selector);
+        w.vent.bookDeedFee(IERC20(address(w.usdc)), 1);
+        vm.clearMockedCalls();
+        vm.stopPrank();
+        // DEEDS books at 50/50.
         w.usdc.mint(deeds, 10 * U + 1);
         vm.startPrank(deeds);
         w.usdc.approve(address(w.vent), 10 * U + 1);
