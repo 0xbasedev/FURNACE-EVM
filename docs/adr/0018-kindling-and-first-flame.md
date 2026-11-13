@@ -106,7 +106,14 @@ Materializing positions lazily or in pages is Kindling's own design. Each call o
 - **Rehearsal.** `pnpm testnet:dry-run` on a fork of LiteForge, with the smoke actions, ran 48 transactions: 83.4M gas, about 0.0017 zkLTC at 0.02 gwei.
   - The largest transaction is a ForgePool deployment at 11.99M, up from 10.98M, because its initcode embeds the larger annex.
   - On the fork, `openKindling` cost 185,523 gas and `refreshFounder` 213,782.
-- **Mutations:** see the PR.
+- **`pnpm check`:** 337/337 Forge tests, in a clean worktree.
+- **Mutations:** 24 planted bugs, run in a separate worktree so the main tree never holds one. **All 24 are caught**, none needing a new test. They cover:
+  - the measures: the offset ignored or always applied, the flag leaking into the Ashfall clock, the Ashfall weight or participation;
+  - the anchors: a record or the head anchor dropping the flag;
+  - the refresh: no segment rewrite, a closed position allowed, the record ignored, a malformed answer accepted, a reverting record propagating, a sale keeping the flag;
+  - Kindling: open to anyone, open to a zero `KINDLING`, fee-free, a zero owner, on a single-asset pool;
+  - the wiring: the annex or the immutable without the founder record, the generated offset zero or 14 days;
+  - the kit: Kindling on every LP pool, no founder record.
 
 ## Consequences
 
