@@ -9,6 +9,7 @@
 //   contracts/test/fixtures/pair-vectors.json    EmberPair scenarios (scripts/pair-model.ts)
 //   contracts/test/fixtures/flow-vectors.json    Flow zap scenarios (scripts/flow-model.ts)
 //   contracts/test/fixtures/vent-vectors.json    Vent scenarios (scripts/vent-model.ts)
+//   contracts/test/fixtures/kindling-vectors.json Kindling scenarios (scripts/kindling-model.ts)
 // Integer references (accounting.ts, BigInt) are matched EXACTLY by the Solidity
 // ports; the float display helper heatMultiplier within 1e-12.
 // pnpm gen --check exits non-zero if either output is stale (CI gate).
@@ -27,6 +28,7 @@ import { capstoneUnits, pyreUnits, checkAgainstCanonical, PYRE_TIERS, RATIO_FOR_
 import { pairVectors, LP_PPM, BUY, SELL, D as PPM_ONE } from './pair-model';
 import { flowVectors } from './flow-model';
 import { ventVectors } from './vent-model';
+import { kindlingVectors } from './kindling-model';
 import { keccak_256 } from '@noble/hashes/sha3.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
 
@@ -38,6 +40,7 @@ const SETTLEMENT_VECTORS = 'contracts/test/fixtures/settlement-vectors.json';
 const PAIR_VECTORS = 'contracts/test/fixtures/pair-vectors.json';
 const FLOW_VECTORS = 'contracts/test/fixtures/flow-vectors.json';
 const VENT_VECTORS = 'contracts/test/fixtures/vent-vectors.json';
+const KINDLING_VECTORS = 'contracts/test/fixtures/kindling-vectors.json';
 const DAY = 86_400n;
 
 /** Exact decimal → fixed-point integer string (shortest round-trip, never toFixed noise). */
@@ -428,6 +431,61 @@ c('uint256', 'VENT_MIN_BATCH_USD', fl.feeVault.minBatchUsd, 'whole dollars, in a
 c('uint256', 'VENT_MAX_WAIT', BigInt(fl.feeVault.maxWaitHours) * 3600n, `${fl.feeVault.maxWaitHours} h`);
 c('uint256', 'VENT_ALERT_AFTER', BigInt(bl.maxDeferralHours) * 3600n, `${bl.maxDeferralHours} h: an alert, never a weaker guard`);
 
+section('Kindling: the genesis event, its escrow and the LP sink (spec v5.5 §3; ADR 0021)');
+// One 24 h USDC raise. Contributions pay 3% into the GenesisFeeEscrow; success initializes
+// BlastPool with the 420,000-EMBER seed and the net quote, 90% of the LP to contributors' positions
+// and the rest to the permanent sink; failure refunds remaining principal plus every fee.
+const kd = cfg.kindling, kx = cfg.execution.kindling;
+const kindlingPolicy: [string, unknown, unknown][] = [
+  ['kindling.enabled', kd.enabled, true],
+  ['kindling.quoteToken', kd.quoteToken, 'USDC'],
+  ['kindling.polPair', kd.polPair, 'EMBER/USDC'],
+  ['kindling.priceMode', kd.priceMode, 'clearing'],
+  ['kindling.atomicPoolInit', kd.atomicPoolInit, true],
+  ['kindling.feeEscrowUntilClose', kd.feeEscrowUntilClose, true],
+  ['kindling.feeDestination', kd.feeDestination, 'treasury'],
+  ['fees.genesisDeposit.treasuryPct', cfg.fees.genesisDeposit.treasuryPct, 100],
+  ['execution.kindling.feeCustody', kx.feeCustody, 'dedicatedImmutableEscrow'],
+  ['execution.kindling.successRelease', kx.successRelease, 'afterAtomicPoolInitialization'],
+  ['execution.kindling.failureRefundAsset', kx.failureRefundAsset, 'depositedQuote'],
+  ['execution.kindling.cutoff', kx.cutoff, 'rejectNewDepositsAtDeadline'],
+  ['execution.kindling.cancelUntilSettlement', kx.cancelUntilSettlement, 'netPrincipalNowFeeIfLaunchFails'],
+  ['execution.kindling.closeBountyBasis', kx.closeBountyBasis, 'acceptedGrossQuote'],
+  ['execution.kindling.treasuryFallback', kx.treasuryFallback, 'separateFundedEvent'],
+];
+for (const [path, got, want] of kindlingPolicy) if (got !== want) throw new Error(`Kindling implements ${path} = ${String(want)}, config has ${String(got)}`);
+pctSplit('kindling.lpSplit', [kd.lpSplit.depositorDeedsPct, kd.lpSplit.burnPct]);
+if (!(Number.isInteger(kd.durationHours) && kd.durationHours > 0)) throw new Error('kindling.durationHours must be whole hours');
+if (!(Number.isInteger(kd.depositFeePct) && kd.depositFeePct > 0 && kd.depositFeePct <= cfg.security.feeCeilings.genesisPct)) throw new Error('kindling.depositFeePct must be a whole percent within the genesis ceiling');
+if (!(kd.minRaiseUsd > 0 && kd.minRaiseUsd <= kd.maxRaiseUsd && kd.maxPerWalletUsd > 0 && kd.maxPerWalletUsd <= kd.maxRaiseUsd)) throw new Error('kindling raise limits are inconsistent');
+for (const [k, v] of [['minRaiseUsd', kd.minRaiseUsd], ['maxRaiseUsd', kd.maxRaiseUsd], ['maxPerWalletUsd', kd.maxPerWalletUsd]] as const) if (!Number.isInteger(v)) throw new Error(`kindling.${k} must be whole dollars`);
+if (!(Number.isInteger(kd.closeBountyBps) && kd.closeBountyBps > 0 && kd.closeBountyBps * 100 < kd.depositFeePct * 10_000)) throw new Error('the close bounty must be paid from the fee: closeBountyBps < depositFeePct');
+if (BigInt(kd.seedEmberBpsOfMax) * BigInt(cfg.token.maxSupply) / 10_000n !== BigInt(cfg.token.allocations.kindlingPool)) throw new Error('kindling.seedEmberBpsOfMax must equal the kindlingPool allocation');
+c('uint256', 'KINDLING_DURATION', BigInt(kd.durationHours) * 3600n, `${kd.durationHours} h; deposits stop exactly at the deadline`);
+c('uint256', 'KINDLING_SETTLE_WINDOW', kx.maxSettlementDelaySeconds, 'after the deadline; unsettled by then, the event fails');
+c('uint256', 'KINDLING_MIN_RAISE_USD', kd.minRaiseUsd, 'whole dollars of accepted gross, at settlement [P]');
+c('uint256', 'KINDLING_MAX_RAISE_USD', kd.maxRaiseUsd, 'whole dollars of accepted gross, at admission [P]');
+c('uint256', 'KINDLING_WALLET_CAP_USD', kd.maxPerWalletUsd, 'whole dollars of accepted gross per wallet, at admission [P]');
+c('uint256', 'KINDLING_FEE_BPS', BigInt(kd.depositFeePct) * 100n, `${kd.depositFeePct}%, floored (accounting.ts KindlingEscrow)`);
+c('uint256', 'KINDLING_CONTRIBUTOR_LP_PCT', kd.lpSplit.depositorDeedsPct, 'floored; the permanent sink takes the rest');
+c('uint256', 'KINDLING_CLOSE_BOUNTY_BPS', kd.closeBountyBps, 'of accepted gross less cancellations, from the fees');
+// The smallest contribution Kindling admits [P]. At $1 the fee's floor costs under a millionth of
+// it, so splitting a deposit cannot dodge the fee, and every entitlement clears the pool minimum:
+const KINDLING_MIN_CONTRIBUTION_USD = 1n;
+c('uint256', 'KINDLING_MIN_CONTRIBUTION_USD', KINDLING_MIN_CONTRIBUTION_USD, 'whole dollars of gross per contribution [P]');
+{
+  // The worst case: the smallest net in the largest raise, the pair's LP value-scaled to 18 decimals
+  // (EmberPair mints sqrt(ember · quote · 10^(18 − decimals))). Its 90% entitlement, less pool 0's
+  // deposit fee, must clear MIN_STAKE_LP, so `materialize` never needs a dust path.
+  const net = (usd: bigint) => usd * 10n ** 18n - usd * 10n ** 18n * BigInt(kd.depositFeePct) / 100n;
+  const seed = BigInt(cfg.token.allocations.kindlingPool) * 10n ** 18n;
+  const maxNet = net(BigInt(kd.maxRaiseUsd)), minNet = net(KINDLING_MIN_CONTRIBUTION_USD);
+  const lp = isqrt(seed * maxNet) - 1000n;
+  const entitlement = lp * BigInt(kd.lpSplit.depositorDeedsPct) / 100n * minNet / maxNet;
+  const staked = entitlement - entitlement * BigInt(f.fees.depositPct) / 100n;
+  if (staked < parseUnits(f.minStakeLp, 18)) throw new Error(`a $${KINDLING_MIN_CONTRIBUTION_USD} Kindling entitlement (${staked}) is below forge.minStakeLp`);
+}
+
 section(`Deterministic deployment registry (CREATE3). PROVISIONAL while the deployer is ${cfg.deployment.evm.deployer}`);
 lines.push('    //    Only MINED entries become constants; unmined modules are constructor/initializer inputs.');
 c('address', 'CREATEX', CREATEX_FACTORY);
@@ -570,7 +628,7 @@ vectors.squaredPrimitive.ray = vectors.squaredPrimitive.ageSeconds.map((a, i) =>
 const vectorsJson = JSON.stringify(vectors, null, 2) + '\n';
 
 // ── write or check ───────────────────────────────────────────────────────
-const outputs: [string, string][] = [[PARAMS, params], [SCHEDULE, scheduleSol], [VECTORS, vectorsJson], [FORGE_VECTORS, JSON.stringify(forgeVectors(), null, 1) + '\n'], [SETTLEMENT_VECTORS, JSON.stringify(settlementVectors(), null, 1) + '\n'], [PAIR_VECTORS, JSON.stringify(pairVectors(), null, 1) + '\n'], [FLOW_VECTORS, JSON.stringify(flowVectors(), null, 1) + '\n'], [VENT_VECTORS, JSON.stringify(ventVectors(), null, 1) + '\n']];
+const outputs: [string, string][] = [[PARAMS, params], [SCHEDULE, scheduleSol], [VECTORS, vectorsJson], [FORGE_VECTORS, JSON.stringify(forgeVectors(), null, 1) + '\n'], [SETTLEMENT_VECTORS, JSON.stringify(settlementVectors(), null, 1) + '\n'], [PAIR_VECTORS, JSON.stringify(pairVectors(), null, 1) + '\n'], [FLOW_VECTORS, JSON.stringify(flowVectors(), null, 1) + '\n'], [VENT_VECTORS, JSON.stringify(ventVectors(), null, 1) + '\n'], [KINDLING_VECTORS, JSON.stringify(kindlingVectors(), null, 1) + '\n']];
 if (process.argv.includes('--check')) {
   let stale = 0;
   for (const [p, body] of outputs) {
