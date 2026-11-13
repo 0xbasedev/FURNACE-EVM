@@ -20,7 +20,7 @@ Values from LitVM's docs, each checked against the chain where possible (Novembe
 Orbit differences from Ethereum that could matter here:
 - **`block.number`** is an approximate L1 block number. No Furnace contract reads it.
 - **`block.timestamp`** is the sequencer's clock, kept within 24 hours behind and 1 hour ahead. Furnace's clocks are timestamps, so a testnet Streak or epoch can drift by that much.
-- **Execution gas** is effectively 32M per block. The largest deployment transaction is 11.99M (a ForgePool with its annex), and the heaviest measured settlement page is 5.4M.
+- **Execution gas** is effectively 32M per block. The largest deployment transaction is 12.48M (a ForgePool with its annex), and the heaviest measured settlement page is 5.4M.
 - **Sequencer ordering.** The pairs' 30-minute TWAP (ADR 0015) runs on the sequencer's timestamps.
 
 ## What gets deployed
@@ -66,7 +66,7 @@ On mainnet each of those is an immutable contract at a mined address. That is wh
    cast wallet new                                    # note the address; keep the key offline
    cast wallet import furnace-liteforge --interactive # stores it encrypted in ~/.foundry/keystores
    ```
-2. **Fund it from the faucet.** The rehearsal estimated 83.4M gas over 48 transactions with the pairs, Flow and the smoke actions, about 0.0017 zkLTC at the 0.02 gwei it saw. Take a few times that for headroom.
+2. **Fund it from the faucet.** The rehearsal estimated 85.3M gas over 49 transactions with the pairs, Flow and the smoke actions, about 0.0017 zkLTC at the 0.02 gwei it saw. Take a few times that for headroom.
 3. **Dry run as your address.** Salts bind to the sender, so the addresses printed are the ones the broadcast will use:
    ```sh
    FURNACE_TESTNET_SMOKE=1 pnpm testnet:dry-run --sender <your address>
@@ -90,7 +90,7 @@ On mainnet each of those is an immutable contract at a mined address. That is wh
 - `FURNACE_TESTNET_START`: the Mantle's start; default now
 - `FURNACE_TESTNET_USDC`, `FURNACE_TESTNET_WETH`: existing testnet tokens instead of the stand-ins (the smoke actions mint them, so they must be mintable)
 - `FURNACE_TESTNET_PAIRS=later`: leave the EMBER pairs for `testnet:pairs:deploy`
-- `FURNACE_TESTNET_SMOKE=1`: first liquidity in both pairs (50,000 EMBER with 50,000 tUSDC; 20,000 EMBER with 10 tWETH), one position in each pool, a buy and a sell on BlastPool, a 100 tUSDC zap staked fee-free through Flow into the pool-0 position, 1 LP returned to that position's first lot by the operator as compounder, a Kindling position opened by the operator as Kindling, First Flame marked for the operator and refreshed on the pool-0 position, a Capstone deposit and a cooling request
+- `FURNACE_TESTNET_SMOKE=1`: first liquidity in both pairs (50,000 EMBER with 50,000 tUSDC; 20,000 EMBER with 10 tWETH), one position in each pool, a buy and a sell on BlastPool, a 100 tUSDC zap staked fee-free through Flow into the pool-0 position, 1 LP returned to that position's first lot by the operator as compounder, a Kindling position opened by the operator as Kindling, First Flame marked for the operator and refreshed on the pool-0 position, a 30-day head start granted to that position's first lot by the operator as Ignition, a Capstone deposit and a cooling request
 
 ## After deploying
 
@@ -99,6 +99,7 @@ On mainnet each of those is an immutable contract at a mined address. That is wh
 - **Test tokens**: `TestnetToken.mint(to, amount)` on tUSDC and tWETH.
 - **Through Flow.** `Flow.swap`, `zapIn`, `zapAndStake` (position 0 opens one; any other id adds to your own) and `zapOut`, each with a deadline and a minimum. To see a rebate, have the operator call `TestnetFeeRebate.setRebate(wallet, 50)`: that wallet's swaps then book half the protocol share.
 - **Kindling and First Flame.** The operator stands in for Kindling on pool 0: `ForgePool.openKindling(owner, amount)` opens a contributor's position at the standard 1% fee. `TestnetFounders.setFounder(wallet, true)` marks a founder; anyone then calls `refreshFounder(id)` on that wallet's positions, whose financial Heat then reads 15 days older (ADR 0018).
+- **The head start.** The operator stands in for Ignition on every pool: `ForgePool.grantHeadStart(id, slot, seconds)` dates one active lot back by `seconds`, once per position. It stacks with First Flame and leaves with a sale (ADR 0019).
 - **Source-lot additions.** The operator stands in for the compounder on pools 0 and 1: `ForgePool.addToLot(id, slot, amount)` returns LP to an active lot at that lot's own age, with no fee and no new slot (ADR 0017). The real compounder, which would fund this from earned rewards and the match reserve, is not built.
 - **Trading and liquidity.** `EmberPair.buy`, `sell`, `addLiquidity` and `redeem`, with `quoteBuy` and `quoteSell` for previews. Fees are booked by lane; the operator, as fee router, pulls them with `collectProtocolFees()`. `consult(1800)` returns the 30-minute TWAP once the pair is 30 minutes old; anyone can `checkpoint()` to keep observations fresh.
 
@@ -121,7 +122,7 @@ Each action asks first for an approval of exactly the amount it spends, unless a
   - refusal off the testnet list and without the real CreateX;
   - the smoke actions, then a whole first epoch settled with every pool earning.
 - **The add-on**, offline: with the pairs left out, pools 0 and 1 refuse deposits and the first epoch settles with them empty; after the pairs deploy at the predicted addresses, pool 0 takes LP and earns. A stranger with the same salts lands on another address, and a second deployment is refused.
-- **`pnpm testnet:dry-run`**, on a fork of chain 4441, with the pairs, Flow and the smoke actions (the zap-and-stake, a source-lot addition, a Kindling position and a First Flame refresh included): every predicted address matched the one CreateX returned and the wiring checks passed. That was 48 transactions, the largest 11.99M gas (a ForgePool, whose initcode embeds its annex).
+- **`pnpm testnet:dry-run`**, on a fork of chain 4441, with the pairs, Flow and the smoke actions (the zap-and-stake, a source-lot addition, a Kindling position, a First Flame refresh and a head-start grant included): every predicted address matched the one CreateX returned and the wiring checks passed. That was 49 transactions, the largest 12.48M gas (a ForgePool, whose initcode embeds its annex).
 - **If the dry run fails with "refused stream"**, the RPC is refusing forge's burst of requests; a single `eth_chainId` still answers. Retry a little later: the Flow rehearsal got through on its fourth attempt.
 
 ## Not shown by the testnet

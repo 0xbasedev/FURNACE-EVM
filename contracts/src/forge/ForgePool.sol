@@ -55,9 +55,11 @@ import {ForgePoolAnnex} from "./ForgePoolAnnex.sol";
 ///         Kindling and First Flame (ADR 0018): the immutable KINDLING opens contributors'
 ///         positions at the standard fee; a founder record (FOUNDERS) gives its wallets' positions
 ///         a financial-Heat offset, carried in each record's anchor and never in a lot's age.
+///         The head start (ADR 0019): IGNITION grants one lot of a position its depositor's
+///         Ignition age, once; it stacks with First Flame and covers that lot's principal only.
 ///
 ///         Annex (ADR 0012): Seals, BOOST's bonus, Deed listing and settlement, fee collection,
-///         source-lot additions and First Flame's refresh run in ForgePoolAnnex, which this pool deploys at construction and calls
+///         source-lot additions, First Flame's refresh and the head-start grant run in ForgePoolAnnex, which this pool deploys at construction and calls
 ///         by DELEGATECALL. Principal paths, exits and views stay here.
 contract ForgePool is ForgePoolBase {
     using SafeERC20 for IERC20;
@@ -75,10 +77,13 @@ contract ForgePool is ForgePoolBase {
         address flow,
         address compounder,
         address kindling,
-        address founders
-    ) ForgePoolBase(stakeToken, isLp, feeCollector, boost, deeds, flow, compounder, kindling, founders) {
+        address founders,
+        address ignition
+    ) ForgePoolBase(stakeToken, isLp, feeCollector, boost, deeds, flow, compounder, kindling, founders, ignition) {
         ANNEX = address(
-            new ForgePoolAnnex(stakeToken, isLp, feeCollector, boost, deeds, flow, compounder, kindling, founders)
+            new ForgePoolAnnex(
+                stakeToken, isLp, feeCollector, boost, deeds, flow, compounder, kindling, founders, ignition
+            )
         );
     }
 
@@ -309,6 +314,11 @@ contract ForgePool is ForgePoolBase {
         _annex();
     }
 
+    /// @notice See ForgePoolAnnex.grantHeadStart.
+    function grantHeadStart(uint256, uint256, uint256) external {
+        _annex();
+    }
+
     // ── views ─────────────────────────────────────────────────────────────
 
     /// @notice Raw storage words. Positions, lots, records, tickets, slices, Seals and the
@@ -360,8 +370,9 @@ contract ForgePool is ForgePoolBase {
             m.done = true;
             return m;
         }
+        uint256 anchor = ForgeMeasures.slotAnchor(_anchor(_positions[id]), slot);
         return ForgeMeasures.slotMeasure(
-            _history[id][slot], _lots[id][slot], _seals[id], _anchor(_positions[id]), ashfall, t0, t1, from, maxSegs
+            _history[id][slot], _lots[id][slot], _seals[id], anchor, ashfall, t0, t1, from, maxSegs
         );
     }
 

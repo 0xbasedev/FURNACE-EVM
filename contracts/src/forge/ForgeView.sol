@@ -77,6 +77,7 @@ library ForgeView {
         p.headStartActive = _bits(w2, 11, 1) != 0;
         p.headStart = uint32(_bits(w2, 12, 4));
         p.lastTapAt = uint40(_bits(w2, 16, 5));
+        p.headStartMask = uint32(_bits(w2, 21, 4));
         p.plan = ForgePoolBase.Plan(uint40(_bits(w3, 0, 5)), uint128(_bits(w3, 5, 16)), uint128(_bits(w4, 0, 16)));
     }
 

@@ -595,6 +595,11 @@
             "internalType": "uint40"
           },
           {
+            "name": "headStartMask",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
             "name": "plan",
             "type": "tuple",
             "internalType": "struct ForgePoolBase.Plan",

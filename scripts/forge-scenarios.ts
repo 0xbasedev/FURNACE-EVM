@@ -11,10 +11,11 @@ export const FUND = 10n ** 30n;
 const E = 10n ** 18n;
 const HOUR = 3_600n;
 
-export enum Kind { Open, Deposit, Request, Execute, Cancel, Emergency, Poke, Collect, Seal, Boost, List, Unlist, Settle, Tap, AddToLot, OpenKindling, RefreshFounder }
+export enum Kind { Open, Deposit, Request, Execute, Cancel, Emergency, Poke, Collect, Seal, Boost, List, Unlist, Settle, Tap, AddToLot, OpenKindling, RefreshFounder, GrantHeadStart }
 /** AddToLot: arg = slot << 128 | amount, sent by the compounder (ADR 0017).
  *  OpenKindling: arg = amount, sent by Kindling for the next position's wallet (ADR 0018).
  *  RefreshFounder: arg = 1 if the founder record names the owner, else 0 (ADR 0018).
+ *  GrantHeadStart: arg = slot << 128 | seconds, sent by Ignition (ADR 0019).
  *  List: arg = the seller wallet DEEDS names. Unlist: arg 0 = the owner, 1 = DEEDS. Settle: arg =
  *  the buyer wallet; the listing named is the one the market recorded at its last List. */
 export interface Action { kind: Kind; time: bigint; pos: number; arg: bigint }
@@ -30,7 +31,7 @@ function words(s: Sim, positions: number, now: bigint): bigint[] {
   const out: bigint[] = [];
   for (let id = 1; id <= positions; id++) {
     const p = m.positions[id - 1];
-    if (!p) { out.push(...Array(34 + 5 * MAX_LOTS).fill(0n)); continue; }
+    if (!p) { out.push(...Array(37 + 5 * MAX_LOTS).fill(0n)); continue; }
     out.push(p.S, p.W, BigInt(p.lotCount), BigInt(p.reserved), BigInt(p.pending.length), p.paused, p.streakStart, p.last,
       p.closed ? 1n : 0n, p.ashfallForfeited ? 1n : 0n, p.plan?.start ?? 0n, p.plan?.reference ?? 0n, p.plan?.requested ?? 0n, BigInt(p.nextTicket - 1));
     const seal = p.seals[p.seals.length - 1];
@@ -39,7 +40,7 @@ function words(s: Sim, positions: number, now: bigint): bigint[] {
     out.push(p.Q / RAY, p.bonus); // Ashfall weight, accrued independently; the contract's comes from records
     const prev = p.owners[p.owners.length - 1];
     out.push(BigInt(p.owner), BigInt(p.listing), BigInt(p.owners.length), m.ownedSince(p), BigInt(prev?.owner ?? 0), prev?.until ?? 0n);
-    out.push(p.lastTapAt, p.founder ? 1n : 0n);
+    out.push(p.lastTapAt, p.founder ? 1n : 0n, p.headStart, p.headStartActive ? 1n : 0n, BigInt(p.headStartMask));
     p.lots.forEach((l, j) => out.push(l.amount, l.age, l.part, BigInt(l.heldBy), BigInt(p.heads.get(j)?.seal ?? 0)));
     for (const tid of p.pending) {
       const t = p.tickets.get(tid)!;
@@ -89,6 +90,7 @@ function apply(s: Sim, a: Action): { sim: Sim; reverted: boolean } {
         m.openKindling(a.arg, a.time); return; // Kindling pays, not the wallet
       }
       case Kind.RefreshFounder: m.refreshFounder(a.pos, a.arg === 1n, a.time); return;
+      case Kind.GrantHeadStart: m.grantHeadStart(a.pos, Number(a.arg >> 128n), a.arg & ((1n << 128n) - 1n), a.time); return;
     }
   });
   if (r.reverted) return { sim: s, reverted: true };
@@ -106,7 +108,7 @@ interface Scenario { name: string; lp: boolean; positions: number; actions: Acti
 function record(sc: Scenario) {
   let sim: Sim = { model: new ForgeModel(sc.lp), users: Array(sc.positions + BUYERS).fill(FUND), collector: 0n, market: [] };
   const flat: string[] = [], hash: string[] = [], probe: string[] = [];
-  let reverts = 0, boosted = 0, sold = 0, tapped = 0, added = 0, founded = 0;
+  let reverts = 0, boosted = 0, sold = 0, tapped = 0, added = 0, founded = 0, started = 0;
   sc.actions.forEach((a, i) => { if (i > 0 && a.time < sc.actions[i - 1].time) throw new Error(`${sc.name}: time runs backwards at step ${i}`); });
   for (const [i, a] of sc.actions.entries()) {
     let r: ReturnType<typeof apply>;
@@ -118,13 +120,14 @@ function record(sc: Scenario) {
     else if (a.kind === Kind.AddToLot) added++;
     if (sim.model.positions.some((p) => p.bonus > 0n && p.lots.some((l) => l.amount > 0n))) boosted++;
     if (sim.model.positions.some((p) => p.founder && !p.closed && p.lots.some((l) => l.amount > 0n))) founded++;
+    if (sim.model.positions.some((p) => !p.closed && p.lots.some((l, j) => l.amount > 0n && p.headStartActive && ((p.headStartMask >>> j) & 1) === 1))) started++;
     flat.push(String(a.kind), String(a.time), String(a.pos), String(a.arg), r.reverted ? '1' : '0');
     hash.push(hashWords(words(sim, sc.positions, a.time)));
     const m = sim.model, p1 = m.positions[0];
     probe.push(...[p1?.S ?? 0n, p1?.W ?? 0n, m.active, m.frozen, m.occupiedAt(a.time), p1?.SS ?? 0n].map(String));
   }
   const ashfall = sim.model.positions.filter((p) => p.Q > 0n).length;
-  return { lp: sc.lp, positions: sc.positions, steps: sc.actions.length, reverts, ashfall, boosted, sold, tapped, added, founded, actions: flat, hash, probe };
+  return { lp: sc.lp, positions: sc.positions, steps: sc.actions.length, reverts, ashfall, boosted, sold, tapped, added, founded, started, actions: flat, hash, probe };
 }
 
 // ── scripted scenarios ───────────────────────────────────────────────────
@@ -576,6 +579,52 @@ scripted.push(
     A(Kind.Poke, at(40n), 1),
   ] },
 );
+// ── The head start (ADR 0019): one granted lot, once, stacking with First Flame. ──
+scripted.push(
+  { name: 'headStartLot', lp: true, positions: 2, actions: [
+    // Twins; position 1's first lot gets a 60-day head start. Its later deposit does not.
+    A(Kind.Open, at(0n), 1, 1000n * E),
+    A(Kind.Open, at(0n), 2, 1000n * E),
+    A(Kind.GrantHeadStart, at(1n), 1, add(0, 60n * DAY)),
+    A(Kind.GrantHeadStart, at(1n, 1n), 1, add(0, 10n * DAY)), // HeadStartUsed: once per position
+    A(Kind.GrantHeadStart, at(1n, 1n), 2, add(3, 10n * DAY)), // NotActiveLot
+    A(Kind.GrantHeadStart, at(1n, 1n), 2, add(0, 0n)), // BadHeadStart
+    A(Kind.GrantHeadStart, at(1n, 1n), 2, add(0, 366n * DAY)), // BadHeadStart: past the cap
+    A(Kind.Deposit, at(5n), 1, 500n * E), // new capital: no head start
+    A(Kind.RefreshFounder, at(6n), 1, 1n), // stacks with First Flame
+    A(Kind.AddToLot, at(10n), 1, add(0, 50n * E)), // internally earned: keeps it
+    A(Kind.Poke, at(45n), 1),
+    A(Kind.Poke, at(45n), 2),
+  ] },
+  { name: 'headStartCooling', lp: true, positions: 2, actions: [
+    A(Kind.Open, at(0n), 1, 1000n * E),
+    // Position 2: a whole head-started lot leaves later; its slot frees, and a deposit there is new capital.
+    A(Kind.Open, at(0n, 1n), 2, 100n * E),
+    A(Kind.Deposit, at(1n), 1, 100n * E),
+    A(Kind.GrantHeadStart, at(1n, 1n), 2, add(0, 30n * DAY)),
+    A(Kind.GrantHeadStart, at(2n), 1, add(0, 30n * DAY)),
+    A(Kind.Request, at(40n), 1, 110n * E), // both lots split
+    A(Kind.Deposit, at(40n, 1n), 1, 10n * E), // into slot 2
+    A(Kind.Cancel, at(41n), 1, 1n), // slices return to free slots: slot 0's keeps the head start
+    A(Kind.Poke, at(50n), 1),
+    A(Kind.Request, at(51n), 2, net(100n * E)), // the whole lot: 72h tier
+    A(Kind.Execute, at(54n, 1n), 2, 1n),
+    A(Kind.Deposit, at(55n), 2, 50n * E), // slot 0 again, with no head start
+    A(Kind.Poke, at(70n), 2),
+  ] },
+  { name: 'headStartDeed', lp: true, positions: 1, actions: [
+    A(Kind.Open, at(0n), 1, 1000n * E),
+    A(Kind.List, at(1n), 1, 1n),
+    A(Kind.GrantHeadStart, at(1n, 1n), 1, add(0, 20n * DAY)), // Listed
+    A(Kind.Unlist, at(1n, 2n), 1, 0n),
+    A(Kind.GrantHeadStart, at(2n), 1, add(0, 20n * DAY)),
+    A(Kind.List, at(10n), 1, 1n),
+    A(Kind.Settle, at(11n), 1, 2n), // a sale ends it: never sold as financial age
+    A(Kind.GrantHeadStart, at(12n), 1, add(0, 20n * DAY)), // HeadStartUsed: still once
+    A(Kind.Emergency, at(20n), 1),
+    A(Kind.Poke, at(30n), 1),
+  ] },
+);
 // At 32 lots an addition still fits: it uses no slot. A 33rd deposit does not.
 {
   const actions: Action[] = [A(Kind.Open, at(0n), 1, E)];
@@ -618,7 +667,7 @@ for (const n of [16, 17]) {
 // ── seeded random scenarios ──────────────────────────────────────────────
 /** `deeds` adds List, Unlist and Settle actions; without it the stream of draws, and so every
  *  action, is exactly the walk ADR 0010's mutations were checked against. */
-function randomScenario(name: string, seed: bigint, steps: number, lp: boolean, deeds = false, taps = false, adds = false, founders = false): Scenario {
+function randomScenario(name: string, seed: bigint, steps: number, lp: boolean, deeds = false, taps = false, adds = false, founders = false, starts = false): Scenario {
   let x = seed;
   const rnd = (n: bigint) => { x = (x * 6364136223846793005n + 1442695040888963407n) & ((1n << 64n) - 1n); return (x >> 11n) % n; };
   const positions = 3;
@@ -635,6 +684,13 @@ function randomScenario(name: string, seed: bigint, steps: number, lp: boolean, 
     if (pos > opened) a = founders && rnd(3n) === 0n
       ? A(Kind.OpenKindling, now, opened + 1, rnd(1000n * E) + MIN_STAKE_LP * 2n)
       : A(Kind.Open, now, opened + 1, rnd(1000n * E) + MIN_STAKE_LP * 2n);
+    else if (starts && rnd(100n) < 12n) {
+      // A head-start grant: usually to a used slot of a position that has none, sometimes not.
+      const p = m.positions[pos - 1];
+      const used = p.lots.flatMap((l, j) => (l.amount > 0n ? [j] : []));
+      const slot = used.length && rnd(4n) !== 0n ? used[Number(rnd(BigInt(used.length)))] : Number(rnd(BigInt(MAX_LOTS)));
+      a = A(Kind.GrantHeadStart, now, pos, add(slot, rnd(10n) === 0n ? 0n : rnd(120n) * DAY + 1n));
+    }
     else if (founders && rnd(100n) < 15n) a = A(Kind.RefreshFounder, now, pos, rnd(4n) === 0n ? 0n : 1n);
     else if (adds && rnd(100n) < 20n) {
       // A source-lot addition: mostly to a used slot, now and then to any slot or of nothing.
@@ -706,6 +762,9 @@ const random = [
   randomScenario('flame0', 0xf1a0n, 150, true, false, false, false, true),
   randomScenario('flame1', 0xf1a1n, 150, true, true, true, true, true),
   randomScenario('flame2', 0xf1a2n, 150, false, true, false, false, true),
+  randomScenario('start0', 0x57a0n, 150, true, false, false, false, false, true),
+  randomScenario('start1', 0x57a1n, 150, true, true, true, true, true, true),
+  randomScenario('start2', 0x57a2n, 150, false, true, true, false, true, true),
 ];
 
 export function forgeVectors() {
@@ -724,6 +783,8 @@ export function forgeVectors() {
   for (const n of ['adds0', 'adds1', 'adds2']) if (scenarios[n].added < 5) throw new Error(`${n}: too few additions (${scenarios[n].added})`);
   // And First Flame: every founder walk keeps a founder's position earning for many steps.
   for (const n of ['flame0', 'flame1', 'flame2']) if (scenarios[n].founded < 20) throw new Error(`${n}: too few founder steps (${scenarios[n].founded})`);
+  // And the head start: every walk keeps a head-started lot earning for many steps.
+  for (const n of ['start0', 'start1', 'start2']) if (scenarios[n].started < 20) throw new Error(`${n}: too few head-start steps (${scenarios[n].started})`);
   return {
     maxPendingTickets: MAX_PENDING, maxLots: MAX_LOTS, tiers: TIERS.map((t) => [String(t.maxPct), String(t.seconds)]),
     fund: String(FUND), names: all.map((s) => s.name), scenarios,

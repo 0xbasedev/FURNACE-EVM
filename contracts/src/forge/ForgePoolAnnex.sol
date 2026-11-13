@@ -9,8 +9,8 @@ import {ForgePoolBase, IFounders} from "./ForgePoolBase.sol";
 
 /// @title ForgePoolAnnex
 /// @notice ForgePool's cold paths (ADR 0012): Seals, BOOST's bonus, Deed listing and
-///         settlement, fee collection, the compounder's source-lot additions (ADR 0017) and
-///         First Flame's refresh (ADR 0018).
+///         settlement, fee collection, the compounder's source-lot additions (ADR 0017),
+///         First Flame's refresh (ADR 0018) and the head-start grant (ADR 0019).
 ///         Each ForgePool deploys its own annex with its own constructor arguments, so the
 ///         annex's immutables equal the pool's, and runs these functions by DELEGATECALL: in
 ///         the pool's storage, as the pool, for the pool's caller. Principal only ever arrives
@@ -29,8 +29,9 @@ contract ForgePoolAnnex is ForgePoolBase {
         address flow,
         address compounder,
         address kindling,
-        address founders
-    ) ForgePoolBase(stakeToken, isLp, feeCollector, boost, deeds, flow, compounder, kindling, founders) {}
+        address founders,
+        address ignition
+    ) ForgePoolBase(stakeToken, isLp, feeCollector, boost, deeds, flow, compounder, kindling, founders, ignition) {}
 
     /// @notice Seal the position's current lots for `track`'s term (ADR 0006). Later
     ///         deposits never join; a pending cooling request pauses the Seal and extends
@@ -117,6 +118,32 @@ contract ForgePoolAnnex is ForgePoolBase {
         if (FOUNDERS == address(0)) return false;
         (bool ok, bytes memory ret) = FOUNDERS.staticcall(abi.encodeCall(IFounders.isFounder, (wallet)));
         return ok && ret.length == 32 && abi.decode(ret, (uint256)) == 1;
+    }
+
+    // ── the head start (ADR 0019) ─────────────────────────────────────────
+
+    /// @notice IGNITION only: date the active lot in `slot` back by `seconds` of financial age, its
+    ///         depositor's Ignition head start (spec v5.5 §2). Once per position, ever. Ignition
+    ///         keeps the seven-day window and the retained-value cap: it grants only a lot it has
+    ///         checked, and the pool never prices. Only that lot's principal reads it, wherever its
+    ///         slices return; later deposits take other slots and never do. It stacks with First
+    ///         Flame, capped at the age cap, in W and the sealed W only. A Deed sale ends it.
+    function grantHeadStart(uint256 id, uint256 slot, uint256 seconds_) external nonReentrant {
+        if (msg.sender != IGNITION || IGNITION == address(0)) revert NotIgnition();
+        if (seconds_ == 0 || seconds_ > P.HEAT_AGE_CAP) revert BadHeadStart(seconds_);
+        Position storage p = _touch(id);
+        if (p.closedAt != 0) revert Closed(id);
+        if (p.listing & 1 != 0) revert Listed(id);
+        if (p.headStart != 0) revert HeadStartUsed(id);
+        if (slot >= MAX_LOTS) revert NotActiveLot(id, slot);
+        Lot memory lot = _lots[id][slot];
+        if (lot.amount == 0) revert NotActiveLot(id, slot);
+        if (lot.records >= BOOST_RECORD_LIMIT) revert RecordLimit(id, slot);
+        // Close the slot's segment at now under its old anchors, then cover it.
+        (uint256 age, uint256 part) = _lotAt(lot, block.timestamp);
+        _setHead(id, p, slot, _head(block.timestamp, lot.amount, age, part, 0));
+        (p.headStart, p.headStartActive, p.headStartMask) = (uint32(seconds_), true, uint32(1 << slot));
+        emit HeadStartGranted(id, slot, seconds_);
     }
 
     // ── Deeds (ADR 0011) ──────────────────────────────────────────────────

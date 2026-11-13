@@ -80,6 +80,12 @@ contract DeployTestnetTest is Test, FurnaceTestnet {
         assertEq(d.pools[1].COMPOUNDER(), operator);
         assertEq(d.pools[2].COMPOUNDER(), address(0), "the EMBER pool pays liquid EMBER instead");
         assertEq(d.pools[3].COMPOUNDER(), address(0), "and so does the USDC pool");
+        // Kindling, First Flame and the head start (ADR 0018, ADR 0019).
+        for (uint256 i; i < 4; ++i) {
+            assertEq(d.pools[i].KINDLING(), i == 0 ? operator : address(0), "Kindling stakes pool 0's LP");
+            assertEq(d.pools[i].FOUNDERS(), address(d.founders), "every pool reads the founder record");
+            assertEq(d.pools[i].IGNITION(), operator, "Ignition grants head starts in every pool");
+        }
         assertEq(address(d.flow.REBATES()), address(d.rebates));
     }
 

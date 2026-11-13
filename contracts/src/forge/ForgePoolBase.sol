@@ -88,13 +88,14 @@ abstract contract ForgePoolBase is ReentrancyGuardTransient {
         uint8 sealCount; // the latest Seal is `_seals[id][sealCount]`
         uint32 transfers; // completed Deed sales: entries in `_owners[id]`
         // Wallet-bound phantom terms (spec §2); they never enter a lot's age (ADR 0011). First Flame
-        // follows the owner's founder record through `refreshFounder` (ADR 0018); the head start is
-        // not built. Settlement clears the two flags, so the buyer's segments carry neither; the
-        // head start's amount stays, for the seller's records that do.
+        // follows the owner's founder record through `refreshFounder` (ADR 0018); IGNITION grants
+        // the head start to one lot, once (ADR 0019). Settlement clears the two flags, so the
+        // buyer's segments carry neither; the head start's amount stays, for the seller's records.
         bool founder; // First Flame: financial Heat reads FIRST_FLAME_AGE older
-        bool headStartActive; // the head start applies
+        bool headStartActive; // the head start applies (granted once; a sale ends it)
         uint32 headStart; // the head start, in seconds of financial age
         uint40 lastTapAt; // the last Tap request (spec §9)
+        uint32 headStartMask; // the slots holding the granted lot's principal (ADR 0019)
         Plan plan;
     }
 
@@ -131,6 +132,9 @@ abstract contract ForgePoolBase is ReentrancyGuardTransient {
     /// @notice The founder record (Ignition's First Flame badge), read by `refreshFounder`. Zero:
     ///         nobody holds First Flame in this pool (ADR 0018).
     address public immutable FOUNDERS;
+    /// @notice Ignition: the only caller of `grantHeadStart`, which dates one lot of a position back
+    ///         to its depositor's Ignition start (spec v5.5 §2; ADR 0019). Zero: no head starts.
+    address public immutable IGNITION;
 
     uint256 public positionCount;
     /// @notice Principal that earns now. Lapsed slices not yet processed are still
@@ -166,6 +170,7 @@ abstract contract ForgePoolBase is ReentrancyGuardTransient {
     event DeedSettled(uint256 indexed id, address indexed seller, address indexed buyer);
     event AddedToLot(uint256 indexed id, uint256 slot, uint256 amount);
     event FounderSet(uint256 indexed id, bool founder);
+    event HeadStartGranted(uint256 indexed id, uint256 slot, uint256 seconds_);
 
     error ZeroAddress();
     error UnknownPosition(uint256 id);
@@ -204,6 +209,9 @@ abstract contract ForgePoolBase is ReentrancyGuardTransient {
     error NotActiveLot(uint256 id, uint256 slot);
     error NotKindling();
     error KindlingNeedsLp();
+    error NotIgnition();
+    error HeadStartUsed(uint256 id);
+    error BadHeadStart(uint256 seconds_);
     error Listed(uint256 id);
     error NotListed(uint256 id);
     error NoTap(uint256 id);
@@ -219,7 +227,8 @@ abstract contract ForgePoolBase is ReentrancyGuardTransient {
         address flow,
         address compounder,
         address kindling,
-        address founders
+        address founders,
+        address ignition
     ) {
         if (
             address(stakeToken) == address(0) || feeCollector == address(0) || boost == address(0)
@@ -238,6 +247,7 @@ abstract contract ForgePoolBase is ReentrancyGuardTransient {
         COMPOUNDER = compounder;
         KINDLING = kindling;
         FOUNDERS = founders;
+        IGNITION = ignition;
     }
 
     // ── internals ─────────────────────────────────────────────────────────
@@ -362,13 +372,14 @@ abstract contract ForgePoolBase is ReentrancyGuardTransient {
     }
 
     /// @dev A slice from slot j takes the first free slot; a sealed cohort's capital stays
-    ///      in the cohort.
+    ///      in the cohort, and a head-started lot's capital keeps its head start.
     function _returnToFreeSlot(uint256 id, Position storage p, uint256 j, Slice memory s, uint40 at) internal {
         uint256 slot = _firstFree(p.usedMask);
         Seal storage seal_ = _seals[id][p.sealCount];
         if (seal_.status == SealStatus.Active && seal_.cohortMask & (1 << j) != 0) {
             seal_.cohortMask |= uint32(1 << slot);
         }
+        if (p.headStartMask & (1 << j) != 0) p.headStartMask |= uint32(1 << slot); // the same principal
         _setHead(id, p, slot, _head(at, s.amount, s.age, s.participated, 0));
         p.usedMask |= uint32(1 << slot);
     }
@@ -459,7 +470,7 @@ abstract contract ForgePoolBase is ReentrancyGuardTransient {
         next.seal = _tag(id, p, slot);
         if (p.historyMask & bit != 0 && head.since != next.since) {
             _history[id][slot][head.records] = Record(
-                head.since, head.amount, head.age, uint24(head.participated), head.seal, _streakAnchor(p), p.ordinaryBonus
+                head.since, head.amount, head.age, uint24(head.participated), head.seal, _streakAnchor(p, slot), p.ordinaryBonus
             );
             next.records = head.records + 1;
         }
@@ -585,6 +596,7 @@ abstract contract ForgePoolBase is ReentrancyGuardTransient {
             if (lots[j].heldBy == ticketId) {
                 lots[j].heldBy = 0; // amount is already 0: no measure changes, no record
                 p.usedMask &= ~uint32(1 << j);
+                p.headStartMask &= ~uint32(1 << j); // a later deposit here is new capital
             } else {
                 p.reservedSlots -= 1;
             }
@@ -628,13 +640,18 @@ abstract contract ForgePoolBase is ReentrancyGuardTransient {
         emit OrdinaryBonusSet(id, units);
     }
 
+    /// @dev The position's head anchors; a slot's head adds its head-start flag (slotAnchor).
     function _anchor(Position storage p) internal view returns (uint256) {
-        return ForgeMeasures.anchorOf(_streakAnchor(p), p.ordinaryBonus);
+        uint256 founder = p.founder ? ForgeMeasures.FOUNDER_FLAG : 0;
+        return ForgeMeasures.anchorOf(
+            p.streakStart | founder, p.ordinaryBonus, p.headStart, p.headStartActive ? p.headStartMask : 0
+        );
     }
 
-    /// @dev The Streak start a record carries, with First Flame's flag while the owner holds it.
-    function _streakAnchor(Position storage p) internal view returns (uint40) {
-        return p.founder ? p.streakStart | uint40(ForgeMeasures.FOUNDER_FLAG) : p.streakStart;
+    /// @dev The Streak start slot `slot`'s record carries: First Flame's flag while the owner holds
+    ///      it, and the head-start flag while the slot holds the granted lot's principal.
+    function _streakAnchor(Position storage p, uint256 slot) internal view returns (uint40) {
+        return uint40(ForgeMeasures.slotAnchor(_anchor(p), slot));
     }
 
     /// @dev Freeze `take` of slot j at its current age; true if the lot keeps a remainder.
