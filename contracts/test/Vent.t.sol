@@ -336,6 +336,28 @@ contract VentTest is VentRig {
         assertEq(uint256(r), uint256(Vent.Deferral.None), "a new window, the TWAP caught up");
     }
 
+    /// The per-call chunk binds when the reserve falls inside a window that opened unspent: the
+    /// window's allowance is 0.5% of its higher starting reserve, the chunk 0.5% of today's.
+    function test_theChunkBindsWhenTheReserveFallsInsideAWindow() public {
+        World memory w = _matured();
+        _bookPool(w, 3, 0, 50_000 * U);
+        w.vent.collectPool(3);
+        (bool ok,) = _trade(w, 0, 0, 8_000 * U); // spot ~1.6% over the TWAP: in band, but the floor fails
+        assertTrue(ok);
+        (Vent.Deferral r,,) = w.vent.vent(0);
+        assertEq(uint256(r), uint256(Vent.Deferral.Unsafe), "the window opens unspent");
+        uint256 base = w.vent.lane(0).windowBase;
+        (ok,) = _trade(w, 0, 1, 12_000 * E); // the quote reserve falls below the window's base
+        assertTrue(ok);
+        (, uint112 rQ,) = w.pairs[0].getReserves();
+        assertLt(rQ, base);
+        uint256 quoteIn;
+        (r, quoteIn,) = w.vent.vent(0);
+        assertEq(uint256(r), uint256(Vent.Deferral.None));
+        assertEq(quoteIn, (uint256(rQ) * P.VENT_CHUNK_BPS) / 10_000, "0.5% of today's reserve");
+        assertLt(quoteIn, (base * P.VENT_WINDOW_MAX_BPS) / 10_000, "under the window's allowance");
+    }
+
     function test_donationsMoveNothing() public {
         World memory w = _matured();
         _bookPool(w, 3, 0, 50_000 * U);
