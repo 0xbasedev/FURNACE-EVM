@@ -395,6 +395,24 @@ export class ForgeModel {
     // [P] A top-up dilutes the bonus by custody before/after until BOOST refreshes it.
     if (units !== 0n) this.rebonus(p, units * (active + frozen) / (active + frozen + net));
   }
+  /** COMPOUNDER only (ForgePoolAnnex.addToLot, ADR 0017): internally earned LP returns to the
+   *  active lot in `slot` at that lot's own age and participation. No fee, no new slot, the
+   *  Seal tag and the Streak kept; a bonus is diluted as a deposit dilutes it. */
+  addToLot(id: number, slot: number, amount: bigint, now: bigint) {
+    need(this.lp, 'NotCompounder');
+    need(amount > 0n, 'ZeroAmount');
+    const p = this.touch(id, now);
+    need(!p.closed, 'Closed');
+    need(p.listing % 2 === 0, 'Listed');
+    need(slot < MAX_LOTS && p.lots[slot].amount > 0n, 'NotActiveLot');
+    need(p.lots[slot].amount + amount <= UINT96_MAX, 'SafeCast');
+    const units = p.bonus;
+    const { active, frozen } = this.custody(p);
+    p.lots[slot].amount += amount;
+    this.recordHead(p, slot);
+    this.increaseActive(amount, now);
+    if (units !== 0n) this.rebonus(p, units * (active + frozen) / (active + frozen + amount));
+  }
   /** BOOST sets the ordinary bonus (ForgePool.setOrdinaryBonus); a closed position keeps its own. */
   setBonus(id: number, units: bigint, now: bigint) {
     need(units <= MAX_BONUS_UNITS, 'BonusAboveCeiling');

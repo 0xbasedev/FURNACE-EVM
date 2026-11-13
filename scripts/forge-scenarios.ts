@@ -11,8 +11,9 @@ export const FUND = 10n ** 30n;
 const E = 10n ** 18n;
 const HOUR = 3_600n;
 
-export enum Kind { Open, Deposit, Request, Execute, Cancel, Emergency, Poke, Collect, Seal, Boost, List, Unlist, Settle, Tap }
-/** List: arg = the seller wallet DEEDS names. Unlist: arg 0 = the owner, 1 = DEEDS. Settle: arg =
+export enum Kind { Open, Deposit, Request, Execute, Cancel, Emergency, Poke, Collect, Seal, Boost, List, Unlist, Settle, Tap, AddToLot }
+/** AddToLot: arg = slot << 128 | amount, sent by the compounder (ADR 0017).
+ *  List: arg = the seller wallet DEEDS names. Unlist: arg 0 = the owner, 1 = DEEDS. Settle: arg =
  *  the buyer wallet; the listing named is the one the market recorded at its last List. */
 export interface Action { kind: Kind; time: bigint; pos: number; arg: bigint }
 
@@ -80,6 +81,7 @@ function apply(s: Sim, a: Action): { sim: Sim; reverted: boolean } {
       case Kind.Unlist: m.unlist(a.pos, a.arg === 1n ? 'deeds' : owner); return;
       case Kind.Settle: m.settle(a.pos, Number(a.arg), market[a.pos - 1] ?? 0, a.time); return;
       case Kind.Tap: m.request(a.pos, a.arg, a.time, true); return;
+      case Kind.AddToLot: m.addToLot(a.pos, Number(a.arg >> 128n), a.arg & ((1n << 128n) - 1n), a.time); return;
     }
   });
   if (r.reverted) return { sim: s, reverted: true };
@@ -97,7 +99,7 @@ interface Scenario { name: string; lp: boolean; positions: number; actions: Acti
 function record(sc: Scenario) {
   let sim: Sim = { model: new ForgeModel(sc.lp), users: Array(sc.positions + BUYERS).fill(FUND), collector: 0n, market: [] };
   const flat: string[] = [], hash: string[] = [], probe: string[] = [];
-  let reverts = 0, boosted = 0, sold = 0, tapped = 0;
+  let reverts = 0, boosted = 0, sold = 0, tapped = 0, added = 0;
   sc.actions.forEach((a, i) => { if (i > 0 && a.time < sc.actions[i - 1].time) throw new Error(`${sc.name}: time runs backwards at step ${i}`); });
   for (const [i, a] of sc.actions.entries()) {
     let r: ReturnType<typeof apply>;
@@ -106,6 +108,7 @@ function record(sc: Scenario) {
     if (r.reverted) reverts++;
     else if (a.kind === Kind.Settle) sold++;
     else if (a.kind === Kind.Tap) tapped++;
+    else if (a.kind === Kind.AddToLot) added++;
     if (sim.model.positions.some((p) => p.bonus > 0n && p.lots.some((l) => l.amount > 0n))) boosted++;
     flat.push(String(a.kind), String(a.time), String(a.pos), String(a.arg), r.reverted ? '1' : '0');
     hash.push(hashWords(words(sim, sc.positions, a.time)));
@@ -113,13 +116,15 @@ function record(sc: Scenario) {
     probe.push(...[p1?.S ?? 0n, p1?.W ?? 0n, m.active, m.frozen, m.occupiedAt(a.time), p1?.SS ?? 0n].map(String));
   }
   const ashfall = sim.model.positions.filter((p) => p.Q > 0n).length;
-  return { lp: sc.lp, positions: sc.positions, steps: sc.actions.length, reverts, ashfall, boosted, sold, tapped, actions: flat, hash, probe };
+  return { lp: sc.lp, positions: sc.positions, steps: sc.actions.length, reverts, ashfall, boosted, sold, tapped, added, actions: flat, hash, probe };
 }
 
 // ── scripted scenarios ───────────────────────────────────────────────────
 const at = (d: bigint, h = 0n, s = 0n) => T0 + d * DAY + h * HOUR + s;
 const A = (kind: Kind, time: bigint, pos: number, arg = 0n): Action => ({ kind, time, pos, arg });
 const net = (x: bigint) => x - x / 100n;
+/** A source-lot addition's argument (ADR 0017). */
+const add = (slot: number, amount: bigint) => (BigInt(slot) << 128n) | amount;
 
 const scripted: Scenario[] = [
   { name: 'basicCycle', lp: true, positions: 1, actions: [
@@ -442,6 +447,78 @@ scripted.push(
     A(Kind.Poke, at(200n), 1),
   ] },
 );
+// ── Source-lot additions (ADR 0017): the compounder returns earned LP to an active lot. ──
+scripted.push(
+  { name: 'addToLotBasics', lp: true, positions: 1, actions: [
+    A(Kind.Open, at(0n), 1, 1000n * E), // slot 0: 990
+    A(Kind.Deposit, at(40n), 1, 500n * E), // slot 1: 495, age 0
+    A(Kind.AddToLot, at(50n), 1, add(0, 100n * E)), // at slot 0's 50 days, no fee
+    A(Kind.AddToLot, at(50n), 1, add(1, 50n * E)), // at slot 1's 10 days, same instant
+    A(Kind.AddToLot, at(50n), 1, add(2, 10n * E)), // NotActiveLot: unused
+    A(Kind.AddToLot, at(50n), 1, add(32, 10n * E)), // NotActiveLot: no such slot
+    A(Kind.AddToLot, at(50n), 1, add(0, 0n)), // ZeroAmount
+    A(Kind.AddToLot, at(50n), 2, add(0, 10n * E)), // UnknownPosition
+    A(Kind.Boost, at(51n), 1, MAX_BONUS_UNITS / 2n),
+    A(Kind.AddToLot, at(52n), 1, add(0, 400n * E)), // dilutes the bonus as a deposit would
+    A(Kind.Poke, at(80n), 1),
+    A(Kind.Collect, at(80n), 0), // only the two deposit fees
+  ] },
+  { name: 'addToLotCooling', lp: true, positions: 2, actions: [
+    A(Kind.Open, at(0n), 1, 1000n * E),
+    A(Kind.Deposit, at(10n), 1, 100n * E),
+    A(Kind.Request, at(40n), 1, 50n * E), // both lots split pro rata
+    A(Kind.AddToLot, at(40n, 1n), 1, add(0, 50n * E)), // the active remainder grows
+    A(Kind.Cancel, at(41n), 1, 1n), // slot 0's slice no longer matches its parent: a free slot
+    A(Kind.Open, at(42n), 2, 100n * E),
+    A(Kind.Request, at(42n, 1n), 2, net(100n * E)), // the whole lot: held by the ticket
+    A(Kind.AddToLot, at(42n, 2n), 2, add(0, 10n * E)), // NotActiveLot: wholly frozen
+    A(Kind.AddToLot, at(80n), 2, add(0, 10n * E)), // after the lapse it is active again
+    A(Kind.Poke, at(90n), 1),
+    A(Kind.Poke, at(90n), 2),
+  ] },
+  { name: 'addToLotSeal', lp: true, positions: 1, actions: [
+    A(Kind.Open, at(0n), 1, 1000n * E),
+    A(Kind.Deposit, at(5n), 1, 200n * E),
+    A(Kind.Seal, at(10n), 1, 0n), // slots 0 and 1
+    A(Kind.AddToLot, at(20n), 1, add(0, 100n * E)), // keeps the source cohort: sealed S grows
+    A(Kind.Deposit, at(21n), 1, 100n * E), // slot 2, outside the cohort
+    A(Kind.AddToLot, at(22n), 1, add(2, 50n * E)), // stays unsealed
+    A(Kind.Request, at(25n), 1, 10n * E), // pauses the Seal
+    A(Kind.AddToLot, at(25n, 1n), 1, add(1, 20n * E)), // no tag while paused
+    A(Kind.Cancel, at(26n), 1, 1n), // resumes it
+    A(Kind.Poke, at(60n), 1), // the Seal completes
+    A(Kind.AddToLot, at(61n), 1, add(0, 10n * E)), // no Seal runs
+    A(Kind.Poke, at(70n), 1),
+  ] },
+  { name: 'addToLotDeeds', lp: true, positions: 1, actions: [
+    A(Kind.Open, at(0n), 1, 1000n * E),
+    A(Kind.List, at(5n), 1, 1n),
+    A(Kind.AddToLot, at(6n), 1, add(0, 10n * E)), // Listed: the reward travels with the Deed
+    A(Kind.Unlist, at(7n), 1, 0n),
+    A(Kind.AddToLot, at(8n), 1, add(0, 10n * E)),
+    A(Kind.List, at(9n), 1, 1n),
+    A(Kind.Settle, at(10n), 1, 2n), // 80% of age carries; the buyer's Streak starts
+    A(Kind.AddToLot, at(11n), 1, add(0, 10n * E)), // at the carried age
+    A(Kind.Emergency, at(20n), 1),
+    A(Kind.AddToLot, at(21n), 1, add(0, 10n * E)), // Closed: never resurrected
+    A(Kind.Poke, at(30n), 1),
+  ] },
+  { name: 'addToLotSingleAsset', lp: false, positions: 1, actions: [
+    A(Kind.Open, at(0n), 1, 1000n * E),
+    A(Kind.AddToLot, at(10n), 1, add(0, 10n * E)), // no compounder: liquid EMBER instead (§102)
+    A(Kind.Poke, at(20n), 1),
+  ] },
+);
+// At 32 lots an addition still fits: it uses no slot. A 33rd deposit does not.
+{
+  const actions: Action[] = [A(Kind.Open, at(0n), 1, E)];
+  for (let i = 1; i < MAX_LOTS; i++) actions.push(A(Kind.Deposit, at(0n, BigInt(i)), 1, E));
+  actions.push(A(Kind.AddToLot, at(10n), 1, add(31, 5n * E)));
+  actions.push(A(Kind.Deposit, at(10n, 1n), 1, E)); // LotCapacity
+  actions.push(A(Kind.AddToLot, at(10n, 2n), 1, add(0, 5n * E)));
+  actions.push(A(Kind.Poke, at(20n), 1));
+  scripted.push({ name: 'addToLotCapacity', lp: true, positions: 1, actions });
+}
 // Tap capacity: with 32 lots, a Tap that splits a lot cannot reserve a slot; whole lots can.
 {
   const actions: Action[] = [A(Kind.Open, at(0n), 1, E)];
@@ -474,7 +551,7 @@ for (const n of [16, 17]) {
 // ── seeded random scenarios ──────────────────────────────────────────────
 /** `deeds` adds List, Unlist and Settle actions; without it the stream of draws, and so every
  *  action, is exactly the walk ADR 0010's mutations were checked against. */
-function randomScenario(name: string, seed: bigint, steps: number, lp: boolean, deeds = false, taps = false): Scenario {
+function randomScenario(name: string, seed: bigint, steps: number, lp: boolean, deeds = false, taps = false, adds = false): Scenario {
   let x = seed;
   const rnd = (n: bigint) => { x = (x * 6364136223846793005n + 1442695040888963407n) & ((1n << 64n) - 1n); return (x >> 11n) % n; };
   const positions = 3;
@@ -489,7 +566,13 @@ function randomScenario(name: string, seed: bigint, steps: number, lp: boolean, 
     const pos = opened === 0 ? 1 : Number(rnd(BigInt(Math.min(opened + 1, positions)))) + 1;
     let a: Action;
     if (pos > opened) a = A(Kind.Open, now, opened + 1, rnd(1000n * E) + MIN_STAKE_LP * 2n);
-    else if (taps && rnd(100n) < 18n) {
+    else if (adds && rnd(100n) < 20n) {
+      // A source-lot addition: mostly to a used slot, now and then to any slot or of nothing.
+      const p = m.positions[pos - 1];
+      const used = p.lots.flatMap((l, j) => (l.amount > 0n || l.heldBy !== 0 ? [j] : []));
+      const slot = used.length && rnd(5n) !== 0n ? used[Number(rnd(BigInt(used.length)))] : Number(rnd(BigInt(MAX_LOTS + 1)));
+      a = A(Kind.AddToLot, now, pos, add(slot, rnd(10n) === 0n ? 0n : rnd(200n * E) + 1n));
+    } else if (taps && rnd(100n) < 18n) {
       // A Tap of up to ~12% of active principal: sometimes over the quota, too soon or too early.
       const p = m.positions[pos - 1];
       const active = p.lots.reduce((n, l) => n + l.amount, 0n);
@@ -547,6 +630,9 @@ const random = [
   randomScenario('taps0', 0x7a95n, 150, true, false, true),
   randomScenario('taps1', 0x7a96n, 150, false, false, true),
   randomScenario('taps2', 0x7a97n, 200, true, false, true),
+  randomScenario('adds0', 0xadd0n, 150, true, false, false, true),
+  randomScenario('adds1', 0xadd1n, 150, true, true, false, true),
+  randomScenario('adds2', 0xadd2n, 200, true, false, true, true),
 ];
 
 export function forgeVectors() {
@@ -561,6 +647,8 @@ export function forgeVectors() {
   for (const n of ['deeds0', 'deeds1', 'deeds2', 'deeds3']) if (scenarios[n].sold < 3) throw new Error(`${n}: too few sales`);
   // And the Taps: every Tap walk lands Taps.
   for (const n of ['taps0', 'taps1', 'taps2']) if (scenarios[n].tapped < 3) throw new Error(`${n}: too few Taps (${scenarios[n].tapped})`);
+  // And the source-lot additions: every addition walk lands additions.
+  for (const n of ['adds0', 'adds1', 'adds2']) if (scenarios[n].added < 5) throw new Error(`${n}: too few additions (${scenarios[n].added})`);
   return {
     maxPendingTickets: MAX_PENDING, maxLots: MAX_LOTS, tiers: TIERS.map((t) => [String(t.maxPct), String(t.seconds)]),
     fund: String(FUND), names: all.map((s) => s.name), scenarios,

@@ -228,9 +228,12 @@ abstract contract FurnaceTestnet {
     function _deployPools(Plan memory pl, Deployment memory d) internal {
         bool[4] memory isLp = [P.FORGE_POOL_0_IS_LP, P.FORGE_POOL_1_IS_LP, P.FORGE_POOL_2_IS_LP, P.FORGE_POOL_3_IS_LP];
         for (uint256 i; i < 4; ++i) {
-            // Only the LP pools take Flow's fee-free same-route stake (spec v5.5 §4; ADR 0016).
+            // Only the LP pools take Flow's fee-free same-route stake (spec v5.5 §4; ADR 0016) and
+            // the compounder's source-lot additions (ADR 0017): the operator stands in for the
+            // unbuilt compounder, as it does for Flow's.
             address flow = isLp[i] ? pl.flow : address(0);
-            bytes memory args = abi.encode(d.stake[i], isLp[i], d.operator, pl.boost, d.operator, flow);
+            address compounder = isLp[i] ? d.operator : address(0);
+            bytes memory args = abi.encode(d.stake[i], isLp[i], d.operator, pl.boost, d.operator, flow, compounder);
             d.pools[i] =
                 ForgePool(_create3(pl, _poolLabel(i), pl.pool[i], abi.encodePacked(type(ForgePool).creationCode, args)));
         }
@@ -275,6 +278,7 @@ abstract contract FurnaceTestnet {
             if (p.BOOST() != address(d.boost) || address(p.STAKE_TOKEN()) != address(d.stake[i])) revert Miswired("pool");
             if (p.ANNEX().code.length == 0) revert Miswired("pool annex");
             if (p.FLOW() != (p.IS_LP() ? address(d.flow) : address(0))) revert Miswired("pool FLOW");
+            if (p.COMPOUNDER() != (p.IS_LP() ? d.operator : address(0))) revert Miswired("pool COMPOUNDER");
         }
         Flow f = d.flow;
         if (address(f.PAIR0()) != address(d.pairs[0]) || address(f.PAIR1()) != address(d.pairs[1])) revert Miswired("Flow pairs");
@@ -312,6 +316,9 @@ abstract contract FurnaceTestnet {
                 // deadline allows for the broadcast landing after the script ran.
                 usdc.approve(address(d.flow), type(uint256).max);
                 d.flow.zapAndStake(0, true, 100e6, 0, ids[0], block.timestamp + 1 hours);
+                // The operator, standing in for the compounder, returns 1 LP to that position's
+                // first lot at the lot's own age, fee-free (ADR 0017).
+                d.pools[0].addToLot(ids[0], 0, 1e18);
             }
             d.boost.deposit(d.pairsLive ? 0 : 2, d.pairsLive ? ids[0] : ids[2], 100e18); // a Capstone
         }

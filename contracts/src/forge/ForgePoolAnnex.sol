@@ -4,23 +4,30 @@ pragma solidity 0.8.28;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {FurnaceParams as P} from "../generated/FurnaceParams.sol";
-import {Seal, SealStatus} from "./ForgeMeasures.sol";
+import {Lot, Seal, SealStatus} from "./ForgeMeasures.sol";
 import {ForgePoolBase} from "./ForgePoolBase.sol";
 
 /// @title ForgePoolAnnex
 /// @notice ForgePool's cold paths (ADR 0012): Seals, BOOST's bonus, Deed listing and
-///         settlement, and fee collection. Each ForgePool deploys its own annex with its own
-///         constructor arguments, so the annex's immutables equal the pool's, and runs these
-///         functions by DELEGATECALL: in the pool's storage, as the pool, for the pool's caller.
-///         No principal moves here, and no exit calls the annex.
+///         settlement, fee collection, and the compounder's source-lot additions (ADR 0017).
+///         Each ForgePool deploys its own annex with its own constructor arguments, so the
+///         annex's immutables equal the pool's, and runs these functions by DELEGATECALL: in
+///         the pool's storage, as the pool, for the pool's caller. Principal only ever arrives
+///         here (a source-lot addition); no exit calls the annex.
 ///
 ///         Called directly, the annex acts on its own storage, which holds nothing.
 contract ForgePoolAnnex is ForgePoolBase {
     using SafeERC20 for IERC20;
 
-    constructor(IERC20 stakeToken, bool isLp, address feeCollector, address boost, address deeds, address flow)
-        ForgePoolBase(stakeToken, isLp, feeCollector, boost, deeds, flow)
-    {}
+    constructor(
+        IERC20 stakeToken,
+        bool isLp,
+        address feeCollector,
+        address boost,
+        address deeds,
+        address flow,
+        address compounder
+    ) ForgePoolBase(stakeToken, isLp, feeCollector, boost, deeds, flow, compounder) {}
 
     /// @notice Seal the position's current lots for `track`'s term (ADR 0006). Later
     ///         deposits never join; a pending cooling request pauses the Seal and extends
@@ -56,6 +63,33 @@ contract ForgePoolAnnex is ForgePoolBase {
         if (units > P.MAX_ORDINARY_BONUS_UNITS) revert BonusAboveCeiling(units);
         if (_positions[id].closedAt != 0) return;
         _setBonus(id, _touch(id), units, BOOST_RECORD_LIMIT);
+    }
+
+    // ── source-lot additions (ADR 0017) ───────────────────────────────────
+
+    /// @notice COMPOUNDER only: return internally earned LP (a Cast or a Stoke into LP) to the
+    ///         active lot in `slot`, at that lot's own age and participation (spec v5.5 §4, §7,
+    ///         §98, §118). It uses no slot and keeps the lot's Seal tag and the Streak. No fee is
+    ///         charged or booked (Compound is 0%), so no burn credit arises; a bonus is diluted as
+    ///         a deposit dilutes it. A closed or listed position, or a slot with no active amount
+    ///         (empty, or wholly frozen in a ticket), refuses: the reward stays claimable (§108).
+    function addToLot(uint256 id, uint256 slot, uint256 amount) external nonReentrant {
+        if (msg.sender != COMPOUNDER || COMPOUNDER == address(0)) revert NotCompounder();
+        if (amount == 0) revert ZeroAmount();
+        Position storage p = _touch(id);
+        if (p.closedAt != 0) revert Closed(id);
+        if (p.listing & 1 != 0) revert Listed(id);
+        if (slot >= MAX_LOTS) revert NotActiveLot(id, slot);
+        Lot memory lot = _lots[id][slot];
+        if (lot.amount == 0) revert NotActiveLot(id, slot);
+        if (lot.records >= BOOST_RECORD_LIMIT) revert RecordLimit(id, slot);
+        uint256 units = p.ordinaryBonus;
+        uint256 custody = units == 0 ? 0 : _activeOf(id, p) + _frozenOf(id, p);
+        (uint256 age, uint256 part) = _lotAt(lot, block.timestamp);
+        _setHead(id, p, slot, _head(block.timestamp, lot.amount + _pull(amount), age, part, 0));
+        _increaseActive(amount, uint40(block.timestamp));
+        emit AddedToLot(id, slot, amount);
+        if (units != 0) _setBonus(id, p, units * custody / (custody + amount), type(uint256).max);
     }
 
     // ── Deeds (ADR 0011) ──────────────────────────────────────────────────
