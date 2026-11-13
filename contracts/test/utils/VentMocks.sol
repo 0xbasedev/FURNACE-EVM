@@ -16,23 +16,29 @@ contract MockBurnableERC20 is ERC20Burnable {
     }
 }
 
-/// @dev Test-only Mantle: the registered burn, at the Protocol rate, for registrars set by tests.
+/// @dev Test-only Mantle: the registered burn, at the Protocol rate. An open Mantle treats every
+///      caller as a Protocol registrar; a closed one only those registered by tests.
 contract MockMantle {
     ERC20Burnable public immutable EMBER;
-    mapping(address => uint8) public registrarCategory;
+    bool public immutable OPEN;
+    mapping(address => uint8) internal _category;
     uint256 public burned;
     uint256 public credited;
 
-    constructor(ERC20Burnable ember) {
-        EMBER = ember;
+    constructor(ERC20Burnable ember, bool open) {
+        (EMBER, OPEN) = (ember, open);
     }
 
     function register(address registrar) external {
-        registrarCategory[registrar] = 1;
+        _category[registrar] = 1;
+    }
+
+    function registrarCategory(address registrar) public view returns (uint8) {
+        return OPEN ? 1 : _category[registrar];
     }
 
     function burnRegistered(uint256 amount) external returns (uint256 credit) {
-        require(registrarCategory[msg.sender] == 1, "not a registrar");
+        require(registrarCategory(msg.sender) == 1, "not a registrar");
         EMBER.burnFrom(msg.sender, amount);
         credit = (amount * P.RECYCLE_PROTOCOL_BURN_PCT) / 100;
         (burned, credited) = (burned + amount, credited + credit);

@@ -44,10 +44,9 @@ contract VentRig is Test {
         w.usdc = new MockDecimalsERC20("USD Coin", "USDC", 6);
         w.weth = new MockDecimalsERC20("Wrapped Ether", "WETH", 18);
         w.unknown = new MockERC20("Unknown", "UNK");
-        w.mantle = new MockMantle(ERC20Burnable(address(w.ember)));
+        w.mantle = new MockMantle(ERC20Burnable(address(w.ember)), true);
         // The pairs and pools name the Vent before it exists, as the kit's CREATE3 plan does.
         address v = vm.computeCreateAddress(address(this), vm.getNonce(address(this)) + 6);
-        w.mantle.register(v);
         w.pairs[0] = new EmberPair("Blast", "BLAST", IERC20(address(w.ember)), IERC20(address(w.usdc)), v, address(0), guardian, provider);
         w.pairs[1] = new EmberPair("Smelter", "SMELT", IERC20(address(w.ember)), IERC20(address(w.weth)), v, address(0), guardian, provider);
         w.pools[0] = new MockFeePool(IERC20(address(w.pairs[0])), v);
@@ -154,11 +153,11 @@ contract VentTest is VentRig {
         for (uint256 i; i < 4; ++i) pools[i] = IVentFeePool(address(w.pools[i]));
         IVentPair[2] memory pairs = [IVentPair(address(w.pairs[0])), IVentPair(address(w.pairs[1]))];
         IERC20 ember = IERC20(address(w.ember));
-        IVentMantle mantle = IVentMantle(address(w.mantle));
         // Not registered with the Mantle: its burns would earn nothing, so it refuses to exist.
+        IVentMantle closed = IVentMantle(address(new MockMantle(ERC20Burnable(address(w.ember)), false)));
         vm.expectRevert(Vent.NotRegistrar.selector);
-        new Vent(ember, mantle, pools, pairs, hearth, treasury, stakers, quoteYield, deeds, compounder);
-        w.mantle.register(vm.computeCreateAddress(address(this), vm.getNonce(address(this))));
+        new Vent(ember, closed, pools, pairs, hearth, treasury, stakers, quoteYield, deeds, compounder);
+        IVentMantle mantle = IVentMantle(address(w.mantle));
         vm.expectRevert(Vent.ZeroAddress.selector);
         new Vent(ember, mantle, pools, pairs, address(0), treasury, stakers, quoteYield, deeds, compounder);
         vm.expectRevert(Vent.ZeroAddress.selector);
@@ -219,7 +218,6 @@ contract VentTest is VentRig {
         World memory w = _matured();
         // A Vent whose pool 1 stakes a token it does not know: that pool's collection reverts.
         address v = vm.computeCreateAddress(address(this), vm.getNonce(address(this)) + 1);
-        w.mantle.register(v);
         MockFeePool odd = new MockFeePool(IERC20(address(w.unknown)), v);
         IVentFeePool[4] memory pools;
         for (uint256 i; i < 4; ++i) pools[i] = IVentFeePool(address(w.pools[i]));
@@ -246,8 +244,6 @@ contract VentTest is VentRig {
         w.vent.bookDeedFee(IERC20(address(w.usdc)), 10 * U);
         vm.stopPrank();
         // With no market, nobody can book one.
-        address v = vm.computeCreateAddress(address(this), vm.getNonce(address(this)));
-        w.mantle.register(v);
         Vent none = _deployVent(w, address(0), compounder);
         vm.prank(deeds);
         vm.expectRevert(Vent.NotDeeds.selector);
@@ -288,8 +284,6 @@ contract VentTest is VentRig {
         vm.prank(compounder);
         w.vent.drawMatchReserve(0, reserve);
         assertEq(w.usdc.balanceOf(compounder), reserve);
-        address v = vm.computeCreateAddress(address(this), vm.getNonce(address(this)));
-        w.mantle.register(v);
         Vent none = _deployVent(w, deeds, address(0));
         vm.prank(address(0));
         vm.expectRevert(Vent.NotCompounder.selector);

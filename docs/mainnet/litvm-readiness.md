@@ -28,12 +28,13 @@ Status: **not ready.** Nothing is deployed and nothing is audited. LitVM mainnet
    - PUSH0, TSTORE/TLOAD and MCOPY must execute. The pools' and pairs' reentrancy guards use transient storage.
 4. **The modules the testnet fills with an operator wallet or a stand-in.** Each must be a contract at a mined address:
    - Treasury (a 3-of-5 Safe with real owners) and the guardian;
-   - Kindling (each pair's initializer and pool 0's `openKindling` caller) and the fee router (the Vent);
+   - Kindling (each pair's initializer and pool 0's `openKindling` caller);
+   - the Vent's recipients: the Hearth, the emergency stakers' distributor and the Quote-yield distributor ([ADR 0020](../adr/0020-vent.md));
    - the compounder (Flow's waiver caller and the LP pools' `addToLot` caller) and the Deed market;
    - the match reserve and the Sealed-pot stream;
    - the protected valuation source, and Relics: its Pyre ledger and its fee-rebate perk;
    - Ignition: its First Flame record, which every pool reads as `FOUNDERS` ([ADR 0018](../adr/0018-kindling-and-first-flame.md)), and its head-start grants, which every pool takes from `IGNITION` ([ADR 0019](../adr/0019-head-start.md)).
-   Flow itself is built ([ADR 0016](../adr/0016-flow.md)) and needs only its mined address; the pairs it routes are built too ([ADR 0015](../adr/0015-ember-pairs.md)).
+   Flow ([ADR 0016](../adr/0016-flow.md)) and the fee router, the Vent ([ADR 0020](../adr/0020-vent.md)), are built and need only their mined addresses; the Vent must also be registered with the Mantle as a Protocol burner. The pairs they serve are built too ([ADR 0015](../adr/0015-ember-pairs.md)).
 5. **The pairs' trust window** (ADR 0015). A CREATE3 address does not commit to code. The pairs must therefore deploy in the same broadcast as the core, or move to CreateX's CREATE2, which is a change to §23.
 6. **The pools' immutable hooks: all built.** ForgePool cannot gain a hook without a migration, so every one ADR 0010 listed had to exist first. Built:
    - source-lot additions, the destination for Casting and Stoke into LP ([ADR 0017](../adr/0017-source-lot-additions.md));

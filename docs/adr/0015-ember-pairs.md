@@ -94,7 +94,7 @@ Status: accepted for this repository. Not audited, not deployed.
 
 - **SmelterPool's quote asset on LitVM.** The config pairs EMBER with WETH. On LitVM that could be bridged WETH or wrapped zkLTC; this is the project owner's call. The testnet uses a tWETH stand-in.
 - **Flow itself:** zaps and unzaps, exact-out, routing, and the Relic check behind a rebate.
-- **The Vent's conversion, the valuation source and Kindling's initialization**, which the pair only serves.
+- **The Vent's conversion, the valuation source and Kindling's initialization**, which the pair only serves. The Vent is built in ADR 0020: it collects these ledgers and buys back through `buy` under `consult`.
 - **Paying Quote yield out to eligible stakers** (§12, weighted by stake × Heat²). The pair only books it.
 
 ## Size and gas

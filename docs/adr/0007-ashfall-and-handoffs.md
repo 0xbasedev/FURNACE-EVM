@@ -75,7 +75,7 @@ The spec (§8, §12) and config (`emissions.ashfall`, `execution.ashfall`) defin
 These were found or confirmed here and are **not built**:
 - ~~**The Capstone Heat bonus.**~~ The hook is built in [ADR 0008](0008-ordinary-bonus.md): ForgePool's records carry an ordinary bonus (Capstone + Pyre) that `BOOST` sets. The Boost and Capstone contracts are still required.
 - **The Capstone, the matching and match-reserve contracts, and the Sealed-pot stream contract,** at mined addresses.
-- **The emergency exit's "stayers" share** (25% of the 8% fee) still goes to `FEE_COLLECTOR` with the rest of the fee.
+- **The emergency exit's "stayers" share** (25% of the 8% fee) goes to `FEE_COLLECTOR` with the rest of the fee. The Vent, the collector, owes it to an immutable `STAKERS` distributor, which is not built (ADR 0020 [P]).
 - **Relic perks** (shorter claim timers), **Quote yield** and **Pyre**.
 
 ## Gas (`pnpm gas`: forge `--isolate`, optimizer 500 runs, solc-js 0.8.28)
