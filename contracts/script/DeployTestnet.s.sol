@@ -240,8 +240,18 @@ abstract contract FurnaceTestnet {
             // Kindling's LP is EMBER/USDC, pool 0's receipt (spec v5.5 §3); the operator stands in.
             // Every pool reads the same founder record for First Flame (ADR 0018).
             address kindling = i == 0 ? d.operator : address(0);
+            // The operator stands in for Ignition, the head start's granter, on every pool (ADR 0019).
             bytes memory args = abi.encode(
-                d.stake[i], isLp[i], d.operator, pl.boost, d.operator, flow, compounder, kindling, address(d.founders)
+                d.stake[i],
+                isLp[i],
+                d.operator,
+                pl.boost,
+                d.operator,
+                flow,
+                compounder,
+                kindling,
+                address(d.founders),
+                d.operator
             );
             d.pools[i] =
                 ForgePool(_create3(pl, _poolLabel(i), pl.pool[i], abi.encodePacked(type(ForgePool).creationCode, args)));
@@ -290,6 +300,7 @@ abstract contract FurnaceTestnet {
             if (p.COMPOUNDER() != (p.IS_LP() ? d.operator : address(0))) revert Miswired("pool COMPOUNDER");
             if (p.KINDLING() != (i == 0 ? d.operator : address(0))) revert Miswired("pool KINDLING");
             if (p.FOUNDERS() != address(d.founders)) revert Miswired("pool FOUNDERS");
+            if (p.IGNITION() != d.operator) revert Miswired("pool IGNITION");
         }
         Flow f = d.flow;
         if (address(f.PAIR0()) != address(d.pairs[0]) || address(f.PAIR1()) != address(d.pairs[1])) revert Miswired("Flow pairs");
@@ -335,6 +346,8 @@ abstract contract FurnaceTestnet {
                 d.pools[0].openKindling(actor, 10e18);
                 d.founders.setFounder(actor, true);
                 d.pools[0].refreshFounder(ids[0]);
+                // And, standing in for Ignition, grants that position's first lot a 30-day head start.
+                d.pools[0].grantHeadStart(ids[0], 0, 30 days);
             }
             d.boost.deposit(d.pairsLive ? 0 : 2, d.pairsLive ? ids[0] : ids[2], 100e18); // a Capstone
         }

@@ -54,6 +54,11 @@ contract ForgeHandler is Test {
     mapping(uint256 id => bool) internal lastFounder;
     uint256 public refreshes;
     uint256 public kindled;
+    /// The head start (ADR 0019): Ignition, and a ghost of each position's first granted amount.
+    address public ignition;
+    mapping(uint256 id => uint256) public grantedSeconds;
+    bool public headStartBroken;
+    uint256 public grants;
 
     constructor(ForgePool pool_, MockERC20 token_, address collector_) {
         (pool, token, collector) = (pool_, token_, collector_);
@@ -68,6 +73,7 @@ contract ForgeHandler is Test {
             ids.push(pool.open(1e18 * (i + 1)));
         }
         firstOpen = block.timestamp;
+        ignition = pool_.IGNITION();
         founders = MockFounders(pool_.FOUNDERS());
         kindling = pool_.KINDLING();
         if (kindling != address(0)) {
@@ -289,6 +295,32 @@ contract ForgeHandler is Test {
         _after();
     }
 
+    /// Ignition grants a head start: usually to a used slot of a position that has none.
+    function grantHeadStart(uint256 seed, uint256 slot, uint256 secs) external {
+        if (ids.length == 0 || ignition == address(0)) return;
+        uint256 id = ids[seed % ids.length];
+        uint32 used = pool.positionOf(id).usedMask;
+        if (slot % 4 != 0 && used != 0) {
+            uint256 j = slot % 32;
+            while (used & (1 << j) == 0) j = (j + 1) % 32;
+            slot = j;
+        } else {
+            slot = slot % 34;
+        }
+        secs = bound(secs, 0, P.HEAT_AGE_CAP + 1);
+        pool.poke(id); // the lot's state at now, for the comparison below
+        (, uint256 age0, uint256 part0,) = pool.lotAt(id, slot % 32);
+        vm.prank(ignition);
+        try pool.grantHeadStart(id, slot, secs) {
+            ++grants;
+            if (grantedSeconds[id] != 0) headStartBroken = true; // granted twice
+            grantedSeconds[id] = secs;
+            (, uint256 age1, uint256 part1,) = pool.lotAt(id, slot);
+            if (age1 != age0 || part1 != part0) headStartBroken = true; // phantom age entered the lot
+        } catch {}
+        _after();
+    }
+
     /// Kindling opens a contributor's position at the standard fee.
     function openKindling(uint256 who, uint256 amount) external {
         if (ids.length >= 6 || kindling == address(0)) return;
@@ -414,7 +446,8 @@ contract ForgePoolInvariantTest is Test {
             address(0),
             makeAddr("compounder"),
             makeAddr("kindling"),
-            address(new MockFounders())
+            address(new MockFounders()),
+            makeAddr("ignition")
         );
         handler = new ForgeHandler(pool, token, collector);
         targetContract(address(handler));
@@ -512,10 +545,10 @@ contract ForgePoolInvariantTest is Test {
                 for (uint256 k; k < head.records; ++k) {
                     Record memory r = pool.historyAt(id, j, k);
                     if (r.amount == 0) continue;
-                    uint256 streak = r.streak & (ForgeMeasures.FOUNDER_FLAG - 1); // First Flame rides bit 39
+                    uint256 streak = r.streak & ForgeMeasures.STREAK_MASK; // First Flame and the head start ride bits 39, 38
                     assertLe(streak, r.since, "anchor at or before the segment");
                     (uint256 nextSince, uint256 nextStreak) = k + 1 < head.records
-                        ? (pool.historyAt(id, j, k + 1).since, pool.historyAt(id, j, k + 1).streak & (ForgeMeasures.FOUNDER_FLAG - 1))
+                        ? (pool.historyAt(id, j, k + 1).since, pool.historyAt(id, j, k + 1).streak & ForgeMeasures.STREAK_MASK)
                         : (head.since, p.streakStart);
                     if (nextStreak != streak && p.closedAt == 0) {
                         assertGe(nextStreak, nextSince, "no Streak reset inside an active segment");
@@ -528,6 +561,30 @@ contract ForgePoolInvariantTest is Test {
     /// Each active record segment has one ordinary bonus (ADR 0008): the one in effect when it
     /// began, with no change strictly inside it. An open active head began at or after the
     /// last change, so the current bonus is its own.
+    /// The head start (ADR 0019): granted once and never changed; it covers only used slots of an
+    /// open position; a record carries its flag only once a head start exists; a grant never
+    /// moves a lot's age or participation.
+    function invariant_headStartScopedAndOnce() public view {
+        assertFalse(handler.headStartBroken());
+        for (uint256 i; i < handler.idCount(); ++i) {
+            uint256 id = handler.ids(i);
+            ForgePoolBase.Position memory p = pool.positionOf(id);
+            assertEq(p.headStart, handler.grantedSeconds(id), "the granted amount, unchanged");
+            if (p.headStart == 0) {
+                assertFalse(p.headStartActive);
+                assertEq(p.headStartMask, 0);
+            }
+            if (p.closedAt == 0) assertEq(p.headStartMask & ~p.usedMask, 0, "covers used slots only");
+            for (uint256 j; j < 32; ++j) {
+                Lot memory head = pool.lotOf(id, j);
+                for (uint256 k; k < head.records; ++k) {
+                    Record memory r = pool.historyAt(id, j, k);
+                    if (r.streak & ForgeMeasures.HEADSTART_FLAG != 0) assertGt(p.headStart, 0, "a flag needs a grant");
+                }
+            }
+        }
+    }
+
     /// First Flame (ADR 0018): each record carries the founder flag of its start, and the flag never
     /// changes inside a record segment or under an active head.
     function invariant_founderAnchorsAlignWithRecords() public view {

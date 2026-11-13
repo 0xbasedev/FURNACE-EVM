@@ -64,7 +64,7 @@ Status: accepted for this repository. Not audited, not deployed.
 - If it resets, a seller could sell to themself to restore the quota. That costs 20% of capped age, the Deed fee and a 24-hour auction, so it is no cheaper than waiting.
 - Boost's Capstone plan resets on the same rule.
 
-**4. Phantom age is wallet-bound and never enters `Lot.age`.** This is a binding rule for the Kindling and First Flame PR. That PR has landed as [ADR 0018](0018-kindling-and-first-flame.md), and it follows this rule: First Flame is a flag in bit 39 of each record's Streak anchor; the head start is still unbuilt.
+**4. Phantom age is wallet-bound and never enters `Lot.age`.** This is a binding rule for the Kindling and First Flame PR. That PR has landed as [ADR 0018](0018-kindling-and-first-flame.md), and it follows this rule: First Flame is a flag in bit 39 of each record's Streak anchor. The head start followed as [ADR 0019](0019-head-start.md): bit 38, on the granted lot's slots only.
 - Two kinds of phantom age exist (spec §2):
   - First Flame's 15-day floor;
   - the Ignition head start.

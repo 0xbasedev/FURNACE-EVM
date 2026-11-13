@@ -18,7 +18,7 @@ import cfg, { CREATEX_FACTORY, DEPLOYER as PLACEHOLDER_DEPLOYER } from '../canon
 export const CREATEX_CODEHASH = '0xbd8a7ea8cfca7b4e5f5041d7d4b17bc317c5ce42cfbc42066a00cf26b43eb53f';
 /** The testnet kit's chains, which can never be the mainnet. */
 const TESTNET_CHAIN_IDS = new Set([4441, 31337]);
-const MODULE_SLOTS = ['Treasury', 'Guardian', 'Kindling', 'FeeRouter', 'Flow', 'Compounder', 'Deeds', 'MatchReserve', 'SealedPot', 'Valuation', 'PyreLedger', 'FeeRebate', 'Founders'] as const;
+const MODULE_SLOTS = ['Treasury', 'Guardian', 'Kindling', 'FeeRouter', 'Flow', 'Compounder', 'Deeds', 'MatchReserve', 'SealedPot', 'Valuation', 'PyreLedger', 'FeeRebate', 'Founders', 'Ignition'] as const;
 /** What each slot is on the testnet, for the blocker's wording. */
 const TESTNET_NOTE: Record<(typeof MODULE_SLOTS)[number], string> = {
   Treasury: "on the testnet it is the operator's wallet",
@@ -34,6 +34,7 @@ const TESTNET_NOTE: Record<(typeof MODULE_SLOTS)[number], string> = {
   PyreLedger: "Relics' Pyre ledger; on the testnet it is a stand-in the operator sets",
   FeeRebate: "Relics' fee-rebate perk, read by Flow; on the testnet it is a stand-in the operator sets",
   Founders: "Ignition's First Flame record, read by every pool (ADR 0018); on the testnet it is a stand-in the operator sets",
+  Ignition: "the head start's granter in every pool (ADR 0019), which keeps its 7-day window and value cap; on the testnet it is the operator's wallet",
 };
 const RECORD_KEYS = ['network', 'status', 'chainId', 'rpcUrl', 'explorerUrl', 'sources', 'pairsTrustWindow', 'usdc', 'smelterQuote', 'deployer', 'modules', 'audits'];
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;

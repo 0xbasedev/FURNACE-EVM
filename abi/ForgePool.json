@@ -46,6 +46,11 @@
         "name": "founders",
         "type": "address",
         "internalType": "address"
+      },
+      {
+        "name": "ignition",
+        "type": "address",
+        "internalType": "address"
       }
     ],
     "stateMutability": "nonpayable"
@@ -144,6 +149,19 @@
   {
     "type": "function",
     "name": "FOUNDERS",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "IGNITION",
     "inputs": [],
     "outputs": [
       {
@@ -466,6 +484,29 @@
       }
     ],
     "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "grantHeadStart",
+    "inputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
   },
   {
     "type": "function",
@@ -1069,6 +1110,31 @@
   },
   {
     "type": "event",
+    "name": "HeadStartGranted",
+    "inputs": [
+      {
+        "name": "id",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "slot",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "seconds_",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "ListingChanged",
     "inputs": [
       {
@@ -1280,6 +1346,17 @@
   },
   {
     "type": "error",
+    "name": "BadHeadStart",
+    "inputs": [
+      {
+        "name": "seconds_",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
     "name": "BadInterval",
     "inputs": [
       {
@@ -1382,6 +1459,17 @@
   },
   {
     "type": "error",
+    "name": "HeadStartUsed",
+    "inputs": [
+      {
+        "name": "id",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
     "name": "KeyTooLarge",
     "inputs": [
       {
@@ -1473,6 +1561,11 @@
   {
     "type": "error",
     "name": "NotFlow",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NotIgnition",
     "inputs": []
   },
   {

@@ -24,9 +24,10 @@ struct Lot {
 
 /// @dev A superseded head, valid from `since` until the next record's `since`.
 ///      `streak` is the position's Streak start and `ordinaryBonus` its Capstone + Pyre
-///      bonus (units of ORDINARY_BONUS_UNIT_RAY) while the head was current. Bit 39 of
-///      `streak` (FOUNDER_FLAG; a timestamp never reaches it) marks a First Flame owner: the
-///      segment's financial Heat reads FIRST_FLAME_AGE older, and nothing else changes (ADR 0018). A Streak
+///      bonus (units of ORDINARY_BONUS_UNIT_RAY) while the head was current. Bits 39 and 38
+///      of `streak` (a timestamp never reaches them) mark a First Flame owner (FOUNDER_FLAG,
+///      ADR 0018) and a lot under the position's head start (HEADSTART_FLAG, ADR 0019): the
+///      segment's financial Heat reads that much older, and nothing else changes. A Streak
 ///      reset or a bonus change rewrites each active head at that instant first, so an
 ///      active segment never spans one; a head's own anchors are the position's current
 ///      values (ADR 0007, ADR 0008). `participated` saturates at the Ashfall minimum.
@@ -94,7 +95,7 @@ library ForgeMeasures {
         uint256 t1;
         uint256 tag; // cached Seal: its index and end
         uint256 tagEnd;
-        uint256 anchor; // the head's anchors: Streak start | ordinary bonus << 40
+        uint256 anchor; // the head's anchors: Streak start and flags | bonus << 40 | head start << 56
         bool ashfall; // also measure the Ashfall weight
     }
 
@@ -122,11 +123,24 @@ library ForgeMeasures {
 
     /// @notice Bit 39 of a record's `streak`: the owner held First Flame (ADR 0018).
     uint256 internal constant FOUNDER_FLAG = 1 << 39;
+    /// @notice Bit 38 of a record's `streak`: the lot carried the position's head start (ADR 0019).
+    uint256 internal constant HEADSTART_FLAG = 1 << 38;
+    /// @dev The Streak start itself, below both flags.
+    uint256 internal constant STREAK_MASK = HEADSTART_FLAG - 1;
 
-    /// @notice Packs a position's current Streak start (with the founder flag) and ordinary
-    ///         bonus: the anchors of its heads.
-    function anchorOf(uint256 streakStart, uint256 ordinaryBonus) internal pure returns (uint256) {
-        return streakStart | (ordinaryBonus << 40);
+    /// @notice Packs a position's current anchors: its Streak start (with the founder flag),
+    ///         ordinary bonus, head-start seconds and the slots its active head start covers.
+    function anchorOf(uint256 streakStart, uint256 ordinaryBonus, uint256 headStart, uint256 headStartSlots)
+        internal
+        pure
+        returns (uint256)
+    {
+        return streakStart | (ordinaryBonus << 40) | (headStart << 56) | (headStartSlots << 88);
+    }
+
+    /// @notice The anchors of slot j's head: the head-start flag set if the slot is covered.
+    function slotAnchor(uint256 anchor, uint256 j) internal pure returns (uint256) {
+        return (anchor >> (88 + j)) & 1 != 0 ? anchor | HEADSTART_FLAG : anchor;
     }
 
     /// @notice One slot's S = ∫stake dt and W = ∫stake·Heat dt (RAY) over [t0, t1], plus
@@ -174,7 +188,7 @@ library ForgeMeasures {
         for (uint256 j; j < 32; ++j) {
             if (mask & (1 << j) == 0) continue;
             SlotMeasure memory m =
-                slotMeasure(history[j], lots[j], seals, anchor, true, t0, t1, 0, type(uint256).max);
+                slotMeasure(history[j], lots[j], seals, slotAnchor(anchor, j), true, t0, t1, 0, type(uint256).max);
             total.stakeSeconds += m.stakeSeconds;
             total.heatSeconds += m.heatSeconds;
             total.sealedStakeSeconds += m.sealedStakeSeconds;
@@ -213,8 +227,10 @@ library ForgeMeasures {
         if (segEnd <= c.t0 || r.amount == 0) return true;
         uint256 a = r.since > c.t0 ? r.since : c.t0;
         uint256 b = segEnd < c.t1 ? segEnd : c.t1;
-        // First Flame reads financial Heat older; participation and the Ashfall clock never see it.
+        // First Flame and the head start read financial Heat older; they stack, capped below.
+        // Participation and the Ashfall clock and weight never see them.
         uint256 phantom = (uint256(r.streak) & FOUNDER_FLAG) != 0 ? P.FIRST_FLAME_AGE : 0;
+        if ((uint256(r.streak) & HEADSTART_FLAG) != 0) phantom += uint32(c.anchor >> 56);
         uint256 age = Math.min(r.age + (a - r.since) + phantom, P.HEAT_AGE_CAP);
         uint256 s = uint256(r.amount) * (b - a);
         uint256 w = uint256(r.amount) * HeatMath.integrateHeat(age, b - a, _bonusRay(r));
@@ -239,7 +255,7 @@ library ForgeMeasures {
     ///      have both reached their minimums. Participation grows 1:1 while the lot is
     ///      active, so the eligible part is [e, b] for one start e.
     function _ashfallSegment(Record memory r, uint256 a, uint256 b, SlotMeasure memory m) private pure {
-        uint256 e = (uint256(r.streak) & (FOUNDER_FLAG - 1)) + P.ASHFALL_MIN_STREAK;
+        uint256 e = (uint256(r.streak) & STREAK_MASK) + P.ASHFALL_MIN_STREAK;
         uint256 part = r.participated + (a - r.since);
         if (part < P.ASHFALL_MIN_PARTICIPATION) e = Math.max(e, a + (P.ASHFALL_MIN_PARTICIPATION - part));
         e = Math.max(e, a);

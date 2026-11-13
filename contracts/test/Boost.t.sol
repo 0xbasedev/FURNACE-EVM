@@ -77,7 +77,7 @@ abstract contract BoostFixture is OracleVectors {
         bool[4] memory lp = [true, true, false, false];
         for (uint256 i; i < 4; ++i) {
             IERC20 token = i == 2 ? IERC20(address(ember)) : IERC20(address(stake[i]));
-            pools[i] = new ForgePool(token, lp[i], makeAddr("feeRouter"), boostAt, makeAddr("deeds"), address(0), address(0), address(0), address(0));
+            pools[i] = new ForgePool(token, lp[i], makeAddr("feeRouter"), boostAt, makeAddr("deeds"), address(0), address(0), address(0), address(0), address(0));
         }
         address[] memory registrars = new address[](1);
         Mantle.BurnCategory[] memory categories = new Mantle.BurnCategory[](1);

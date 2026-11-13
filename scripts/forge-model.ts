@@ -79,14 +79,19 @@ export interface Position {
   lastTapAt: bigint;
   /** First Flame (ADR 0018): the owner's founder record, as last refreshed; a sale clears it. */
   founder: boolean;
+  /** The head start (ADR 0019): its seconds (kept after a sale), whether it still applies, and the
+   *  slots holding the granted lot's principal. */
+  headStart: bigint; headStartActive: boolean; headStartMask: number;
 }
-export interface Rec { since: bigint; amount: bigint; age: bigint; part: bigint; seal: number; streak: bigint; bonus: bigint; founder: boolean }
+export interface Rec { since: bigint; amount: bigint; age: bigint; part: bigint; seal: number; streak: bigint; bonus: bigint; founder: boolean; hs: boolean }
 const UINT96_MAX = (1n << 96n) - 1n;
 export interface Occ { time: bigint; cum: bigint; on: boolean }
 
 const emptyLot = (): Lot => ({ amount: 0n, age: 0n, part: 0n, heldBy: 0 });
 /** The age financial Heat reads: First Flame adds its offset, capped like any age (ADR 0018). */
-const heatAge = (age: bigint, founder: boolean) => min(age + (founder ? FIRST_FLAME_AGE : 0n), AGE_CAP);
+const heatAge = (age: bigint, founder: boolean, headStart = 0n) => min(age + (founder ? FIRST_FLAME_AGE : 0n) + headStart, AGE_CAP);
+/** Slot j holds the head-started lot's principal (ADR 0019). */
+const covered = (p: Position, j: number) => p.headStartActive && has(p.headStartMask, j);
 const deadline = (t: Ticket) => t.maturity + WINDOW;
 
 export class ForgeModel {
@@ -166,7 +171,7 @@ export class ForgeModel {
       const seal = this.running(p);
       p.lots.forEach((lot, j) => {
         if (lot.amount === 0n) return;
-        const s = lot.amount * d, w = lot.amount * integrateHeat(heatAge(lot.age, p.founder), d, p.bonus * BONUS_UNIT);
+        const s = lot.amount * d, w = lot.amount * integrateHeat(heatAge(lot.age, p.founder, covered(p, j) ? p.headStart : 0n), d, p.bonus * BONUS_UNIT);
         const q = ashfallWeight(lot.amount, lot.age, lot.part, p.streakStart, a, b, p.bonus);
         const sealed = seal !== undefined && has(seal.cohort, j);
         p.S += s; p.W += w; p.Q += q;
@@ -231,6 +236,7 @@ export class ForgeModel {
           const j = this.firstFree(p);
           const seal = this.current(p);
           if (seal?.status === SealStatus.Active && has(seal.cohort, slot)) seal.cohort = (seal.cohort | bit(j)) >>> 0;
+          if (has(p.headStartMask, slot)) p.headStartMask = (p.headStartMask | bit(j)) >>> 0; // the same principal
           p.lots[j] = { amount: s.amount, age: s.age, part: s.part, heldBy: 0 };
           p.historySlots.add(j); p.lotCount++;
           this.recordHead(p, j);
@@ -286,9 +292,9 @@ export class ForgeModel {
     const head = p.heads.get(j);
     if (head && head.since !== t) {
       if (!p.history.has(j)) p.history.set(j, []);
-      p.history.get(j)!.push({ ...head, streak: p.streakStart, bonus: p.bonus, founder: p.founder });
+      p.history.get(j)!.push({ ...head, streak: p.streakStart, bonus: p.bonus, founder: p.founder, hs: covered(p, j) });
     }
-    p.heads.set(j, { since: t, amount: lot.amount, age: lot.age, part: lot.part, seal: this.tag(p, j), streak: 0n, bonus: 0n, founder: false });
+    p.heads.set(j, { since: t, amount: lot.amount, age: lot.age, part: lot.part, seal: this.tag(p, j), streak: 0n, bonus: 0n, founder: false, hs: false });
   }
 
   // ── Seals (mirror of ForgePool's Seal transitions) ───────────────────────
@@ -351,7 +357,8 @@ export class ForgeModel {
       if (end <= t0 || r.amount === 0n) continue;
       const a = r.since > t0 ? r.since : t0, b = end < t1 ? end : t1;
       const bonus = i < n ? r.bonus : p.bonus; // a head carries the position's current anchors
-      const age = heatAge(min(r.age + (a - r.since), AGE_CAP), i < n ? r.founder : p.founder);
+      const hs = (i < n ? r.hs : covered(p, j)) ? p.headStart : 0n;
+      const age = heatAge(min(r.age + (a - r.since), AGE_CAP), i < n ? r.founder : p.founder, hs);
       let s = r.amount * (b - a), w = r.amount * integrateHeat(age, b - a, bonus * BONUS_UNIT);
       out.s += s; out.w += w;
       if (ashfall) out.q += ashfallWeight(r.amount, r.age + (a - r.since), r.part + (a - r.since), i < n ? r.streak : p.streakStart, a, b, bonus);
@@ -386,7 +393,7 @@ export class ForgeModel {
       epochS: new Map(), epochW: new Map(), historySlots: new Set(), openedAt: now, closedAt: 0n,
       heads: new Map(), history: new Map(),
       seals: [], SS: 0n, SW: 0n, epochSS: new Map(), epochSW: new Map(), Q: 0n, epochQ: new Map(),
-      owner, listing: 0, owners: [], lastTapAt: 0n, founder: false,
+      owner, listing: 0, owners: [], lastTapAt: 0n, founder: false, headStart: 0n, headStartActive: false, headStartMask: 0,
     };
     this.positions.push(p);
     this.addLot(p, amount, now);
@@ -432,6 +439,18 @@ export class ForgeModel {
     if (isFounder === p.founder) return;
     p.lots.forEach((lot, j) => { if (lot.amount !== 0n) this.recordHead(p, j); });
     p.founder = isFounder;
+  }
+  /** IGNITION only (ForgePoolAnnex.grantHeadStart, ADR 0019): the active lot in `slot` reads
+   *  `seconds` more financial age, once per position; the slot's segment closes at now first. */
+  grantHeadStart(id: number, slot: number, seconds: bigint, now: bigint) {
+    need(seconds > 0n && seconds <= AGE_CAP, 'BadHeadStart');
+    const p = this.touch(id, now);
+    need(!p.closed, 'Closed');
+    need(p.listing % 2 === 0, 'Listed');
+    need(p.headStart === 0n, 'HeadStartUsed');
+    need(slot < MAX_LOTS && p.lots[slot].amount > 0n, 'NotActiveLot');
+    this.recordHead(p, slot);
+    p.headStart = seconds; p.headStartActive = true; p.headStartMask = bit(slot);
   }
   /** BOOST sets the ordinary bonus (ForgePool.setOrdinaryBonus); a closed position keeps its own. */
   setBonus(id: number, units: bigint, now: bigint) {
@@ -517,7 +536,7 @@ export class ForgeModel {
     this.endSeal(p, SealStatus.Forfeited, now);
     for (const slot of t!.slices.keys()) {
       const lot = p.lots[slot];
-      if (lot.heldBy === t!.id) { lot.heldBy = 0; p.lotCount--; } else p.reserved--;
+      if (lot.heldBy === t!.id) { lot.heldBy = 0; p.lotCount--; p.headStartMask = (p.headStartMask & ~bit(slot)) >>> 0; } else p.reserved--;
     }
     this.dropPending(p, t!, 'executed');
     if (!t!.tap) { // a Tap cools nothing and keeps the Streak (spec §9)
@@ -588,7 +607,7 @@ export class ForgeModel {
       lot.age = deedAge(lot.age);
       this.recordHead(p, j);
     });
-    p.owner = buyer; p.streakStart = now; p.bonus = 0n; p.plan = null; p.founder = false;
+    p.owner = buyer; p.streakStart = now; p.bonus = 0n; p.plan = null; p.founder = false; p.headStartActive = false;
     p.listing++;
   }
   ownedSince(p: Position): bigint { return p.owners.length ? p.owners[p.owners.length - 1].until : p.openedAt; }

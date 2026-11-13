@@ -22,7 +22,7 @@ contract ForgePoolViewHarness is ForgePool {
     /// A compounder and a founder record, so the handler's source-lot additions and First Flame
     /// refreshes run through the decoding check too.
     constructor(IERC20 token, address collector, address boost, address deeds)
-        ForgePool(token, true, collector, boost, deeds, address(0), address(0xC0FFEE), address(0), address(new MockFounders()))
+        ForgePool(token, true, collector, boost, deeds, address(0), address(0xC0FFEE), address(0), address(new MockFounders()), address(0x16))
     {}
 
     function rawPosition(uint256 id) external view returns (Position memory) {

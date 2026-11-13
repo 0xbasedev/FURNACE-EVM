@@ -181,6 +181,15 @@ Every call is its own transaction, so storage starts cold, as it does for a real
   - The measures read financial Heat 15 days older in W and the sealed W, and nowhere else.
 - **Unchanged.** Every exit, every lot's age and participation, and storage (`pnpm check:layout`).
 
+## The head start (added with ADR 0019)
+
+- **The argument.** ForgePool takes a tenth constructor argument, `IGNITION`, on any pool. The annex takes the same one.
+- **`grantHeadStart(id, slot, seconds)`.** `IGNITION` only, once per position, on an active lot of an open, unlisted position.
+  - That lot's principal reads `seconds` more financial age in W and the sealed W, stacked with First Flame and capped.
+  - It follows the principal's slices, and it leaves with a freed slot.
+  - A Deed sale ends it.
+- **Unchanged.** Every exit, and every lot's age and participation. Storage gains `Position.headStartMask` in free bytes of an existing word.
+
 ## Consequences and limits
 
 - **Not yet implemented** (as of this ADR; most of these have since landed in later ADRs):
@@ -189,6 +198,6 @@ Every call is its own transaction, so storage starts cold, as it does for a real
   - Taps (youngest-first, no haircut, quota);
   - Deeds (transfer with an 80% age carry and a Streak reset);
   - Capstone and Pyre ordinary bonuses (`integrateHeat` already takes the bonus);
-  - founder phantom age (First Flame since built; see above and ADR 0018; the head start is not).
+  - founder phantom age (First Flame and the head start since built; see above, ADR 0018 and ADR 0019).
 - Matching the model proves the port is consistent with this ADR's readings. It does not make any [P] rule canonical.
 - Nothing here is audited or deployed.
