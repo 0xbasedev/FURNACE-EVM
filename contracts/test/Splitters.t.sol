@@ -304,8 +304,11 @@ contract SplittersTest is SplitterRig {
         World memory w = _world(T0);
         vm.warp(T0 + P.EPOCH_SECONDS);
         w.measures.settle(0, 0, _measuresOf(0, 0, 1));
+        uint256 share = w.s[0].shareOf(0, 0, 1, address(w.ash));
         vm.prank(stranger);
         uint256 paid = w.s[0].claim(0, 0, 1, address(w.ash));
+        assertEq(paid, share, "the view showed exactly what the claim paid");
+        assertEq(w.s[0].shareOf(0, 0, 1, address(w.ash)), 0, "nothing left to show once claimed");
         assertEq(IERC20(address(w.ash)).balanceOf(_wallet(_ownerOf(0, 1))), paid, "paid to the owner, not the caller");
         assertEq(IERC20(address(w.ash)).balanceOf(stranger), 0);
         assertEq(w.ledger.forgeReleased(), w.ledger.vestedAt(block.timestamp), "released exactly V(now)");
