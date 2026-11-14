@@ -127,6 +127,11 @@ The deployment writes `deployments/testnet-4441.json`; the dApp reads it, with `
 2. Connect a wallet. If it is on another chain, the app offers to switch, and adds LiteForge when the wallet does not know it.
 3. Get zkLTC from the faucet for gas, then mint tUSDC or tWETH under *Test tokens*.
 4. Under *Zap & stake*, pay tUSDC (or EMBER) into a position. The route cards show what Flow stakes fee-free against what a deposit would keep.
+5. With the real Kindling (`FURNACE_TESTNET_KINDLING=1`), the *Kindling* tab comes first:
+   - during the 24 hours, contribute tUSDC there;
+   - after the deadline, its main button settles (paying you the bounty) or ends the event;
+   - then it claims your pool 0 position or your refund.
+   Without a manifest the tab shows a simulated event.
 
 Each action asks first for an approval of exactly the amount it spends, unless an earlier one still covers it. The app never sees a key; the wallet signs. Before the kit is broadcast, or if the manifest is missing, the app shows *Not deployed yet* and quotes on simulated reserves.
 

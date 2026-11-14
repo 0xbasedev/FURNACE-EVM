@@ -3,8 +3,9 @@ import {
   type Address, type Hash, type PublicClient, type WalletClient, type TransactionReceipt,
 } from 'viem';
 import { LITEFORGE, CHAIN_ID_HEX, ADD_CHAIN_PARAMS } from './chain';
-import { FLOW, PAIR, LENS, POOL, TOKEN } from './abi';
+import { FLOW, PAIR, LENS, POOL, TOKEN, KINDLING } from './abi';
 import type { Deployment } from './deployment';
+import type { KindlingState } from './kindling';
 
 /** The injected wallet (EIP-1193). */
 export interface Eip1193 {
@@ -72,6 +73,31 @@ export async function custodyOf(read: PublicClient, d: Deployment, pool: Address
   return read.readContract({ address: d.lens, abi: LENS, functionName: 'custodyOf', args: [pool, id] }) as Promise<bigint>;
 }
 
+/** Everything the Kindling screen shows, for `who` (ADR 0021). A pair that answers nothing reads as unknown. */
+export async function kindlingState(read: PublicClient, d: Deployment, who: Address): Promise<KindlingState> {
+  if (!d.kindling) throw new Error('This deployment has no Kindling.');
+  const address = d.kindling.address;
+  const r = <T>(functionName: string, args: unknown[] = []) =>
+    read.readContract({ address, abi: KINDLING, functionName, args }) as Promise<T>;
+  const [status, start, end, deadline, minContribution, walletCap, minRaise, maxRaise, accepted, totalNet, totalFees,
+    closedAt, liquidity, contributorLp, mine, entitlement, refundable, venue] = await Promise.all([
+    r<number>('status'), r<bigint>('START'), r<bigint>('END'), r<bigint>('SETTLE_DEADLINE'),
+    r<bigint>('MIN_CONTRIBUTION'), r<bigint>('WALLET_CAP'), r<bigint>('MIN_RAISE'), r<bigint>('MAX_RAISE'),
+    r<bigint>('accepted'), r<bigint>('totalNet'), r<bigint>('totalFees'), r<bigint>('closedAt'),
+    r<bigint>('liquidity'), r<bigint>('contributorLp'),
+    r<readonly [bigint, bigint, bigint, boolean]>('contributions', [who]),
+    r<bigint>('entitlementOf', [who]), r<bigint>('refundableOf', [who]),
+    r<number>('venueCheck').catch(() => -1),
+  ]);
+  return {
+    decimals: d.pairs[0].quoteDecimals, status: Number(status),
+    start, end, deadline, minContribution, walletCap, minRaise, maxRaise, accepted, totalNet, totalFees,
+    closedAt, liquidity, contributorLp,
+    me: { gross: mine[0], net: mine[1], fee: mine[2], done: mine[3] },
+    entitlement, refundable, venue: Number(venue),
+  };
+}
+
 // ── writes ────────────────────────────────────────────────────────────────
 
 export interface Sent { hashes: Hash[]; receipt: TransactionReceipt }
@@ -104,6 +130,12 @@ export const calls = {
   zapOut: (pair: number, liquidity: bigint, toQuote: boolean, minOut: bigint, deadline: bigint) =>
     encodeFunctionData({ abi: FLOW, functionName: 'zapOut', args: [BigInt(pair), liquidity, toQuote, minOut, deadline] }),
   mint: (to: Address, amount: bigint) => encodeFunctionData({ abi: TOKEN, functionName: 'mint', args: [to, amount] }),
+  contribute: (gross: bigint) => encodeFunctionData({ abi: KINDLING, functionName: 'contribute', args: [gross] }),
+  cancel: (amount: bigint) => encodeFunctionData({ abi: KINDLING, functionName: 'cancel', args: [amount] }),
+  settle: () => encodeFunctionData({ abi: KINDLING, functionName: 'settle', args: [] }),
+  fail: () => encodeFunctionData({ abi: KINDLING, functionName: 'fail', args: [] }),
+  refund: (wallet: Address) => encodeFunctionData({ abi: KINDLING, functionName: 'refund', args: [wallet] }),
+  materialize: (wallet: Address) => encodeFunctionData({ abi: KINDLING, functionName: 'materialize', args: [wallet] }),
 };
 
 const tokenIn = (d: Deployment, pair: number, quoteSide: boolean) => (quoteSide ? d.pairs[pair].quote : d.ember);
@@ -150,5 +182,36 @@ export async function zapOut(c: Clients, d: Deployment, o: { pair: number; liqui
 /** The faucet: TestnetToken.mint, which anyone may call up to its cap. */
 export async function mint(c: Clients, token: Address, amount: bigint): Promise<Sent> {
   const { hash, receipt } = await send(c, token, calls.mint(c.account, amount));
+  return { hashes: [hash], receipt };
+}
+
+// ── Kindling (ADR 0021) ───────────────────────────────────────────────────
+
+const kindlingOf = (d: Deployment) => {
+  if (!d.kindling) throw new Error('This deployment has no Kindling.');
+  return d.kindling.address;
+};
+
+/** Contribute `gross` USDC: an approval of exactly `gross` to Kindling if needed, then the deposit. */
+export async function contribute(c: Clients, d: Deployment, gross: bigint): Promise<Sent> {
+  const k = kindlingOf(d);
+  const hashes: Hash[] = [];
+  const approval = await ensureAllowance(c, d.pairs[0].quote, k, gross);
+  if (approval) hashes.push(approval);
+  const { hash, receipt } = await send(c, k, calls.contribute(gross));
+  return { hashes: [...hashes, hash], receipt };
+}
+
+/** One Kindling call with no token to approve: cancel, settle, fail, refund or materialize. */
+export async function kindlingCall(
+  c: Clients, d: Deployment,
+  action: { kind: 'cancel'; amount: bigint } | { kind: 'settle' } | { kind: 'fail' } | { kind: 'refund' } | { kind: 'materialize' },
+): Promise<Sent> {
+  const data = action.kind === 'cancel' ? calls.cancel(action.amount)
+    : action.kind === 'settle' ? calls.settle()
+    : action.kind === 'fail' ? calls.fail()
+    : action.kind === 'refund' ? calls.refund(c.account)
+    : calls.materialize(c.account);
+  const { hash, receipt } = await send(c, kindlingOf(d), data);
   return { hashes: [hash], receipt };
 }

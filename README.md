@@ -44,7 +44,7 @@ No admin, no pause, no upgrade. See [ADR 0021](docs/adr/0021-kindling.md). |
 | `contracts/test/` | Exact differential tests against BigInt vectors, fuzz properties, and invariants. |
 | `scripts/` | Independent checks: canonical checksums, config hash, CREATE3, and `gen`. `forge-model.ts`, `settlement-model.ts` and `pair-model.ts` are the exact BigInt references, and `forge-scenarios.ts`, `settlement-scenarios.ts` and `pair-model.ts` produce the differential scenarios. |
 | `apps/forge-sim/` | **Forge simulator** (Vite, React, GSAP): Heat, exit tiers and age haircuts, Seal projections and a day-by-day settlement run, computed by importing the exact models above (see *Simulator*). |
-| `apps/forge-app/` | **Testnet dApp** (Vite, React, GSAP, viem) for LiteForge: zap and stake fee-free through Flow beside what a 1% deposit would keep, swaps with the fee shown by lane, positions with Heat and the exit preview, and test-token mints. Every quote imports the exact pair and Flow models. It reads `deployments/testnet-4441.json` and `abi/` at build time; with no manifest it runs on simulated reserves and sends nothing (see *dApp*). |
+| `apps/forge-app/` | **Testnet dApp** (Vite, React, GSAP, viem) for LiteForge: zap and stake fee-free through Flow beside what a 1% deposit would keep, swaps with the fee shown by lane, positions with Heat and the exit preview, Kindling (the genesis raise, with its countdown, minimum and caps), and test-token mints. Every quote imports the exact pair, Flow and Kindling models. It reads `deployments/testnet-4441.json` and `abi/` at build time; with no manifest it runs on simulated reserves and sends nothing (see *dApp*). |
 | `tools/solc`, `tools/forge.mjs` | The solc-js shim, and a forge launcher that propagates forge's exit status (see *Toolchain*). |
 | `contracts/script/` | **Testnet deployment kit**: `DeployTestnet.s.sol` deploys and wires the built core, the EMBER pairs and Flow through CreateX's CREATE3, with deployer- and chain-bound salts, on testnets only; `DeployTestnetPairs` deploys the pairs later instead, at the addresses pools 0 and 1 already stake. Stand-ins for unbuilt modules are in `testnet/`. Rehearsed on a fork of LitVM's LiteForge testnet (chain 4441); see [`docs/testnet/litvm-liteforge.md`](docs/testnet/litvm-liteforge.md). Not a canonical deployment. |
 | `abi/` | The ABIs a frontend or indexer needs, exported from the build by `pnpm abi`; `index.json` marks the testnet-only stand-ins. ForgePool's ABI includes the functions its annex runs. |
@@ -87,7 +87,14 @@ The engine tests (`apps/forge-sim/test`) check each projection against direct ca
 
 `apps/forge-app` is the testnet interface: a static page, an injected wallet (EIP-1193) and viem, no backend. It refuses to send anything off chain 4441 and offers to switch or add LiteForge.
 
-- **Zap & stake** (the default tab): one token in, through `Flow.zapAndStake`. It shows the LP staked fee-free beside what `deposit` would keep after its 1% fee, the exact split, the price impact and the dust returned. It can open a position or add to one picked under *Positions*.
+- **Kindling** (the first tab while the real event is deployed; a simulated preview before any deployment). It shows:
+  - a countdown and the raise against its $100,000 minimum and $5,000,000 cap;
+  - the wallet's room under the $25,000 cap;
+  - each contribution's 3% fee and net;
+  - the position it would become at today's raise. The spec's $100 example comes out at $87.30 of USDC and as much in EMBER.
+
+  After the deadline, the one action that moves the event on is the primary button: settle and earn the 5 bps bounty, end the event when it cannot settle, then claim the pool 0 position or the refund. Cancelling stays possible until settlement. It sits behind a disclosure and a press-and-hold, and shows the fee that stays escrowed.
+- **Zap & stake** (the default tab otherwise): one token in, through `Flow.zapAndStake`. It shows the LP staked fee-free beside what `deposit` would keep after its 1% fee, the exact split, the price impact and the dust returned. It can open a position or add to one picked under *Positions*.
 - **Swap**: `Flow.swap` at the wallet's Relic rebate, with the fee broken into its LP, burn, liquidity and Quote yield lanes.
 - **Positions**: each position in Forge pools 0 and 1, its Heat and a 10% exit preview from the simulator's engine.
 - **Test tokens**: mints of tUSDC and tWETH, and the zkLTC faucet.
@@ -97,7 +104,7 @@ The nudges are interface policy, never on-chain rules:
 - price impact warns above 1% and blocks the button above 15%;
 - a selling route says so before it is signed.
 
-Each call carries a deadline and the minimum the chosen slippage allows; the contracts enforce only those. Approvals are for the exact amount a call spends, never unlimited. Its tests (`apps/forge-app/test`) check the quotes against the models, the calldata against the ABIs, and the approve-then-zap flow against a mock wallet. Not built into the interface yet: `zapOut` and the pools' exits (the contract routes exist; the Positions tab previews an exit but sends none). Rebates come from the testnet stand-in, not Relics.
+Each call carries a deadline and the minimum the chosen slippage allows; the contracts enforce only those. Approvals are for the exact amount a call spends, never unlimited. Its tests (`apps/forge-app/test`) check the quotes against the models, the calldata against the ABIs, the approve-then-zap and approve-then-contribute flows against a mock wallet, and Kindling's fee, refusals, cancellation base, phases, bounty and LP estimate against the model. Not built into the interface yet: `zapOut` and the pools' exits (the contract routes exist; the Positions tab previews an exit but sends none). Rebates come from the testnet stand-in, not Relics.
 
 ## Verified (current head)
 
