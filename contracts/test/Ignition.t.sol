@@ -447,8 +447,13 @@ contract IgnitionTest is IgnitionRig {
     /// @dev Ignition over a real Cold Storage (USDC) and a real pool 0 on a real BlastPool, both
     ///      naming Ignition as their IGNITION and FOUNDERS.
     function _real() internal returns (Real memory r) {
-        vm.warp(T0 - 1 hours);
-        r.w = _world(T0, true);
+        return _realAt(T0);
+    }
+
+    /// @dev The same world with Ignition starting at `t0`.
+    function _realAt(uint256 t0) internal returns (Real memory r) {
+        vm.warp(t0 > 1 hours ? t0 - 1 hours : 1);
+        r.w = _world(t0, true);
         r.ember = new MockBurnableERC20("Ember", "EMBER");
         // A pool deploys its annex from its own nonce, so each deployment here takes one.
         uint256 n = vm.getNonce(address(this));
@@ -463,10 +468,10 @@ contract IgnitionTest is IgnitionRig {
         r.pool0 = new ForgePool(IERC20(address(r.blast)), true, fees, makeAddr("boost"), makeAddr("deeds"), address(0), address(0), address(0), igAt, igAt);
         // The rig's ledger names its own Ignition; this farm gets its own ASH and ledger.
         AshToken t = new AshToken(ledgerAt);
-        Ignition.Config memory c = _config(r.w, coldAt, pool0At, T0);
+        Ignition.Config memory c = _config(r.w, coldAt, pool0At, t0);
         (c.blastPool, c.ash, c.ledger) = (IIgnitionPair(blastAt), ERC20Burnable(address(t)), IIgnitionLedger(ledgerAt));
         r.ig = new Ignition(c);
-        AshLedger l = new AshLedger(IAshMint(address(t)), igAt, bonusSlot, forgeAsh, T0);
+        AshLedger l = new AshLedger(IAshMint(address(t)), igAt, bonusSlot, forgeAsh, t0);
         assertEq(address(r.cold), coldAt);
         assertEq(address(r.blast), blastAt);
         assertEq(address(r.pool0), pool0At);
@@ -538,6 +543,22 @@ contract IgnitionTest is IgnitionRig {
         // Once per wallet.
         vm.prank(a);
         vm.expectRevert(abi.encodeWithSelector(Ignition.HeadStartUsed.selector, a));
+        r.ig.grantHeadStart(r.cold, id, 0);
+    }
+
+    /// The window opens only at Kindling's close. On a clock younger than the window itself (a
+    /// fresh local chain), an unsettled Kindling (`closedAt` zero) still refuses every grant.
+    function test_noHeadStartBeforeKindlingClosesEvenOnAYoungClock() public {
+        Real memory r = _realAt(1 hours);
+        address a = _wallet(0);
+        vm.warp(1 hours);
+        _deposit(r.w, a, 0, 1_000e6, false);
+        vm.warp(r.ig.END() + P.IGNITION_EXIT_WINDOW);
+        (uint256 id,) = r.ig.stakeUsdc(a);
+        assertLt(block.timestamp, P.IGNITION_HEAD_START_WINDOW, "a clock younger than the window");
+        assertEq(r.w.kindling.closedAt(), 0, "Kindling has not closed");
+        vm.prank(a);
+        vm.expectRevert(Ignition.NotInWindow.selector);
         r.ig.grantHeadStart(r.cold, id, 0);
     }
 
