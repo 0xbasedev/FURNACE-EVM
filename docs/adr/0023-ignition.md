@@ -117,13 +117,14 @@ Status: accepted for this repository. Not audited, not deployed.
   - six seeded walks.
   - **What `Ignition.t.sol` checks after every step:** each output, each revert selector and a hash of the whole state, exactly.
   - **The model also checks:** the ledgers' identities after every step, and that the dust left after every claim is within its bound.
-- **Unit and fuzz tests** (`Ignition.t.sol`, 16 with the gas rows):
+- **Unit and fuzz tests** (`Ignition.t.sol`, 17 with the gas rows):
   - zero inputs, the budgets, the fee, a fee-on-transfer token refused;
   - a ledger paying elsewhere refused;
   - the whole leaf paid or burned, never more (fuzzed);
   - auto-staking into a real Cold Storage;
   - `openIgnition` only from `IGNITION`;
-  - the head start on real pools 3 and 0 and a real BlastPool: the window's edges, once per wallet, the owner, eligible pools, new capital, the cap, the fair LP value under a same-block skew, and a stale TWAP.
+  - the head start on real pools 3 and 0 and a real BlastPool: the window's edges, once per wallet, the owner, eligible pools, new capital, the cap, the fair LP value under a same-block skew, and a stale TWAP;
+  - no head start before Kindling closes, even on a clock younger than the window.
 - **Invariants** (`IgnitionInvariant.t.sol`, 5, 128 runs × 64 calls, seeded):
   - each token's balance is principal plus donations;
   - principal is conserved per wallet;
@@ -135,6 +136,21 @@ Status: accepted for this repository. Not audited, not deployed.
     - 55 transactions and 92.1M gas by default;
     - 33 and 92.8M with the real Kindling;
     - 37 and 100.1M with Ignition.
+
+- **Mutations:** 56 planted bugs, run in separate worktrees so the main tree never held one. 55 are caught.
+  - **They cover:**
+    - deposits: the window, the minimum, the fee and its rounding, merging, the lot cap, the early bird and the opt-out;
+    - withdrawals: the exit rule, the youngest lot's weight, settling before a change, and the snapshot;
+    - the accumulator: empty-pool time, the recorded budget, anticipation and the snapshot;
+    - `finalize`: the dust and empty-pool burns, the release, the funding check and its timing;
+    - claims: zeroing, the recipient and the empty claim;
+    - auto-stakes: the opt-out, the weight, settlement, the snapshot and the window;
+    - founders and the kept USDC;
+    - the entry weight and the LP's budget;
+    - every head-start gate, the cap and its slack, the seconds, the stale TWAP and the fair value;
+    - the exact pull;
+    - `openIgnition`'s caller and fee.
+  - **One gap was found and closed.** Dropping the `closedAt == 0` guard survived. On any real chain the clock is already past the 7-day window, so an unsettled Kindling still failed the window check; on a fresh local chain it would not. `test_noHeadStartBeforeKindlingClosesEvenOnAYoungClock` runs a farm from t = 1 hour and fails against that mutant.
 
 ## Consequences
 
