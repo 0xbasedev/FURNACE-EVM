@@ -5,7 +5,8 @@
 // Ashfall by Heat² weight, Seal escrow ledgers and their consumers, and 24h claim
 // snapshots. Every budget, escrow and payout is cross-checked against canonical
 // settleBaseEpoch with the Seal measures B and C; every Ashfall weight against the custody
-// model's own accrual.
+// model's own accrual. On a casting pool (an LP pool whose COMPOUNDER is the match reserve,
+// ADR 0026) a quarter of each ordinary credit is withheld for the match reserve's Cast.
 import cfg from '../canonical/furnace.config';
 import { accruedPoolBudget, allocateMint, parseUnits, settleBaseEpoch } from '../canonical/accounting';
 import { emissionPerDay } from './schedule';
@@ -24,6 +25,7 @@ const BUCKET_PCT = BigInt(cfg.emissions.convictionBucketPct);
 const FLAT_PCT = BigInt(cfg.emissions.split.flatPct);
 const RAY = 10n ** 27n;
 const FORFEIT = cfg.forge.convictionTracks.forfeitRouting;
+const CAST_PCT = BigInt(cfg.forge.casting.lpSharePct);
 const ASHFALL = cfg.emissions.ashfall;
 const CAP = parseUnits(String(cfg.token.maxSupply), 18);
 // The Mantle reserves the Kindling seed and unreleased Treasury vesting from day 0 (no
@@ -41,6 +43,8 @@ export interface PoolEpoch {
   earners: number[]; sealed: number[];
   /** The pool's Ashfall share (lowered to what was paid once the rest rolls back), credited Ashfall, Q = ΣQ_i. */
   ashfall: bigint; ashfallPaid: bigint; Q: bigint;
+  /** Σ withheld Cast shares (ADR 0026). */
+  castTotal: bigint;
 }
 export interface MantleEpoch { base: bigint; minted: bigint; released: bigint; ashfall: bigint; ashfallMinted: bigint; ashfallRolled: bigint }
 export interface Measure { s: bigint; w: bigint; b: bigint; c: bigint; escrow: bigint; seal: number; q: bigint }
@@ -66,8 +70,11 @@ export class SettlementModel {
   accounted = 0n; credits = new Map<number, bigint>(); queued = 0n;
   /** EMBER pulled by the ledger consumers (Capstone, match reserve, Sealed-pot stream). */
   consumerEmber = [0n, 0n, 0n];
+  /** Position-epochs whose Cast share was consumed: `${e}:${i}:${id}`. */
+  castTaken = new Set<string>();
 
-  constructor(readonly start: bigint) {
+  /** `castPools[i]`: pool i withholds Cast shares (its COMPOUNDER is the match reserve). */
+  constructor(readonly start: bigint, readonly castPools: readonly boolean[] = [false, false, false, false]) {
     this.pools = POOL_IS_LP.map((lp) => new ForgeModel(lp, start, EPOCH));
   }
 
@@ -149,7 +156,7 @@ export class SettlementModel {
       this.epochs.set(`${e}:${i}`, {
         phase: admitted === 0n ? Phase.Done : Phase.Measuring, positions: pool.positions.length, cursor: 0, credited: 0, escrowed: 0,
         target, admitted, bucket: 0n, flat: 0n, heat: 0n, escrow: 0n, paid: 0n, S: 0n, W: 0n, C: 0n, earners: [], sealed: [],
-        ashfall: share, ashfallPaid: 0n, Q: 0n,
+        ashfall: share, ashfallPaid: 0n, Q: 0n, castTotal: 0n,
       });
     });
     this.nextOpen = e + 1;
@@ -283,8 +290,10 @@ export class SettlementModel {
       const ash = m.q !== 0n && !this.pools[i].positions[id - 1].ashfallForfeited ? mulDiv(pe.ashfall, m.q, pe.Q) : 0n;
       ashSum += ash;
       const amount = this.payout(e, i, id);
+      const cast = this.castPools[i] ? amount * CAST_PCT / 100n : 0n;
+      pe.castTotal += cast;
       const key = `${i}:${id}`;
-      this.unclaimed.set(key, (this.unclaimed.get(key) ?? 0n) + amount + ash);
+      this.unclaimed.set(key, (this.unclaimed.get(key) ?? 0n) + amount - cast + ash);
       if (m.escrow !== 0n) {
         const status = this.sealStatus(i, id, m.seal, now);
         if (status === SealStatus.Active) this.add(this.sealEscrow, `${i}:${id}:${m.seal}`, m.escrow);
@@ -332,6 +341,26 @@ export class SettlementModel {
     const key = `${i}:${id}`, amount = this.unclaimed.get(key) ?? 0n;
     this.unclaimed.set(key, 0n);
     this.hand(0, amount);
+  }
+  /** ForgeEmissions.castOf: the withheld Cast share once the pool-epoch is Done. */
+  castOf(e: number, i: number, id: number): bigint {
+    if (!this.castPools[i]) return 0n;
+    const pe = this.epochs.get(`${e}:${i}`);
+    if (!pe || pe.phase !== Phase.Done) return 0n;
+    const m = this.measures.get(`${e}:${i}:${id}`);
+    if (!m || m.s === 0n) return 0n;
+    return this.payout(e, i, id) * CAST_PCT / 100n;
+  }
+  /** The match reserve consumes a Cast share once: `used` leaves, the rest returns to unclaimed. */
+  takeCast(e: number, i: number, id: number, used: bigint) {
+    const cast = this.castOf(e, i, id);
+    need(cast !== 0n, 'NothingToCast');
+    const key = `${e}:${i}:${id}`;
+    need(!this.castTaken.has(key), 'AlreadyCast');
+    need(used <= cast, 'CastExceeded');
+    this.castTaken.add(key);
+    this.add(this.unclaimed, `${i}:${id}`, cast - used);
+    this.hand(1, used);
   }
   takeSealedPot(i: number) {
     need(i >= 0 && i < 4, 'UnknownPool');

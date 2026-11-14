@@ -5,7 +5,7 @@ import { keccak_256 } from '@noble/hashes/sha3.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
 import { DAY, RAY } from '../canonical/accounting';
 import { Revert, MIN_STAKE_LP, MAX_BONUS_UNITS } from './forge-model';
-import { SettlementModel, Phase } from './settlement-model';
+import { SettlementModel, Phase, POOL_IS_LP } from './settlement-model';
 
 export const S0 = 1_800_000_000n; // Mantle START in the settlement tests
 const E = 10n ** 18n;
@@ -13,8 +13,11 @@ const HOUR = 3_600n;
 
 export enum K {
   Open, Deposit, Request, Execute, Cancel, Emergency, Poke, Finalize, OpenEpoch, Advance, RequestClaim, ExecuteClaim, Seal, SettleSeal,
-  Burn, BurnForfeits, TakeCapstone, TakeMatchReserve, TakeSealedPot, Boost, TakeUnclaimed,
+  Burn, BurnForfeits, TakeCapstone, TakeMatchReserve, TakeSealedPot, Boost, TakeUnclaimed, TakeCast,
 }
+/** TakeCast's `arg`: the epoch above bit 128, `used` below it. */
+const castArg = (e: number, used: bigint) => (BigInt(e) << 128n) | used;
+const NO_CAST = [false, false, false, false];
 export interface Act { kind: K; time: bigint; pool: number; pos: number; arg: bigint }
 
 /** Word layout mirrored by contracts/test/ForgeEmissions.t.sol::snapshot. */
@@ -29,12 +32,12 @@ function words(m: SettlementModel, positions: number, now: bigint): bigint[] {
     const pe = m.epoch(e, i);
     out.push(BigInt(pe.phase), BigInt(pe.positions), BigInt(pe.cursor), BigInt(pe.credited), BigInt(pe.escrowed), pe.target, pe.admitted,
       pe.bucket, pe.flat, pe.heat, pe.escrow, pe.paid, pe.S, pe.W, pe.C, BigInt(pe.earners.length), BigInt(pe.sealed.length),
-      pe.ashfall, pe.ashfallPaid, pe.Q);
+      pe.ashfall, pe.ashfallPaid, pe.Q, pe.castTotal);
     const pr = m.progressOf(e, i);
     out.push(BigInt(pr.id), BigInt(pr.slot), pr.seg, BigInt(pr.seal), pr.s, pr.w, pr.ss, pr.sw, pr.q / RAY, pr.q % RAY);
     for (const id of pe.earners) {
       const x = m.measures.get(`${e}:${i}:${id}`)!;
-      out.push(BigInt(id), x.s, x.w, x.b, x.c, x.escrow, BigInt(x.seal), x.q);
+      out.push(BigInt(id), x.s, x.w, x.b, x.c, x.escrow, BigInt(x.seal), x.q, m.castTaken.has(`${e}:${i}:${id}`) ? 1n : 0n);
     }
   }
   for (let i = 0; i < 4; i++) for (let id = 1; id <= positions; id++) {
@@ -83,6 +86,7 @@ function apply(m: SettlementModel, a: Act): { model: SettlementModel; reverted: 
       case K.TakeSealedPot: x.takeSealedPot(a.pool); break;
       case K.Boost: pool.setBonus(a.pos, a.arg, a.time); break;
       case K.TakeUnclaimed: x.takeUnclaimed(a.pool, a.pos); break;
+      case K.TakeCast: x.takeCast(Number(a.arg >> 128n), a.pool, a.pos, a.arg & ((1n << 128n) - 1n)); break;
     }
     return { model: x, reverted: false };
   } catch (e) {
@@ -91,10 +95,11 @@ function apply(m: SettlementModel, a: Act): { model: SettlementModel; reverted: 
   }
 }
 
-interface Scenario { name: string; positions: number; actions: Act[] }
+/** `cast`: the LP pools' COMPOUNDER is the match reserve, so they withhold Cast shares. */
+interface Scenario { name: string; positions: number; actions: Act[]; cast?: boolean }
 
 function record(sc: Scenario) {
-  let m = new SettlementModel(S0);
+  let m = new SettlementModel(S0, sc.cast ? POOL_IS_LP : NO_CAST);
   const flat: string[] = [], hash: string[] = [], probe: string[] = [];
   let reverts = 0;
   sc.actions.forEach((a, i) => {
@@ -111,7 +116,7 @@ function record(sc: Scenario) {
   const ashfall = [...m.epochs.values()].reduce((n, pe) => n + pe.ashfallPaid, 0n);
   const rolled = m.mantle.reduce((n, me) => n + me.ashfallRolled, 0n);
   return {
-    positions: sc.positions, steps: sc.actions.length, reverts, credited: String(credited), ashfall: String(ashfall), ashfallRolled: String(rolled),
+    positions: sc.positions, cast: sc.cast === true, steps: sc.actions.length, reverts, credited: String(credited), ashfall: String(ashfall), ashfallRolled: String(rolled),
     actions: flat, hash, probe,
   };
 }
@@ -367,13 +372,41 @@ scripted.push(
   scripted.push({ name: 'pagedLots', positions: 3, actions: acts });
 }
 
+{ // Casting (ADR 0026): the LP pools withhold a quarter of each ordinary credit until the match
+  // reserve consumes it; pool 2 pays liquid. Escrow and Ashfall are untouched. The consumer may
+  // use any part of a share, once, only after the pool-epoch is done; the rest returns to the
+  // position's unclaimed rewards.
+  let m = new SettlementModel(S0, POOL_IS_LP);
+  const acts: Act[] = [];
+  const push = (...xs: Act[]) => { for (const a of xs) { acts.push(a); m = apply(m, a).model; } };
+  push(A(K.Open, at(0n), 0, 1, 1000n * E), A(K.Open, at(0n), 2, 1, 300n * E), A(K.Open, at(0n, 2n), 1, 1, 100n * E),
+    A(K.Open, at(0n, 6n), 0, 2, 500n * E), A(K.Seal, at(0n, 7n), 0, 2, 1n));
+  push(A(K.Finalize, at(1n, 1n)), A(K.OpenEpoch, at(1n, 1n)), A(K.Advance, at(1n, 1n), 0, 0, 0n));
+  push(A(K.TakeCast, at(1n, 1n), 0, 1, castArg(0, 0n))); // the pool-epoch is not done: nothing to cast
+  for (const i of [0, 1, 2, 3]) for (let k = 0; k < 3; k++) push(A(K.Advance, at(1n, 1n), i, 0, 0n));
+  const c01 = m.castOf(0, 0, 1), c02 = m.castOf(0, 0, 2), c11 = m.castOf(0, 1, 1);
+  if (c01 === 0n || c02 === 0n || c11 === 0n || m.castOf(0, 2, 1) !== 0n) throw new Error('castWithheld: the shares are not where expected');
+  push(A(K.TakeCast, at(1n, 2n), 0, 1, castArg(0, c01 + 1n)), // more than the share: reverts
+    A(K.TakeCast, at(1n, 2n), 0, 1, castArg(0, 0n)), // nothing used: all of it returns liquid
+    A(K.TakeCast, at(1n, 2n), 0, 1, castArg(0, 0n)), // once only
+    A(K.TakeCast, at(1n, 2n), 0, 2, castArg(0, c02 / 3n)), // a part used, the rest returns
+    A(K.TakeCast, at(1n, 2n), 1, 1, castArg(0, c11)), // all used
+    A(K.TakeCast, at(1n, 2n), 2, 1, castArg(0, 0n)), // pool 2 pays liquid: nothing withheld
+    A(K.TakeCast, at(1n, 2n), 0, 1, castArg(1, 0n))); // a later epoch, not open yet
+  push(A(K.RequestClaim, at(1n, 3n), 0, 1), A(K.RequestClaim, at(1n, 3n), 0, 2), A(K.RequestClaim, at(1n, 3n), 2, 1));
+  push(...settle(at(2n, 1n), 1));
+  push(A(K.TakeCast, at(2n, 2n), 0, 2, castArg(1, m.castOf(1, 0, 2))), A(K.TakeCast, at(2n, 2n), 0, 1, castArg(0, 0n)));
+  push(A(K.ExecuteClaim, at(2n, 3n), 0, 1), A(K.ExecuteClaim, at(2n, 3n), 0, 2), A(K.RequestClaim, at(2n, 4n), 1, 1));
+  scripted.push({ name: 'castWithheld', positions: 2, actions: acts, cast: true });
+}
+
 // ── seeded random ─────────────────────────────────────────────────────────
-function randomScenario(name: string, seed: bigint, steps: number): Scenario {
+function randomScenario(name: string, seed: bigint, steps: number, cast = false): Scenario {
   let x = seed;
   const rnd = (n: bigint) => { x = (x * 6364136223846793005n + 1442695040888963407n) & ((1n << 64n) - 1n); return (x >> 11n) % n; };
   const positions = 3;
   const acts: Act[] = [];
-  let m = new SettlementModel(S0);
+  let m = new SettlementModel(S0, cast ? POOL_IS_LP : NO_CAST);
   let now = S0;
   const gaps = [0n, 0n, 1n, HOUR, 3n * HOUR, 6n * HOUR, 12n * HOUR, DAY, 30n * HOUR, 2n * DAY];
   for (let s = 0; s < steps; s++) {
@@ -393,6 +426,12 @@ function randomScenario(name: string, seed: bigint, steps: number): Scenario {
     const locked = [...m.sealEscrow.entries()].filter(([, v]) => v > 0n).map(([k]) => k.split(':').map(Number));
     const owed = [...m.unclaimed.entries()].filter(([, v]) => v > 0n).map(([k]) => k.split(':').map(Number));
     const waiting = [...m.claims.keys()].map((k) => k.split(':').map(Number));
+    // Cast shares the match reserve has not consumed yet (cast scenarios only).
+    const castable: [number, number, number, bigint][] = [];
+    if (cast) for (let e = 0; e < m.nextOpen; e++) for (let j = 0; j < 2; j++) for (const id of m.epoch(e, j).earners) {
+      const c = m.castOf(e, j, id);
+      if (c !== 0n && !m.castTaken.has(`${e}:${j}:${id}`)) castable.push([e, j, id, c]);
+    }
     if (roll < 10) a = A(K.Finalize, now);
     else if (roll < 18) a = A(K.OpenEpoch, now);
     else if (roll < 36 && work) a = A(K.Advance, now, work[1], 0, BigInt(work[0]));
@@ -400,6 +439,11 @@ function randomScenario(name: string, seed: bigint, steps: number): Scenario {
     else if (roll < 45 && owed.length) { const [pi, id] = owed[Number(rnd(BigInt(owed.length)))]; a = A(K.RequestClaim, now, pi, id); }
     else if (roll < 51 && waiting.length) { const [pi, id] = waiting[Number(rnd(BigInt(waiting.length)))]; a = A(K.ExecuteClaim, now, pi, id); }
     else if (roll < 54 && locked.length) { const [pi, id, k] = locked[Number(rnd(BigInt(locked.length)))]; a = A(K.SettleSeal, now, pi, id, BigInt(k)); }
+    else if (cast && roll < 62 && castable.length) {
+      // Any split of the share, sometimes one wei too many (reverts).
+      const [e, j, id, c] = castable[Number(rnd(BigInt(castable.length)))];
+      a = A(K.TakeCast, now, j, id, castArg(e, rnd(c + 2n)));
+    }
     else if (pos > opened) a = A(K.Open, now, i, opened + 1, (i === 3 ? 10n ** 6n : MIN_STAKE_LP * 2n) + rnd(500n * E));
     else {
       const p = pool.positions[pos - 1];
@@ -421,14 +465,23 @@ function randomScenario(name: string, seed: bigint, steps: number): Scenario {
     acts.push(a);
     m = apply(m, a).model;
   }
-  return { name, positions, actions: acts };
+  return { name, positions, actions: acts, cast };
 }
-const random = [randomScenario('random0', 0x5e771en, 160), randomScenario('random1', 0xc0ffeen, 160), randomScenario('random2', 0xf0e5n, 200)];
+const random = [
+  randomScenario('random0', 0x5e771en, 160), randomScenario('random1', 0xc0ffeen, 160), randomScenario('random2', 0xf0e5n, 200),
+  randomScenario('castWalk0', 0xca57n, 200, true), randomScenario('castWalk1', 0xca570001n, 200, true),
+];
 
 export function settlementVectors() {
   const all = [...scripted, ...random];
   const scenarios: Record<string, ReturnType<typeof record>> = {};
   for (const sc of all) scenarios[sc.name] = record(sc);
+  for (const n of ['castWithheld', 'castWalk0', 'castWalk1']) {
+    const sc = scenarios[n];
+    let used = 0;
+    for (let k = 0; k < sc.steps; k++) if (sc.actions[6 * k] === String(K.TakeCast) && sc.actions[6 * k + 5] === '0') used++;
+    if (!sc.cast || used < 3) throw new Error(`${n} must consume Cast shares (${used})`);
+  }
   const ash = scenarios.ashfallHeatSquared;
   if (BigInt(ash.ashfall) === 0n || BigInt(ash.ashfallRolled) === 0n) throw new Error('the Ashfall scenario must credit and roll Ashfall');
   return { start: String(S0), names: all.map((s) => s.name), phases: Object.keys(Phase).length / 2, scenarios };

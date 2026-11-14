@@ -30,13 +30,16 @@ abstract contract SettlementFixture is Test {
     /// A Protocol-category burn registrar (a Vent burn lane stand-in): its burns fund Ashfall.
     address registrar = makeAddr("registrar");
     uint256 start;
+    /// The LP pools name the match reserve as their COMPOUNDER, so they withhold Cast shares (ADR 0026).
+    bool castOn;
 
     function _deploySettlement(uint256 start_) internal {
         start = start_;
         bool[4] memory lp = [true, true, false, false];
         for (uint256 i; i < 4; ++i) {
             stake[i] = new MockERC20("Stake", "STK");
-            pools[i] = new ForgePool(IERC20(address(stake[i])), lp[i], feeRouter, boost, makeAddr("deeds"), address(0), address(0), address(0), address(0), address(0));
+            address compounder = castOn && lp[i] ? matchReserveSink : address(0);
+            pools[i] = new ForgePool(IERC20(address(stake[i])), lp[i], feeRouter, boost, makeAddr("deeds"), address(0), compounder, address(0), address(0), address(0));
         }
         uint256 nonce = vm.getNonce(address(this));
         address mantleAt = vm.computeCreateAddress(address(this), nonce + 1);
@@ -97,7 +100,8 @@ contract ForgeEmissionsDifferentialTest is SettlementFixture {
         TakeMatchReserve,
         TakeSealedPot,
         Boost,
-        TakeUnclaimed
+        TakeUnclaimed,
+        TakeCast
     }
 
     string json;
@@ -126,9 +130,12 @@ contract ForgeEmissionsDifferentialTest is SettlementFixture {
     function test_settle_random0() public { _replay("random0"); }
     function test_settle_random1() public { _replay("random1"); }
     function test_settle_random2() public { _replay("random2"); }
+    function test_settle_castWithheld() public { _replay("castWithheld"); }
+    function test_settle_castWalk0() public { _replay("castWalk0"); }
+    function test_settle_castWalk1() public { _replay("castWalk1"); }
 
     function test_everySettlementScenarioIsReplayed() public view {
-        assertEq(vm.parseJsonStringArray(json, ".names").length, 20, "add a test_settle_* for each new scenario");
+        assertEq(vm.parseJsonStringArray(json, ".names").length, 23, "add a test_settle_* for each new scenario");
     }
 
     function _uints(string memory key) internal view returns (uint256[] memory out) {
@@ -145,7 +152,9 @@ contract ForgeEmissionsDifferentialTest is SettlementFixture {
         uint256[] memory probe = _uints(string.concat(base, ".probe"));
         assertEq(a.length, rawHashes.length * 6, "layout");
 
+        castOn = vm.parseJsonBool(json, string.concat(base, ".cast"));
         _deploySettlement(vm.parseUint(vm.parseJsonString(json, ".start")));
+        assertEq(emissions.CAST_POOLS(), castOn ? 3 : 0, "casting pools");
         for (uint256 k = 1; k <= positions; ++k) _fund(_user(k));
 
         for (uint256 i; i < rawHashes.length; ++i) {
@@ -190,6 +199,9 @@ contract ForgeEmissionsDifferentialTest is SettlementFixture {
         } else if (kind == K.TakeUnclaimed) {
             vm.prank(capstone);
             emissions.takeUnclaimed(poolIdx, pos);
+        } else if (kind == K.TakeCast) {
+            vm.prank(matchReserveSink);
+            emissions.takeCast(arg >> 128, poolIdx, pos, uint128(arg));
         } else {
             vm.prank(_user(pos));
             if (kind == K.Open) assertEq(pool.open(arg), pos, "position id");
@@ -289,7 +301,7 @@ contract ForgeEmissionsDifferentialTest is SettlementFixture {
 
     function _pushPoolEpoch(uint256[] memory w, uint256 n, uint256 e, uint256 i) internal view returns (uint256) {
         ForgeEmissions.PoolEpoch memory pe = emissions.poolEpoch(e, i);
-        uint256[20] memory head = [
+        uint256[21] memory head = [
             uint256(pe.phase),
             pe.positions,
             pe.cursor,
@@ -309,9 +321,10 @@ contract ForgeEmissionsDifferentialTest is SettlementFixture {
             emissions.sealedEarnerCount(e, i),
             pe.ashfall,
             pe.ashfallPaid,
-            pe.ashfallWeight
+            pe.ashfallWeight,
+            pe.castTotal
         ];
-        for (uint256 k; k < 20; ++k) w[n++] = head[k];
+        for (uint256 k; k < 21; ++k) w[n++] = head[k];
         n = _pushProgress(w, n, e, i);
         for (uint256 k; k < head[15]; ++k) n = _pushMeasure(w, n, e, i, emissions.earnerAt(e, i, k));
         return n;
@@ -325,7 +338,8 @@ contract ForgeEmissionsDifferentialTest is SettlementFixture {
         ForgeEmissions.Measure memory m = emissions.measureOf(e, i, id);
         (w[n], w[n + 1], w[n + 2], w[n + 3]) = (id, m.stakeSeconds, m.heatSeconds, m.sealSeconds);
         (w[n + 4], w[n + 5], w[n + 6], w[n + 7]) = (m.candidateSeconds, m.escrow, m.seal, m.ashfallWeight);
-        return n + 8;
+        w[n + 8] = emissions.castTaken(e, i, id) ? 1 : 0;
+        return n + 9;
     }
 }
 

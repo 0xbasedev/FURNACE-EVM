@@ -13,6 +13,7 @@
 //   contracts/test/fixtures/ignition-vectors.json Ignition scenarios (scripts/ignition-model.ts)
 //   contracts/test/fixtures/splitter-vectors.json the epoch splitters (scripts/splitter-model.ts)
 //   contracts/test/fixtures/hearth-vectors.json   the Hearth (scripts/hearth-model.ts)
+//   contracts/test/fixtures/compounder-vectors.json   the Compounder (scripts/compounder-model.ts)
 // Integer references (accounting.ts, BigInt) are matched EXACTLY by the Solidity
 // ports; the float display helper heatMultiplier within 1e-12.
 // pnpm gen --check exits non-zero if either output is stale (CI gate).
@@ -35,6 +36,7 @@ import { kindlingVectors } from './kindling-model';
 import { ignitionVectors } from './ignition-model';
 import { splitterVectors } from './splitter-model';
 import { hearthVectors } from './hearth-model';
+import { compounderVectors } from './compounder-model';
 import { keccak_256 } from '@noble/hashes/sha3.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
 
@@ -50,6 +52,7 @@ const KINDLING_VECTORS = 'contracts/test/fixtures/kindling-vectors.json';
 const IGNITION_VECTORS = 'contracts/test/fixtures/ignition-vectors.json';
 const SPLITTER_VECTORS = 'contracts/test/fixtures/splitter-vectors.json';
 const HEARTH_VECTORS = 'contracts/test/fixtures/hearth-vectors.json';
+const COMPOUNDER_VECTORS = 'contracts/test/fixtures/compounder-vectors.json';
 const DAY = 86_400n;
 
 /** Exact decimal → fixed-point integer string (shortest round-trip, never toFixed noise). */
@@ -479,6 +482,31 @@ section('The Hearth: staked ASH earns the Vent\'s fee share (spec v5.5 §15; ADR
   c('uint256', 'HEARTH_EXIT_COOLDOWN', '24 hours', 'spec v5.5 §15: the retained ASH exit cooldown');
 }
 
+section('Casting and the idle auto-pair: the match reserve (spec v5.5 §7, §13; ADR 0026)');
+{
+  // Casting withholds a share of post-Conviction ordinary base on LP pools, pairs it with reserved
+  // quote and returns the LP to the source lot at its age; without a funded reservation the share
+  // stays liquid and nothing is sold. Idle unreserved quote pairs with funded seed EMBER into the
+  // permanent sink. The contracts implement exactly this policy.
+  const cast = f.casting, ex = cfg.execution.casting, mt = cfg.execution.matching, ll = fl.liquidityLane, mr = ll.matchReserve;
+  const fail = (what: string) => { throw new Error(`Casting implements ${what}`); };
+  if (!cast.enabled || cast.lpSharePct <= 0 || cast.lpSharePct >= 100) fail('an enabled share below 100%');
+  if (cast.quoteSource !== 'matchReserve' || cast.fallback !== 'liquidEmber') fail('match-reserve quote with a liquid fallback');
+  if (cast.autoStake !== true || cast.castLot !== 'sourceLot' || cast.entersAs !== 'sourceLotAge') fail('a return to the source lot at its age');
+  if (cast.incompatibleCollateral !== 'liquid' || cast.matchedLpOwnership !== 'user') fail('liquid single-token pools and user-owned LP');
+  if (ex.eligibleRewardClasses.length !== 1 || ex.eligibleRewardClasses[0] !== 'ordinaryBase') fail('ordinary base as the only eligible class');
+  if (ex.denominator !== 'postConvictionOrdinaryBase' || ex.singleTokenPolicy !== 'liquid' || ex.requiresActiveSourceLot !== true) fail('the post-Conviction denominator and an active source lot');
+  if (mt.ownership !== 'user' || mt.allocation !== 'epochProRataByEligibleBaseReward' || mt.automaticCastPriority !== true) fail('pro-rata epoch budgets with Cast priority');
+  if (mt.oneUsePerRewardUnit !== true || mt.expiry !== 'releaseQuoteOnlyKeepUserReward') fail('one use per reward and a quote-only expiry');
+  if (mt.idlePairUsesOnlyUnreservedInventory !== true || mt.idlePairEmber !== 'treasuryMatchSeed') fail('an idle pair from unreserved quote and seed EMBER');
+  if (ll.method !== 'matchReserve' || !mr || mr.burnMatchedLp !== true || mr.idlePairEmberSource !== 'treasuryMatchSeed') fail('an idle pair whose LP is permanent');
+  if (ll.permanentMustBeFullRange !== true) fail('full-range permanent LP');
+  if (f.compound.lpMatch.source !== 'matchReserve' || f.compound.lpMatch.fallback !== 'capstone') fail('a match from the reserve and the Capstone fallback');
+  c('uint256', 'CASTING_LP_SHARE_PCT', cast.lpSharePct, 'of post-Conviction ordinary base, on LP pools only');
+  c('uint256', 'MATCH_RESERVATION_EPOCHS', mt.claimWindowEpochs, 'a Cast reservation lasts this many epochs after its own');
+  c('uint256', 'IDLE_EPOCHS_BEFORE_AUTO_PAIR', mr!.idleEpochsBeforeAutoPair, 'epochs with no Cast before unreserved quote pairs permanently');
+}
+
 section('Kindling: the genesis event, its escrow and the LP sink (spec v5.5 §3; ADR 0021)');
 // One 24 h USDC raise. Contributions pay 3% into the GenesisFeeEscrow; success initializes
 // BlastPool with the 420,000-EMBER seed and the net quote, 90% of the LP to contributors' positions
@@ -725,7 +753,7 @@ vectors.squaredPrimitive.ray = vectors.squaredPrimitive.ageSeconds.map((a, i) =>
 const vectorsJson = JSON.stringify(vectors, null, 2) + '\n';
 
 // ── write or check ───────────────────────────────────────────────────────
-const outputs: [string, string][] = [[PARAMS, params], [SCHEDULE, scheduleSol], [VECTORS, vectorsJson], [FORGE_VECTORS, JSON.stringify(forgeVectors(), null, 1) + '\n'], [SETTLEMENT_VECTORS, JSON.stringify(settlementVectors(), null, 1) + '\n'], [PAIR_VECTORS, JSON.stringify(pairVectors(), null, 1) + '\n'], [FLOW_VECTORS, JSON.stringify(flowVectors(), null, 1) + '\n'], [VENT_VECTORS, JSON.stringify(ventVectors(), null, 1) + '\n'], [KINDLING_VECTORS, JSON.stringify(kindlingVectors(), null, 1) + '\n'], [IGNITION_VECTORS, JSON.stringify(ignitionVectors(), null, 1) + '\n'], [SPLITTER_VECTORS, JSON.stringify(splitterVectors(), null, 1) + '\n'], [HEARTH_VECTORS, JSON.stringify(hearthVectors(), null, 1) + '\n']];
+const outputs: [string, string][] = [[PARAMS, params], [SCHEDULE, scheduleSol], [VECTORS, vectorsJson], [FORGE_VECTORS, JSON.stringify(forgeVectors(), null, 1) + '\n'], [SETTLEMENT_VECTORS, JSON.stringify(settlementVectors(), null, 1) + '\n'], [PAIR_VECTORS, JSON.stringify(pairVectors(), null, 1) + '\n'], [FLOW_VECTORS, JSON.stringify(flowVectors(), null, 1) + '\n'], [VENT_VECTORS, JSON.stringify(ventVectors(), null, 1) + '\n'], [KINDLING_VECTORS, JSON.stringify(kindlingVectors(), null, 1) + '\n'], [IGNITION_VECTORS, JSON.stringify(ignitionVectors(), null, 1) + '\n'], [SPLITTER_VECTORS, JSON.stringify(splitterVectors(), null, 1) + '\n'], [HEARTH_VECTORS, JSON.stringify(hearthVectors(), null, 1) + '\n'], [COMPOUNDER_VECTORS, JSON.stringify(compounderVectors(), null, 1) + '\n']];
 if (process.argv.includes('--check')) {
   let stale = 0;
   for (const [p, body] of outputs) {

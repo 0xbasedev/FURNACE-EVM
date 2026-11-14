@@ -110,6 +110,7 @@ contract ForgeEmissions is ReentrancyGuardTransient {
         uint128 ashfall; // the pool's share of the epoch's Ashfall budget
         uint128 ashfallPaid; // Σ credited Ashfall (all minted); the rest rolls back
         uint256 ashfallWeight; // Q = Σ Q_i
+        uint128 castTotal; // Σ withheld Cast shares (ADR 0026)
     }
 
     /// @dev A position's epoch measures. B = ∫sealed stake·bonus dt and
@@ -155,6 +156,9 @@ contract ForgeEmissions is ReentrancyGuardTransient {
     address public immutable CAPSTONE;
     address public immutable MATCH_RESERVE;
     address public immutable SEALED_POT;
+    /// @notice The pools whose ordinary credit is partly cast (bit i): the LP pools whose
+    ///         COMPOUNDER is MATCH_RESERVE (ADR 0026). Any other pool pays its credit liquid.
+    uint256 public immutable CAST_POOLS;
 
     uint256 public nextEpoch;
     mapping(uint256 epoch => mapping(uint256 pool => PoolEpoch)) internal _epochs;
@@ -176,6 +180,8 @@ contract ForgeEmissions is ReentrancyGuardTransient {
     uint256 public burnLane;
     uint256 public matchReserve;
     mapping(uint256 pool => uint256) public sealedPot;
+    /// @notice A position-epoch's Cast share has been consumed: cast, or returned liquid.
+    mapping(uint256 epoch => mapping(uint256 pool => mapping(uint256 id => bool))) public castTaken;
 
     event EpochOpened(uint256 indexed epoch, uint256 base, uint256 released);
     event PoolEpochOpened(uint256 indexed epoch, uint256 indexed pool, uint256 target, uint256 admitted, uint256 positions);
@@ -193,6 +199,8 @@ contract ForgeEmissions is ReentrancyGuardTransient {
     event UnclaimedTaken(uint256 indexed pool, uint256 indexed id, uint256 amount);
     event ClaimRequested(uint256 indexed pool, uint256 indexed id, uint256 amount, uint256 maturesAt);
     event ClaimPaid(uint256 indexed pool, uint256 indexed id, address to, uint256 amount);
+    event CastWithheld(uint256 indexed epoch, uint256 indexed pool, uint256 id, uint256 amount);
+    event CastConsumed(uint256 indexed epoch, uint256 indexed pool, uint256 id, uint256 used, uint256 returned);
 
     error ZeroAddress();
     error PoolMismatch(uint256 pool);
@@ -208,6 +216,9 @@ contract ForgeEmissions is ReentrancyGuardTransient {
     error NothingToSettle(uint256 pool, uint256 id, uint256 seal);
     error NotConsumer(address caller);
     error Listed(uint256 pool, uint256 id);
+    error NothingToCast(uint256 epoch, uint256 pool, uint256 id);
+    error AlreadyCast(uint256 epoch, uint256 pool, uint256 id);
+    error CastExceeded(uint256 used, uint256 cast);
 
     constructor(
         IMantleDistribution mantle,
@@ -220,10 +231,13 @@ contract ForgeEmissions is ReentrancyGuardTransient {
         if (address(mantle) == address(0) || address(ember) == address(0)) revert ZeroAddress();
         if (capstone == address(0) || matchReserve_ == address(0) || sealedPot_ == address(0)) revert ZeroAddress();
         bool[4] memory isLp = [P.FORGE_POOL_0_IS_LP, P.FORGE_POOL_1_IS_LP, P.FORGE_POOL_2_IS_LP, P.FORGE_POOL_3_IS_LP];
+        uint256 castPools;
         for (uint256 i; i < POOL_COUNT; ++i) {
             if (address(pools[i]) == address(0)) revert ZeroAddress();
             if (pools[i].IS_LP() != isLp[i]) revert PoolMismatch(i);
+            if (isLp[i] && pools[i].COMPOUNDER() == matchReserve_) castPools |= 1 << i;
         }
+        CAST_POOLS = castPools;
         MANTLE = mantle;
         EMBER = ember;
         START = mantle.START();
@@ -422,13 +436,18 @@ contract ForgeEmissions is ReentrancyGuardTransient {
         uint256 end = Math.min(earners.length, k + P.SETTLEMENT_MAX_LOTS_PER_PAGE);
         uint256 sum;
         uint256 ashSum;
+        uint256 castSum;
+        bool casts = CAST_POOLS >> i & 1 != 0;
         for (; k < end; ++k) {
             uint256 id = earners[k];
-            sum += _credit(epoch, i, pe, id);
+            (uint256 paid, uint256 cast) = _credit(epoch, i, pe, id, casts);
+            sum += paid;
+            castSum += cast;
             ashSum += _creditAshfall(epoch, i, pe, id);
         }
         pe.credited = uint32(k);
         pe.paid += uint128(sum);
+        if (castSum != 0) pe.castTotal += uint128(castSum);
         pe.ashfallPaid += uint128(ashSum);
         if (sum != 0) MANTLE.mintBase(epoch, address(this), sum);
         if (ashSum != 0) MANTLE.mintAshfall(epoch, address(this), ashSum);
@@ -465,14 +484,19 @@ contract ForgeEmissions is ReentrancyGuardTransient {
         emit AshfallRolled(epoch, i, rest);
     }
 
-    /// @dev Ordinary reward becomes claimable; escrow goes to its Seal as it stands now:
-    ///      locked while it runs, to the Capstone ledger once completed, routed if forfeited.
-    function _credit(uint256 epoch, uint256 i, PoolEpoch storage pe, uint256 id) internal returns (uint256) {
+    /// @dev Ordinary reward becomes claimable, less its Cast share on a casting pool, which waits
+    ///      for the match reserve (ADR 0026); escrow goes to its Seal as it stands now: locked
+    ///      while it runs, to the Capstone ledger once completed, routed if forfeited.
+    function _credit(uint256 epoch, uint256 i, PoolEpoch storage pe, uint256 id, bool casts)
+        internal
+        returns (uint256, uint256 cast)
+    {
         Measure storage m = _measures[epoch][i][id];
-        uint256 amount = Math.mulDiv(pe.flat, m.stakeSeconds, pe.stakeSeconds)
-            + Math.mulDiv(pe.heat, m.heatSeconds, pe.heatSeconds);
-        unclaimed[i][id] += amount;
+        uint256 amount = _ordinary(pe, m);
+        if (casts) cast = _castShare(amount);
+        unclaimed[i][id] += amount - cast;
         emit Credited(epoch, i, id, amount);
+        if (cast != 0) emit CastWithheld(epoch, i, id, cast);
         uint256 escrow = m.escrow;
         if (escrow != 0) {
             emit Escrowed(epoch, i, id, m.seal, escrow);
@@ -480,7 +504,17 @@ contract ForgeEmissions is ReentrancyGuardTransient {
             if (status == SealStatus.Active) sealEscrow[i][id][m.seal] += escrow;
             else _release(i, id, m.seal, status, escrow);
         }
-        return amount + escrow;
+        return (amount + escrow, cast);
+    }
+
+    /// @dev A position's post-Conviction ordinary base for the epoch: the flat share by
+    ///      stake-seconds plus the Heat share by Heat-seconds.
+    function _ordinary(PoolEpoch storage pe, Measure storage m) internal view returns (uint256) {
+        return Math.mulDiv(pe.flat, m.stakeSeconds, pe.stakeSeconds) + Math.mulDiv(pe.heat, m.heatSeconds, pe.heatSeconds);
+    }
+
+    function _castShare(uint256 ordinary) internal pure returns (uint256) {
+        return (ordinary * P.CASTING_LP_SHARE_PCT) / 100;
     }
 
     /// @notice Release a Seal's escrow once it has ended: to the position's Capstone ledger
@@ -550,6 +584,21 @@ contract ForgeEmissions is ReentrancyGuardTransient {
         _hand(POOL_COUNT, 0, amount);
     }
 
+    /// @notice The match reserve consumes a position-epoch's withheld Cast share, once: `used` is
+    ///         sent to it for the LP it forms, and the rest returns to the position's unclaimed
+    ///         rewards, so a Cast never confiscates a reward (spec v5.5 §7; ADR 0026).
+    function takeCast(uint256 epoch, uint256 pool, uint256 id, uint256 used) external nonReentrant returns (uint256 cast) {
+        if (msg.sender != MATCH_RESERVE) revert NotConsumer(msg.sender);
+        cast = castOf(epoch, pool, id);
+        if (cast == 0) revert NothingToCast(epoch, pool, id);
+        if (castTaken[epoch][pool][id]) revert AlreadyCast(epoch, pool, id);
+        if (used > cast) revert CastExceeded(used, cast);
+        castTaken[epoch][pool][id] = true;
+        if (cast != used) unclaimed[pool][id] += cast - used;
+        emit CastConsumed(epoch, pool, id, used, cast - used);
+        if (used != 0) EMBER.safeTransfer(msg.sender, used);
+    }
+
     /// @notice The Sealed-pot stream pulls a pool's pot.
     function takeSealedPot(uint256 pool) external nonReentrant returns (uint256 amount) {
         if (msg.sender != SEALED_POT) revert NotConsumer(msg.sender);
@@ -596,6 +645,23 @@ contract ForgeEmissions is ReentrancyGuardTransient {
     }
 
     // ── views ─────────────────────────────────────────────────────────────
+
+    /// @notice A position-epoch's withheld Cast share, once its pool-epoch is credited (zero on a
+    ///         pool that pays liquid). It is the same floor `_credit` withheld.
+    function castOf(uint256 epoch, uint256 pool, uint256 id) public view returns (uint256) {
+        if (CAST_POOLS >> pool & 1 == 0) return 0;
+        PoolEpoch storage pe = _epochs[epoch][pool];
+        if (pe.phase != Phase.Done) return 0;
+        Measure storage m = _measures[epoch][pool][id];
+        if (m.stakeSeconds == 0) return 0;
+        return _castShare(_ordinary(pe, m));
+    }
+
+    /// @notice A pool-epoch's Cast demand, Σ of its withheld shares, and whether it is final.
+    function castDemand(uint256 epoch, uint256 pool) external view returns (uint256 demand, bool done) {
+        PoolEpoch storage pe = _epochs[epoch][pool];
+        return (pe.castTotal, pe.phase == Phase.Done);
+    }
 
     function poolAt(uint256 i) public view returns (ForgePool) {
         if (i == 0) return POOL_0;

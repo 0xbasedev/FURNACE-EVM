@@ -199,6 +199,11 @@ library FurnaceParams {
     // ── The Hearth: staked ASH earns the Vent's fee share (spec v5.5 §15; ADR 0025) ──
     uint256 internal constant HEARTH_EXIT_COOLDOWN = 24 hours; // spec v5.5 §15: the retained ASH exit cooldown
 
+    // ── Casting and the idle auto-pair: the match reserve (spec v5.5 §7, §13; ADR 0026) ──
+    uint256 internal constant CASTING_LP_SHARE_PCT = 25; // of post-Conviction ordinary base, on LP pools only
+    uint256 internal constant MATCH_RESERVATION_EPOCHS = 7; // a Cast reservation lasts this many epochs after its own
+    uint256 internal constant IDLE_EPOCHS_BEFORE_AUTO_PAIR = 7; // epochs with no Cast before unreserved quote pairs permanently
+
     // ── Kindling: the genesis event, its escrow and the LP sink (spec v5.5 §3; ADR 0021) ──
     uint256 internal constant KINDLING_DURATION = 86400; // 24 h; deposits stop exactly at the deadline
     uint256 internal constant KINDLING_SETTLE_WINDOW = 259200; // after the deadline; unsettled by then, the event fails
