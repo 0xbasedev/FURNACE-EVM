@@ -22,6 +22,9 @@ const CONTRACTS = [
   ['AshLedger', 'AshLedger.sol'],
   ['KindlingAshBonus', 'KindlingAshBonus.sol'],
   ['Ignition', 'Ignition.sol'],
+  ['ForgeAsh', 'ForgeAsh.sol'],
+  ['BookedSplitter', 'BookedSplitter.sol'],
+  ['SealedPotStream', 'SealedPotStream.sol'],
   // Testnet-only stand-ins (contracts/script/testnet): never part of a canonical deployment.
   ['TestnetToken', 'TestnetStandIns.sol'],
   ['TestnetValuation', 'TestnetStandIns.sol'],

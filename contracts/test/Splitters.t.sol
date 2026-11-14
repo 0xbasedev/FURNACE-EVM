@@ -14,7 +14,7 @@ import {BookedSplitter} from "../src/yield/BookedSplitter.sol";
 import {ForgeAsh, IAshForgeLedger} from "../src/yield/ForgeAsh.sol";
 import {SealedPotStream} from "../src/yield/SealedPotStream.sol";
 import {MockERC20, MockDecimalsERC20} from "./utils/MockERC20.sol";
-import {MockMeasures} from "./utils/SplitterMocks.sol";
+import {MockMeasures, SeedMeasures} from "./utils/SplitterMocks.sol";
 
 /// @dev The four splitters on real Forge pools (owners and listings), real ASH (token and ledger)
 ///      and a mock measures source standing in for ForgeEmissions' settled epochs.
@@ -82,19 +82,9 @@ abstract contract SplitterRig is Test {
         return t == 0 ? address(w.ember) : t == 1 ? address(w.usdc) : address(w.ash);
     }
 
-    /// @dev The model's `measuresOf`: the same keccak over the same five bytes.
-    function _measuresOf(uint256 e, uint256 i, uint256 seed) internal pure returns (ForgeEmissions.Measure[] memory m) {
-        m = new ForgeEmissions.Measure[](IDS);
-        bool empty = (seed >> 16) & 1 == 1;
-        for (uint256 id = 1; id <= IDS; ++id) {
-            // forge-lint: disable-next-line(unsafe-typecast) — every value is below 256
-            uint256 h = uint256(keccak256(abi.encodePacked(uint8(e), uint8(i), uint8(id), uint8(seed & 0xff), uint8((seed >> 8) & 0xff))));
-            uint256 s = empty ? 0 : (h % 1e24) + 1;
-            m[id - 1].stakeSeconds = s;
-            m[id - 1].heatSeconds = empty ? 0 : s + ((h >> 80) % 1e24);
-            m[id - 1].ashfallWeight = empty || (seed >> 18) & 1 == 1 ? 0 : (h >> 160) % 1e30;
-            m[id - 1].candidateSeconds = empty || (seed >> 17) & 1 == 1 || id == 3 ? 0 : (h >> 120) % 1e22;
-        }
+    /// @dev The model's `measuresOf` (SeedMeasures).
+    function _measuresOf(uint256 e, uint256 i, uint256 seed) internal pure returns (ForgeEmissions.Measure[] memory) {
+        return SeedMeasures.measures(e, i, seed);
     }
 }
 
@@ -379,5 +369,31 @@ contract SplittersTest is SplitterRig {
             assertLe(paid, w.s[2].budgetOf(0, i, address(w.usdc)), "never more than the budget");
             assertGe(paid + IDS, w.s[2].budgetOf(0, i, address(w.usdc)), "less only by the floors");
         }
+    }
+
+    // ── gas (pnpm gas, isolated) ──────────────────────────────────────────
+
+    function test_gas_splitters() public {
+        World memory w = _world(T0);
+        vm.warp(T0 + 1);
+        w.usdc.mint(address(w.s[1]), 1e12);
+        uint256 g = gasleft();
+        BookedSplitter(address(w.s[1])).book(address(w.usdc));
+        emit log_named_uint("book (four pools)", g - gasleft());
+        w.measures.fundPot(0, 3e21);
+        g = gasleft();
+        SealedPotStream(address(w.s[3])).pull(0);
+        emit log_named_uint("pull (a 30-epoch stream)", g - gasleft());
+        vm.warp(T0 + P.EPOCH_SECONDS);
+        for (uint256 i; i < 4; ++i) w.measures.settle(0, i, _measuresOf(0, i, 7));
+        g = gasleft();
+        w.s[0].claim(0, 0, 1, address(w.ash));
+        emit log_named_uint("ForgeAsh claim (releases from the ledger)", g - gasleft());
+        g = gasleft();
+        w.s[0].claim(0, 0, 2, address(w.ash));
+        emit log_named_uint("ForgeAsh claim", g - gasleft());
+        g = gasleft();
+        w.s[1].claim(0, 0, 1, address(w.usdc));
+        emit log_named_uint("stayers claim", g - gasleft());
     }
 }

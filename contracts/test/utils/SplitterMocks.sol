@@ -71,3 +71,23 @@ contract MockMeasures {
         if (amount != 0) IERC20(address(EMBER)).transfer(msg.sender, amount);
     }
 }
+
+/// @dev The measures a seed gives positions 1..3 of pool `i` in epoch `e`: the model's
+///      `measuresOf`, the same keccak over the same five bytes. Seed bit 16 empties the pool, bit 17
+///      seals nobody, bit 18 makes nobody Ashfall-eligible; position 3 is never sealed.
+library SeedMeasures {
+    function measures(uint256 e, uint256 i, uint256 seed) internal pure returns (ForgeEmissions.Measure[] memory m) {
+        m = new ForgeEmissions.Measure[](3);
+        bool empty = (seed >> 16) & 1 == 1;
+        for (uint256 id = 1; id <= 3; ++id) {
+            // forge-lint: disable-next-line(unsafe-typecast) — every value is below 256
+            uint256 h = uint256(keccak256(abi.encodePacked(uint8(e), uint8(i), uint8(id), uint8(seed & 0xff), uint8((seed >> 8) & 0xff))));
+            uint256 s = empty ? 0 : (h % 1e24) + 1;
+            m[id - 1].stakeSeconds = s;
+            m[id - 1].heatSeconds = empty ? 0 : s + ((h >> 80) % 1e24);
+            m[id - 1].ashfallWeight = empty || (seed >> 18) & 1 == 1 ? 0 : (h >> 160) % 1e30;
+            m[id - 1].candidateSeconds = empty || (seed >> 17) & 1 == 1 || id == 3 ? 0 : (h >> 120) % 1e22;
+        }
+    }
+}
+

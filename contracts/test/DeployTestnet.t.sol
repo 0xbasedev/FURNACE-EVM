@@ -99,7 +99,7 @@ contract DeployTestnetTest is Test, FurnaceTestnet {
         assertEq(d.mantle.KINDLING(), operator);
         assertEq(d.mantle.TREASURY(), operator);
         assertEq(d.emissions.MATCH_RESERVE(), operator);
-        assertEq(d.emissions.SEALED_POT(), operator);
+        assertEq(d.emissions.SEALED_POT(), address(d.sealedPot), "the Sealed-pot stream (ADR 0024)");
         assertEq(TestnetToken(address(d.stake[3])).decimals(), 6, "the USDC stand-in has USDC's decimals");
         // The EMBER pairs (ADR 0015): pools 0 and 1 stake their receipts.
         assertTrue(d.pairsLive);
@@ -244,6 +244,23 @@ contract DeployTestnetTest is Test, FurnaceTestnet {
             assertGt(d.emissions.unclaimed(i, ids[i]), 0, "the position earned");
         }
         assertGt(IERC20(address(d.ember)).balanceOf(address(d.emissions)), 0);
+
+        // The epoch splitters pay from the settled epoch's own measures (ADR 0024). ForgeAsh: the
+        // day's vested ASH, by the pools' ASH weights; Cold Storage's weight is zero.
+        uint256 ash = d.forgeAsh.claim(0, 0, ids[0], address(d.ash));
+        assertGt(ash, 0, "the pool-0 position's ASH for epoch 0");
+        assertEq(IERC20(address(d.ash)).balanceOf(operator), ash + P.ASH_IGNITION_ALLOCATION, "paid to the owner");
+        assertEq(d.ashLedger.forgeReleased(), d.ashLedger.vestedAt(block.timestamp), "released exactly V(now)");
+        assertEq(d.forgeAsh.shareOf(0, 3, ids[3], address(d.ash)), 0);
+        // The Vent's Quote-yield lane pays the splitter, which books it into the running epoch.
+        d.vent.collectAll();
+        uint256 owed = d.vent.owed(Vent.Recipient.QuoteYield, d.pairQuote[0]);
+        assertGt(owed, 0, "the smoke run's sell paid Quote yield");
+        {
+            d.vent.release(Vent.Recipient.QuoteYield, d.pairQuote[0]);
+            assertEq(d.quoteYield.book(address(d.pairQuote[0])), owed, "booked what the Vent released");
+            assertEq(d.quoteYield.liability(address(d.pairQuote[0])), owed);
+        }
     }
 
     /// The add-on (ADR 0015): before the pairs exist, pools 0 and 1 refuse deposits and an epoch
