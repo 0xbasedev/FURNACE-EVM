@@ -50,3 +50,37 @@
 .tx.done { color: var(--good); }
 .tx.failed { color: var(--danger); overflow-wrap: anywhere; }
 .tx a { margin-left: 8px; color: inherit; }
+
+/* Kindling (ADR 0021): the countdown, the raise against its minimum and cap, the wallet cap. */
+.form { display: grid; gap: 12px; }
+.kindling p.s { margin: 0; font-size: var(--step--1); color: var(--ink-2); }
+.countdown { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.countdown .k { color: var(--ink-2); font-size: var(--step--1); }
+.countdown .t { font: 700 var(--step-3) / 1 var(--mono); font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+.countdown.urgent .t { color: var(--accent-strong); }
+.phase-pill { align-self: center; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface-2); font: 600 var(--step--1) var(--mono); }
+.phase-pill.open, .phase-pill.settleable { border-color: var(--accent); color: var(--accent-strong); }
+.phase-pill.settled { border-color: var(--good); color: var(--good); }
+.phase-pill.failed, .phase-pill.short, .phase-pill.expired, .phase-pill.waiting { border-color: var(--warn); color: var(--warn); }
+.raise { display: grid; gap: 6px; }
+.raise-track { position: relative; height: 14px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--line); }
+.raise-fill { position: absolute; inset: 0 auto 0 0; width: 0; border-radius: 999px; background: linear-gradient(90deg, var(--heat-1), var(--heat-3)); }
+.raise-track.lit .raise-fill { background: linear-gradient(90deg, var(--heat-3), var(--heat-4)); }
+.raise-min { position: absolute; top: -5px; bottom: -5px; width: 3px; margin-left: -1.5px; background: var(--ink); border-radius: 2px; box-shadow: 0 0 0 2px var(--surface); }
+.raise-marks { position: relative; height: 1.2em; font: 500 var(--step--1) / 1.2 var(--mono); color: var(--ink-3); }
+.raise-marks .min { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; }
+.raise-marks .max { position: absolute; top: 0; right: 0; white-space: nowrap; }
+.raise-status { font-size: var(--step--1); color: var(--ink-2); }
+.raise-status.lit { color: var(--good); font-weight: 600; }
+.cap-meter { display: grid; gap: 4px; }
+.cap-track { position: relative; height: 6px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
+.cap-track .used { position: absolute; inset: 0 auto 0 0; background: var(--ink-3); }
+.cap-track .adding { position: absolute; top: 0; bottom: 0; background: var(--accent); transition: width 0.3s ease, left 0.3s ease; }
+.steps { margin: 0; padding-left: 20px; display: grid; gap: 4px; color: var(--ink-2); }
+.cancel summary { cursor: pointer; color: var(--ink-2); font-size: var(--step--1); }
+.cancel[open] summary { margin-bottom: 10px; }
+@media (max-width: 560px) {
+  .raise-marks .max { display: none; }
+  .countdown .t { font-size: var(--step-2); }
+}
+@media (prefers-reduced-motion: reduce) { .cap-track .adding { transition: none; } }

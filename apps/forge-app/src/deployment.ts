@@ -10,6 +10,8 @@ export interface Deployment {
   pairsLive: boolean;
   pairs: [PairInfo, PairInfo];
   pools: [Address, Address, Address, Address];
+  /** The real Kindling (FURNACE_TESTNET_KINDLING=1, ADR 0021); absent while the operator stands in. */
+  kindling: { address: Address; escrow: Address; sink: Address } | null;
 }
 
 export interface PairInfo {
@@ -54,6 +56,10 @@ export function parseManifest(m: unknown): Deployment {
     pairsLive: r.pairsLive === true,
     pairs,
     pools,
+    // Older manifests predate Kindling; when the real one is live its three addresses are required.
+    kindling: r.kindlingLive === true
+      ? { address: addr(r, 'Kindling'), escrow: addr(r, 'GenesisFeeEscrow'), sink: addr(r, 'PermanentLiquidity') }
+      : null,
   };
 }
 

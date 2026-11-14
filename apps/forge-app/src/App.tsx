@@ -9,20 +9,26 @@ import { ZapPanel } from './panels/ZapPanel';
 import { SwapPanel } from './panels/SwapPanel';
 import { PositionsPanel } from './panels/PositionsPanel';
 import { FaucetPanel } from './panels/FaucetPanel';
+import { KindlingPanel } from './panels/KindlingPanel';
 
 const { deployment, error: manifestError } = loadDeployment();
-type Tab = 'zap' | 'swap' | 'positions' | 'faucet';
+type Tab = 'kindling' | 'zap' | 'swap' | 'positions' | 'faucet';
+// Kindling leads while the real event is deployed (config pages.kindling: duringGenesis); before any
+// deployment it is a simulated preview after Positions; with the operator standing in, it is hidden.
+const KINDLING_TAB = { id: 'kindling' as const, label: 'Kindling' };
 const TABS: { id: Tab; label: string }[] = [
+  ...(deployment?.kindling ? [KINDLING_TAB] : []),
   { id: 'zap', label: 'Zap & stake' },
   { id: 'swap', label: 'Swap' },
   { id: 'positions', label: 'Positions' },
+  ...(!deployment ? [KINDLING_TAB] : []),
   { id: 'faucet', label: 'Test tokens' },
 ];
 
 export function App() {
   const w = useWallet();
   const market = useMarket(deployment, w.provider, w.account, w.onLiteForge);
-  const [tab, setTab] = useState<Tab>('zap');
+  const [tab, setTab] = useState<Tab>(deployment?.kindling ? 'kindling' : 'zap');
   const [position, setPosition] = useState(0n);
   const [tick, setTick] = useState(0);
   const done = () => { market.refresh(); setTick((t) => t + 1); };
@@ -72,6 +78,8 @@ export function App() {
       </nav>
 
       <main className="surface single">
+        {tab === 'kindling' && <KindlingPanel d={deployment} provider={w.provider} account={w.account} onLiteForge={w.onLiteForge}
+          onDone={done} tick={tick} />}
         {tab === 'zap' && <ZapPanel d={deployment} market={market} provider={w.provider} account={w.account} canSend={canSend}
           position={position} setPosition={setPosition} onDone={done} />}
         {tab === 'swap' && <SwapPanel d={deployment} market={market} provider={w.provider} account={w.account} canSend={canSend} onDone={done} />}
@@ -82,7 +90,7 @@ export function App() {
       </main>
 
       <footer className="foot">
-        <p>Every quote is computed with the repository's exact BigInt models of the pairs and Flow, which the Solidity contracts match to the wei in differential tests. Slippage defaults and warnings are interface policy; the chain enforces only the minimum each call carries.</p>
+        <p>Every quote is computed with the repository's exact BigInt models of the pairs, Flow and Kindling, which the Solidity contracts match to the wei in differential tests. Slippage defaults and warnings are interface policy; the chain enforces only the minimum each call carries.</p>
       </footer>
     </div>
   );
