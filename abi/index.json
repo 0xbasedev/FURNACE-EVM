@@ -79,6 +79,10 @@
     "file": "Hearth.json",
     "testnetOnly": false
   },
+  "Compounder": {
+    "file": "Compounder.json",
+    "testnetOnly": false
+  },
   "TestnetToken": {
     "file": "TestnetToken.json",
     "testnetOnly": true

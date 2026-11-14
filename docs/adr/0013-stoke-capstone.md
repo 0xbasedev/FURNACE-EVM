@@ -61,7 +61,8 @@ Status: accepted for this repository. Not audited, not deployed.
 - **[P] Stoke takes all of `unclaimed`.** `DECISIONS.md` gives the automatic Cast reservation priority ("Automatic Cast reservation comes first, optional Stoke from the remainder").
   - Once Casting is designed, a Stoke may take only what Casting leaves.
   - Until then this reading is provisional, and it is a deploy blocker together with Casting.
-- **Stoke into LP** needs a funded matching reservation and the pool's source-lot additions (ADR 0010). The additions are built (ADR 0017: `addToLot`, callable only by the pool's `COMPOUNDER`). The reservation and the compounder are not.
+  - *Update:* Casting is built (ADR 0026). ForgeEmissions withholds the Cast share at credit, outside `unclaimed`, so a Stoke can take only what Casting leaves, by construction. The Compounder is ForgeEmissions' second consumer, through `takeCast`.
+- **Stoke into LP** needs a funded matching reservation and the pool's source-lot additions (ADR 0010). The additions are built (ADR 0017: `addToLot`, callable only by the pool's `COMPOUNDER`). The reservation and the compounder are not. *Update:* the compounder and Casting's reservations are built (ADR 0026); Stoke into LP is seal step 4b.
 
 ## Gas (`pnpm gas`, isolated)
 

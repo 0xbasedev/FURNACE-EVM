@@ -52,7 +52,7 @@ The spec (§8, §12) and config (`emissions.ashfall`, `execution.ashfall`) defin
 
 **5. Every held ledger has one consumer.**
 - **[P] Burn lane.** Permissionless `burnForfeits()` burns it through the Mantle's distributor-only `burnForfeited`. That is a recognized burn (the ledger shrinks, headroom reopens) with **no Ashfall credit**, because Seal forfeits are not among the config's Ashfall sources.
-- **Pulls.** The Capstone (`takeCapstone(pool, id)`), the match reserve (`takeMatchReserve()`) and the Sealed-pot stream (`takeSealedPot(pool)`) pull their ledgers. *Update:* the Sealed-pot stream is built (`SealedPotStream`, ADR 0024): `pull(pool)` streams a pool's pot over the next 30 epochs [P, recorded in ADR 0024] to running Seals by their Conviction measure, never as a new mint.
+- **Pulls.** The Capstone (`takeCapstone(pool, id)`), the match reserve (`takeMatchReserve()`) and the Sealed-pot stream (`takeSealedPot(pool)`) pull their ledgers. *Update:* the Sealed-pot stream is built (`SealedPotStream`, ADR 0024): `pull(pool)` streams a pool's pot over the next 30 epochs [P, recorded in ADR 0024] to running Seals by their Conviction measure, never as a new mint. *Update:* the match reserve is built (the Compounder, ADR 0026): `pullForfeits()` takes this ledger into the seed EMBER of its idle auto-pair.
   - Their addresses are immutable and must be nonzero at deployment.
   - Until a consumer exists, its EMBER stays in `ForgeEmissions`.
   - No consumer address is invented: these identities are not in the registry and still have to be mined.

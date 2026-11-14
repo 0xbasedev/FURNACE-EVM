@@ -4,7 +4,7 @@
 
 Each entry is a gap or ambiguity in the sealed spec (`canonical/`, v5.5.0, pinned by `SHA256SUMS.json` and the config hash; see [SPEC-SEAL.md](SPEC-SEAL.md)). Each was read as recommended, under the owner's standing rule ("Always choose your recommendations"), and marked [P] in its ADR. **Every entry is a deploy blocker until the owner confirms it.** To confirm or change one, edit its ADR (drop the [P] and record the decision), then run `pnpm provisional`. `pnpm check` fails while this file is stale.
 
-**97 provisional readings across 18 ADRs.**
+**108 provisional readings across 19 ADRs.**
 
 ## [ADR 0004](adr/0004-forge-custody.md): Forge custody core
 
@@ -156,3 +156,17 @@ Each entry is a gap or ambiguity in the sealed spec (`canonical/`, v5.5.0, pinne
 3. `P-0025-3` **A pending exit can be cancelled back into stake** at any time until it is withdrawn. It earns again from the cancel, not for its time in the cooldown.
 4. `P-0025-4` **The fee assets are fixed at deployment.** Anything else sent to the Hearth, ASH included, stays there: there is no rescue path to abuse.
 5. `P-0025-5` **Claims pay the staker that calls,** for any asset or all of them. Unclaimed fees never expire.
+
+## [ADR 0026](adr/0026-casting.md): Casting and the idle auto-pair, the Compounder
+
+1. `P-0026-1` **One contract fills two slots,** `Compounder` and `MatchReserve`. The match ledger's EMBER and the matching quote then sit with the one consumer that can spend them.
+2. `P-0026-2` **A pool casts only when it is an LP pool naming ForgeEmissions' `MATCH_RESERVE` as its `COMPOUNDER`.** Elsewhere the whole credit is liquid. Its share is the floor of 25% of each position's ordinary credit, withheld when credited.
+3. `P-0026-3` **A withheld share becomes liquid only through the Compounder:** cast short, released, or expired. Anyone may trigger it, so the owner always can.
+4. `P-0026-4` **A budget is priced at the pair's 1800 s TWAP when it is frozen.** A stale or missing oracle defers the freeze, and an uncovered share returns liquid.
+5. `P-0026-5` **A Cast executes at the spot ratio inside the Vent's 2% band of a fresh TWAP.** What the pair does not take returns, EMBER to its owner and quote to the unreserved inventory. There is no other slippage bound, because adding liquidity sells nothing.
+6. `P-0026-6` **Anyone may cast, with no keeper tip.** A Cast is automatic (§7), and AutoStoke's tip covers only Stokes (§18).
+7. `P-0026-7` **The source lot** is the position's youngest active lot whose age now is at least the time since the epoch ended, among those that can still take an addition; with none, the share returns liquid. Per-lot reward shares are not recorded, so for a multi-lot position this never ages a reward into older Heat. It is exact for a single lot.
+8. `P-0026-8` **A listed position's Cast waits** until the listing ends or the window passes, because `addToLot` refuses a listed position (ADR 0017).
+9. `P-0026-9` **A reservation ends `MATCH_RESERVATION_EPOCHS` epochs after its earning epoch ends.**
+10. `P-0026-10` **The match ledger's EMBER joins the seed** beside the Treasury's match-seed funding. Anyone may fund the seed, and nothing withdraws it.
+11. `P-0026-11` **A pair is idle** after `IDLE_EPOCHS_BEFORE_AUTO_PAIR` full epochs since its last Cast, with deployment counting as epoch 0. The auto-pair then pairs as much unreserved quote as the seed covers, and the rest waits. It has no throughput chunk beyond the band, and it does not end the idle state.

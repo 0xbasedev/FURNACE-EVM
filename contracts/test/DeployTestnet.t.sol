@@ -98,7 +98,8 @@ contract DeployTestnetTest is Test, FurnaceTestnet {
         }
         assertEq(d.mantle.KINDLING(), operator);
         assertEq(d.mantle.TREASURY(), operator);
-        assertEq(d.emissions.MATCH_RESERVE(), operator);
+        assertEq(d.emissions.MATCH_RESERVE(), address(d.compounder), "the Compounder is the match reserve (ADR 0026)");
+        assertEq(d.emissions.CAST_POOLS(), 3, "so the LP pools cast");
         assertEq(d.emissions.SEALED_POT(), address(d.sealedPot), "the Sealed-pot stream (ADR 0024)");
         assertEq(TestnetToken(address(d.stake[3])).decimals(), 6, "the USDC stand-in has USDC's decimals");
         // The EMBER pairs (ADR 0015): pools 0 and 1 stake their receipts.
@@ -121,10 +122,11 @@ contract DeployTestnetTest is Test, FurnaceTestnet {
         assertEq(d.pools[1].FLOW(), address(d.flow));
         assertEq(d.pools[2].FLOW(), address(0), "no fee-free stake into the EMBER pool");
         assertEq(d.pools[3].FLOW(), address(0), "nor the USDC pool");
-        assertEq(d.flow.COMPOUNDER(), operator, "the compounder slot is the operator's");
+        assertEq(address(d.compounder), pl.compounder, "the Compounder at its predicted address");
+        assertEq(d.flow.COMPOUNDER(), address(d.compounder), "Flow's waiver is the Compounder's");
         // Source-lot additions (ADR 0017): the same compounder, on the LP pools only.
-        assertEq(d.pools[0].COMPOUNDER(), operator, "the compounder adds to pool 0's lots");
-        assertEq(d.pools[1].COMPOUNDER(), operator);
+        assertEq(d.pools[0].COMPOUNDER(), address(d.compounder), "the Compounder adds to pool 0's lots");
+        assertEq(d.pools[1].COMPOUNDER(), address(d.compounder));
         assertEq(d.pools[2].COMPOUNDER(), address(0), "the EMBER pool pays liquid EMBER instead");
         assertEq(d.pools[3].COMPOUNDER(), address(0), "and so does the USDC pool");
         // Kindling, First Flame and the head start (ADR 0018, ADR 0019).
@@ -145,7 +147,10 @@ contract DeployTestnetTest is Test, FurnaceTestnet {
         assertEq(d.hearth.assetAt(0), address(d.ember));
         assertEq(d.hearth.assetAt(1), address(d.pairQuote[0]));
         assertEq(d.hearth.assetAt(2), address(d.pairQuote[1]));
-        assertEq(d.vent.COMPOUNDER(), operator);
+        assertEq(d.vent.COMPOUNDER(), address(d.compounder), "only the Compounder draws the liquidity lane");
+        assertEq(d.compounder.SINK(), address(d.sink), "its idle auto-pair ends in the permanent sink");
+        assertEq(address(d.compounder.EMISSIONS()), address(d.emissions));
+        assertEq(d.compounder.START(), d.start, "on the Mantle's epoch clock");
         // ASH (ADR 0022): the ledger is the token's only minter; the operator stands in for Ignition and the Forge.
         assertEq(address(d.ash), pl.ash, "ASH at its predicted address");
         assertEq(d.ash.LEDGER(), address(d.ashLedger));
@@ -238,7 +243,7 @@ contract DeployTestnetTest is Test, FurnaceTestnet {
         d.boost.refresh(0, ids[0]);
         vm.stopPrank();
         assertGt(d.pools[0].positionOf(ids[0]).ordinaryBonus, 0, "the Capstone raised the bonus");
-        assertEq(d.pools[0].lotCount(ids[0]), 2, "the opening lot and the zap's; the addition took no slot");
+        assertEq(d.pools[0].lotCount(ids[0]), 2, "the opening lot and the zap's");
 
         vm.warp(d.start + P.EPOCH_SECONDS);
         d.mantle.finalizeEpoch();
@@ -278,6 +283,28 @@ contract DeployTestnetTest is Test, FurnaceTestnet {
         uint256 got = d.hearth.claim(address(d.ember));
         assertApproxEqAbs(got, owed, 1, "the staker is paid the Hearth's share, to the wei");
         assertEq(d.hearth.treasuryOwed(address(d.ember)), 0, "nothing went to the Treasury while ASH was staked");
+
+        // Casting (ADR 0026): a quarter of pool 0's ordinary credit waited for the Compounder. On a
+        // fresh TWAP it freezes the epoch's budget from the Vent's liquidity lane and casts the
+        // share into the position's source lot, at that lot's age.
+        assertEq(d.compounder.seed(), 100e18, "the smoke run funded the idle auto-pair's seed");
+        uint256 share = d.emissions.castOf(0, 0, ids[0]);
+        assertGt(share, 0, "the LP pool withheld its Cast share");
+        assertEq(d.emissions.castOf(0, 2, ids[2]), 0, "the EMBER pool paid liquid");
+        d.vent.collectAll();
+        d.pairs[0].checkpoint();
+        vm.warp(block.timestamp + P.PAIR_TWAP_SECONDS);
+        d.pairs[0].checkpoint();
+        uint256 budget = d.compounder.freeze(0, 0);
+        assertGt(budget, 0, "the smoke run's fees funded a budget");
+        uint256 before = d.emissions.unclaimed(0, ids[0]);
+        uint256 lots = d.pools[0].lotCount(ids[0]);
+        uint256 lp = d.compounder.cast(0, 0, ids[0]);
+        assertGt(lp, 0, "the share became LP");
+        assertEq(d.pools[0].lotCount(ids[0]), lots, "in an existing lot: no slot used");
+        assertTrue(d.emissions.castTaken(0, 0, ids[0]));
+        assertLe(d.emissions.unclaimed(0, ids[0]), before + share, "and what was not paired is the owner's, liquid");
+        assertEq(IERC20(address(d.pairs[0])).balanceOf(address(d.compounder)), 0, "the Compounder keeps no LP");
     }
 
     /// The add-on (ADR 0015): before the pairs exist, pools 0 and 1 refuse deposits and an epoch

@@ -156,4 +156,4 @@ Status: accepted for this repository. Not audited, not deployed.
 
 - **The genesis event exists.** The Mantle's seed, BlastPool's opening deposit and pool 0's Kindling positions now have a contract that can use them, and the 10% sink is the same contract the idle auto-pairing will use.
 - **Mainnet gate.** `Kindling` reads built and the gate gains `GenesisFeeEscrow` and `PermanentLiquidity` slots, for 28 blockers.
-- **Still unbuilt:** Ignition (which schedules `START` and reads `closedAt`), the ASH bonus, SmelterPool's seeding event, the idle auto-pairing and a Kindling screen in the dApp.
+- **Still unbuilt:** Ignition (which schedules `START` and reads `closedAt`), the ASH bonus, SmelterPool's seeding event, the idle auto-pairing and a Kindling screen in the dApp. *Update:* all but SmelterPool's seeding event are built since: the idle auto-pairing is the Compounder's (ADR 0026), and its LP ends in this sink, which the kit now deploys in every mode.

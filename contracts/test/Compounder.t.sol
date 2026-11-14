@@ -364,3 +364,218 @@ contract CompounderTest is CompounderRig {
         return n;
     }
 }
+
+/// @notice The Compounder's properties, one at a time.
+contract CompounderUnitTest is CompounderRig {
+    World internal w;
+    address internal alice = _wallet(0);
+    address internal bob = _wallet(1);
+
+    function setUp() public {
+        vm.warp(T0);
+        w = _world();
+    }
+
+    function _open(uint256 i, address who, uint256 lp) internal returns (uint256 id) {
+        IERC20(address(w.pairs[i])).transfer(who, lp);
+        vm.prank(who);
+        IERC20(address(w.pairs[i])).approve(address(w.pools[i]), lp);
+        vm.prank(who);
+        id = w.pools[i].open(lp);
+    }
+
+    /// Both pairs observe now and again 30 minutes later: a fresh TWAP.
+    function _twap() internal {
+        w.pairs[0].checkpoint();
+        w.pairs[1].checkpoint();
+        vm.warp(block.timestamp + P.PAIR_TWAP_SECONDS);
+        w.pairs[0].checkpoint();
+        w.pairs[1].checkpoint();
+    }
+
+    /// Epoch 0 earns `share` for position `id` of pool 0, settles, and is frozen against `funding`.
+    function _frozen(uint256 id, uint256 share, uint256 funding) internal {
+        w.ledger.credit(0, 0, id, share);
+        vm.warp(T0 + 1 days);
+        w.ledger.settle(0, 0);
+        if (funding != 0) w.vent.fund(0, funding);
+        _twap();
+        w.c.freeze(0, 0);
+    }
+
+    function test_constructorRefusesZeroAddresses() public {
+        IERC20 e = IERC20(address(w.ember));
+        ICastLedger l = ICastLedger(address(w.ledger));
+        IMatchVent v = IMatchVent(address(w.vent));
+        EmberPair[2] memory noPair;
+        ForgePool[2] memory noPool;
+        vm.expectRevert(Compounder.ZeroAddress.selector);
+        new Compounder(IERC20(address(0)), l, v, w.sink, w.pairs, w.pools, T0);
+        vm.expectRevert(Compounder.ZeroAddress.selector);
+        new Compounder(e, ICastLedger(address(0)), v, w.sink, w.pairs, w.pools, T0);
+        vm.expectRevert(Compounder.ZeroAddress.selector);
+        new Compounder(e, l, IMatchVent(address(0)), w.sink, w.pairs, w.pools, T0);
+        vm.expectRevert(Compounder.ZeroAddress.selector);
+        new Compounder(e, l, v, address(0), w.pairs, w.pools, T0);
+        vm.expectRevert(Compounder.ZeroAddress.selector);
+        new Compounder(e, l, v, w.sink, noPair, w.pools, T0);
+        vm.expectRevert(Compounder.ZeroAddress.selector);
+        new Compounder(e, l, v, w.sink, w.pairs, noPool, T0);
+    }
+
+    /// A covered share becomes LP in the lot that earned it, at that lot's age; the owner owns the
+    /// LP, and only the rounding returns liquid.
+    function test_aCoveredCastLandsInTheSourceLotAtItsAge() public {
+        uint256 id = _open(0, alice, 1000e18);
+        _frozen(id, 40e18, 1_000e6);
+        Lot memory before = w.pools[0].lotOf(id, 0);
+        uint256 ageBefore = before.age + (block.timestamp - before.since);
+        uint256 lp = w.c.cast(0, 0, id);
+        assertGt(lp, 0);
+        Lot memory l = w.pools[0].lotOf(id, 0);
+        assertEq(l.amount, before.amount + lp, "the LP is in the source lot");
+        assertEq(l.age, ageBefore, "at the lot's own age");
+        assertEq(w.pools[0].positionOf(id).owner, alice, "and the owner's");
+        assertEq(IERC20(address(w.pairs[0])).balanceOf(address(w.c)), 0, "the Compounder keeps no LP");
+        (uint112 rE, uint112 rQ,) = w.pairs[0].getReserves();
+        assertLe(w.ledger.unclaimed(0, id), 2 * uint256(rE) / rQ, "only rounding returns liquid: a quote wei's worth");
+        assertEq(w.c.reserveOf(0).reserved, 0, "the reservation is spent");
+    }
+
+    /// With nothing in the lane the budget is zero, and the whole share returns liquid: nothing is
+    /// sold and no LP is formed.
+    function test_aDryReserveReturnsTheWholeShare() public {
+        uint256 id = _open(0, alice, 1000e18);
+        _frozen(id, 40e18, 0);
+        assertEq(w.c.budgetOf(0, 0).budget, 0);
+        (uint112 rE, uint112 rQ,) = w.pairs[0].getReserves();
+        assertEq(w.c.cast(0, 0, id), 0);
+        assertEq(w.ledger.unclaimed(0, id), 40e18, "all of it, liquid");
+        (uint112 rE2, uint112 rQ2,) = w.pairs[0].getReserves();
+        assertEq(uint256(rE2), rE, "nothing was paired or sold");
+        assertEq(uint256(rQ2), rQ);
+    }
+
+    /// Budgets are pro-rata: two shares of a short budget are covered in the same proportion.
+    function test_aShortBudgetCoversEachShareProRata() public {
+        uint256 a = _open(0, alice, 1000e18);
+        uint256 b = _open(0, bob, 1000e18);
+        w.ledger.credit(0, 0, a, 300e18);
+        w.ledger.credit(0, 0, b, 100e18);
+        vm.warp(T0 + 1 days);
+        w.ledger.settle(0, 0);
+        w.vent.fund(0, 40e6);
+        _twap();
+        w.c.freeze(0, 0);
+        (, uint256 ea, uint256 qa) = w.c.reservationOf(0, 0, a);
+        (, uint256 eb, uint256 qb) = w.c.reservationOf(0, 0, b);
+        assertApproxEqAbs(ea, 3 * eb, 3, "EMBER covered pro-rata");
+        assertApproxEqAbs(qa, 3 * qb, 3, "quote reserved pro-rata");
+        assertLe(qa + qb, 40e6, "never more than the budget");
+    }
+
+    /// The source lot is the youngest active lot already open when the epoch ended; a deposit
+    /// made after it is not one.
+    function test_theSourceLotIsTheYoungestOpenAtTheEpochsEnd() public {
+        uint256 id = _open(0, alice, 500e18);
+        vm.warp(T0 + 6 hours);
+        IERC20(address(w.pairs[0])).transfer(alice, 600e18);
+        vm.prank(alice);
+        IERC20(address(w.pairs[0])).approve(address(w.pools[0]), type(uint256).max);
+        vm.prank(alice);
+        w.pools[0].deposit(id, 300e18); // slot 1: younger, open at the epoch's end
+        w.ledger.credit(0, 0, id, 20e18);
+        vm.warp(T0 + 1 days + 1);
+        vm.prank(alice);
+        w.pools[0].deposit(id, 300e18); // slot 2: after the epoch ended
+        w.ledger.settle(0, 0);
+        w.vent.fund(0, 1_000e6);
+        _twap();
+        w.c.freeze(0, 0);
+        uint256[3] memory before = [uint256(w.pools[0].lotOf(id, 0).amount), w.pools[0].lotOf(id, 1).amount, w.pools[0].lotOf(id, 2).amount];
+        uint256 lp = w.c.cast(0, 0, id);
+        assertEq(w.pools[0].lotOf(id, 0).amount, before[0]);
+        assertEq(w.pools[0].lotOf(id, 1).amount, before[1] + lp, "the youngest source");
+        assertEq(w.pools[0].lotOf(id, 2).amount, before[2], "not a lot opened after the epoch");
+    }
+
+    /// A stale oracle or a spot outside the band reverts the cast: nothing is released to anyone.
+    function test_anUnsafeMarketReleasesNothing() public {
+        uint256 id = _open(0, alice, 1000e18);
+        _frozen(id, 40e18, 1_000e6);
+        vm.warp(block.timestamp + 2 hours);
+        vm.expectRevert(abi.encodeWithSelector(Compounder.StaleOracle.selector, 0, 2 hours));
+        w.c.cast(0, 0, id);
+        _twap();
+        MockERC20(address(w.usdc)).mint(address(this), 5_000e6);
+        w.usdc.approve(address(w.pairs[0]), 5_000e6);
+        w.pairs[0].buy(5_000e6, 0, address(this));
+        vm.expectPartialRevert(Compounder.OutOfBand.selector);
+        w.c.cast(0, 0, id);
+        assertFalse(w.ledger.castTaken(0, 0, id), "the share waits");
+        assertEq(w.ledger.unclaimed(0, id), 0);
+        assertGt(w.c.reserveOf(0).reserved, 0, "and so does its quote");
+    }
+
+    /// After the window the share returns liquid and the budget's quote returns to the
+    /// unreserved inventory, once.
+    function test_expiryReturnsTheShareAndTheQuote() public {
+        uint256 id = _open(0, alice, 1000e18);
+        _frozen(id, 40e18, 1_000e6);
+        uint256 reserved = w.c.reserveOf(0).reserved;
+        uint256 free = w.c.reserveOf(0).free;
+        vm.warp(w.c.expiresAt(0) - 1);
+        vm.expectRevert(abi.encodeWithSelector(Compounder.NotExpired.selector, 0, w.c.expiresAt(0)));
+        w.c.close(0, 0);
+        vm.warp(w.c.expiresAt(0));
+        assertEq(w.c.cast(0, 0, id), 0);
+        assertEq(w.ledger.unclaimed(0, id), 40e18, "the reward is never confiscated");
+        assertEq(w.c.reserveOf(0).reserved, 0);
+        assertEq(w.c.reserveOf(0).free, free + reserved, "the quote is unreserved again");
+        assertEq(w.c.close(0, 0), 0, "once");
+    }
+
+    /// The idle auto-pair spends only unreserved quote and funded seed EMBER; its LP is the sink's.
+    function test_theIdleAutoPairNeverSpendsReservedQuote() public {
+        uint256 id = _open(0, alice, 1000e18);
+        _frozen(id, 40e18, 1_000e6);
+        uint256 reserved = w.c.reserveOf(0).reserved;
+        assertGt(reserved, 0);
+        w.ember.mint(address(this), 100e18);
+        w.ember.approve(address(w.c), 100e18);
+        w.c.fundSeed(100e18);
+        vm.expectRevert(abi.encodeWithSelector(Compounder.NotIdle.selector, 0, P.IDLE_EPOCHS_BEFORE_AUTO_PAIR));
+        w.c.autoPair(0);
+        vm.warp(T0 + P.IDLE_EPOCHS_BEFORE_AUTO_PAIR * 1 days);
+        _twap();
+        uint256 lp = w.c.autoPair(0);
+        assertEq(IERC20(address(w.pairs[0])).balanceOf(w.sink), lp, "the LP is permanent");
+        assertEq(w.c.reserveOf(0).reserved, reserved, "reserved quote untouched");
+        assertEq(w.c.seed(), 0, "a short seed pairs what it covers");
+        assertGt(w.c.reserveOf(0).free, 0, "and the rest of the quote waits");
+        assertGt(w.c.cast(0, 0, id), 0, "the reservation still casts");
+    }
+
+    function test_gas_compounder() public {
+        uint256 id = _open(0, alice, 1000e18);
+        w.ledger.credit(0, 0, id, 40e18);
+        vm.warp(T0 + 1 days);
+        w.ledger.settle(0, 0);
+        w.vent.fund(0, 1_000e6);
+        _twap();
+        uint256 g = gasleft();
+        w.c.freeze(0, 0);
+        emit log_named_uint("freeze (with refill)", g - gasleft());
+        g = gasleft();
+        w.c.cast(0, 0, id);
+        emit log_named_uint("cast", g - gasleft());
+        w.ember.mint(address(this), 100e18);
+        w.ember.approve(address(w.c), 100e18);
+        w.c.fundSeed(100e18);
+        vm.warp(T0 + 9 days);
+        _twap();
+        g = gasleft();
+        w.c.autoPair(0);
+        emit log_named_uint("autoPair", g - gasleft());
+    }
+}

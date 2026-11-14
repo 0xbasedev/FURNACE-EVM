@@ -606,3 +606,74 @@ contract ForgeEmissionsTest is SettlementFixture {
         emit log_named_uint("requestClaim", g - gasleft());
     }
 }
+
+/// @notice Casting's ledger (ADR 0026): the LP pools name the match reserve as their COMPOUNDER, so
+///         a quarter of each ordinary credit waits for it, consumed once.
+contract ForgeEmissionsCastTest is SettlementFixture {
+    address alice = _user(1);
+
+    function setUp() public {
+        vm.warp(1_800_000_000);
+        castOn = true;
+        _deploySettlement(block.timestamp);
+        _fund(alice);
+    }
+
+    function _settle(uint256 e) internal {
+        mantle.finalizeEpoch();
+        emissions.openEpoch();
+        for (uint256 i; i < 4; ++i) {
+            while (true) {
+                ForgeEmissions.Phase ph = emissions.poolEpoch(e, i).phase;
+                if (ph == ForgeEmissions.Phase.None || ph == ForgeEmissions.Phase.Done) break;
+                emissions.advance(e, i);
+            }
+        }
+    }
+
+    function test_onlyLpPoolsThatNameTheMatchReserveCast() public {
+        assertEq(emissions.CAST_POOLS(), 3, "pools 0 and 1");
+        ForgeEmissions other = new ForgeEmissions(
+            IMantleDistribution(address(mantle)), IERC20(address(ember)), pools, capstone, makeAddr("elsewhere"), sealedPotStream
+        );
+        assertEq(other.CAST_POOLS(), 0, "a match reserve the pools do not name casts nothing");
+    }
+
+    function test_aQuarterOfOrdinaryBaseWaitsForTheMatchReserve() public {
+        vm.startPrank(alice);
+        uint256 id = pools[0].open(100e18);
+        uint256 single = pools[2].open(100e18);
+        vm.stopPrank();
+        skip(1 days);
+        assertEq(emissions.castOf(0, 0, id), 0, "nothing before the pool-epoch is done");
+        _settle(0);
+        uint256 cast = emissions.castOf(0, 0, id);
+        uint256 liquid = emissions.unclaimed(0, id);
+        assertEq(cast, ((liquid + cast) * P.CASTING_LP_SHARE_PCT) / 100, "a quarter of the ordinary credit");
+        assertGt(cast, 0);
+        assertEq(emissions.castOf(0, 2, single), 0, "a single-token pool pays liquid");
+        assertGt(emissions.unclaimed(2, single), 0);
+        (uint256 demand, bool done) = emissions.castDemand(0, 0);
+        assertEq(demand, cast);
+        assertTrue(done);
+
+        vm.expectRevert(abi.encodeWithSelector(ForgeEmissions.NotConsumer.selector, alice));
+        vm.prank(alice);
+        emissions.takeCast(0, 0, id, 0);
+        vm.expectRevert(abi.encodeWithSelector(ForgeEmissions.CastExceeded.selector, cast + 1, cast));
+        vm.prank(matchReserveSink);
+        emissions.takeCast(0, 0, id, cast + 1);
+        vm.expectRevert(abi.encodeWithSelector(ForgeEmissions.NothingToCast.selector, 0, 2, single));
+        vm.prank(matchReserveSink);
+        emissions.takeCast(0, 2, single, 0);
+
+        vm.prank(matchReserveSink);
+        emissions.takeCast(0, 0, id, cast / 3);
+        assertEq(ember.balanceOf(matchReserveSink), cast / 3, "the used part leaves");
+        assertEq(emissions.unclaimed(0, id), liquid + cast - cast / 3, "the rest is the owner's, liquid");
+        assertTrue(emissions.castTaken(0, 0, id));
+        vm.expectRevert(abi.encodeWithSelector(ForgeEmissions.AlreadyCast.selector, 0, 0, id));
+        vm.prank(matchReserveSink);
+        emissions.takeCast(0, 0, id, 0);
+    }
+}

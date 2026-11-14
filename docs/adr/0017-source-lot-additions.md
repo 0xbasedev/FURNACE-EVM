@@ -53,7 +53,7 @@ Status: accepted for this repository. Not audited, not deployed.
 
 **3. What the pool does not decide.**
 - **The split.** The config says rewards "compound back INTO THAT LOT" that earned them. Settlement pays per position, though, so the split of a position's reward across its lots is the compounder's computation. The pool accepts any active slot the compounder names.
-- **The rest of a Cast.** Whether a reward is internally earned, unconsumed and eligible, and the 25% match from the reserve, are the compounder's rules. So are the seven-epoch reservations and the refusal of a dry reserve. The pool only refuses a destination that is not an active lot.
+- **The rest of a Cast.** Whether a reward is internally earned, unconsumed and eligible, and the 25% match from the reserve, are the compounder's rules. So are the seven-epoch reservations and the refusal of a dry reserve. The pool only refuses a destination that is not an active lot. *Update:* the compounder is built (ADR 0026). It names the position's youngest active lot already open when the epoch ended.
 
 **4. Provisional readings [P].** Each is a deploy blocker until the project owner confirms it.
 - **[P] An addition may enter a running Seal's cohort.** "Retain the source cohort" (`DECISIONS.md`) reads that way. The alternative is to refuse additions into sealed slots while a Seal runs. The rule "later deposits never join a Seal" concerns deposits, which start their own lot.

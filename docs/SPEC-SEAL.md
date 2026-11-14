@@ -25,6 +25,7 @@ Sealed 2026-11-14, at the owner's word: "Seal the specs now and finish it."
 | Ignition | built (ADR 0023; PR #24) |
 | ForgeAsh, the stayers' share, Quote yield and the Sealed-pot stream | built (ADR 0024; PR #25) |
 | Hearth | built (ADR 0025; PR #26) |
+| The match reserve and the compounder: Casting and the idle auto-pair | built (ADR 0026; step 4a) |
 | BlastPool / SmelterPool | built (ADR 0015) |
 | FeeRouter (the Vent) | built (ADR 0020) |
 | Flow | built (ADR 0016) |
@@ -46,9 +47,9 @@ Each step is one PR, held to the same bar as every module so far:
    - `Stakers` gets emergency-exit fees, `QuoteYield` is the Heat²-weighted sell-side yield, and `SealedPot` streams Seal forfeits.
    - These are four slots with one shape: pull fixed inflows, distribute by a published weight.
 3. ~~**Hearth**~~ (done; PR #26, ADR 0025): ASH staking with funded local fee-asset indexes, fed by the Vent's 10%.
-4. **The match reserve and the compounder.**
-   - The match reserve is the Vent's reserved quote, plus ForgeEmissions' match ledger and the idle auto-pairing into the permanent sink.
-   - The compounder is Casting and Stoke into LP, through Flow's waiver and the pools' `addToLot`.
+4. **The match reserve and the compounder,** in two PRs:
+   - ~~**4a, Casting and the idle auto-pair**~~ (done; ADR 0026). The Compounder fills the `Compounder` and `MatchReserve` slots: it draws the Vent's liquidity lane and ForgeEmissions' match ledger, casts a quarter of the LP pools' ordinary base into the source lot through `addToLot`, and pairs idle unreserved quote with seed EMBER into the permanent sink.
+   - **4b, Stoke into LP.** The remainder of each epoch's budget as source-bound Stoke entitlements, an ordinary-base ledger beside `unclaimed`, and the owner's consented zap through Flow's waiver.
 5. **The protected valuation source and Relics.**
    - The valuation source is the checkpointed EMBER-per-stake rate Boost reads.
    - Relics are wallet history and activity-derived perks: the Pyre ledger Boost reads, and the fee-rebate tiers Flow reads.

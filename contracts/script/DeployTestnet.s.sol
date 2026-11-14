@@ -28,6 +28,7 @@ import {ForgeAsh, IAshForgeLedger} from "../src/yield/ForgeAsh.sol";
 import {BookedSplitter} from "../src/yield/BookedSplitter.sol";
 import {SealedPotStream} from "../src/yield/SealedPotStream.sol";
 import {Hearth} from "../src/hearth/Hearth.sol";
+import {Compounder, ICastLedger, IMatchVent} from "../src/match/Compounder.sol";
 import {
     TestnetToken, TestnetValuation, TestnetPyreLedger, TestnetFeeRebate, TestnetFounders
 } from "./testnet/TestnetStandIns.sol";
@@ -106,6 +107,7 @@ abstract contract FurnaceTestnet {
         BookedSplitter quoteYield; // the Vent's QUOTE_YIELD
         SealedPotStream sealedPot; // ForgeEmissions' SEALED_POT
         Hearth hearth; // the Vent's HEARTH (ADR 0025): staked ASH earns its fee share
+        Compounder compounder; // Casting and the idle auto-pair (ADR 0026): every COMPOUNDER, and MATCH_RESERVE
         TestnetFeeRebate rebates;
         TestnetFounders founders;
         TestnetValuation valuation;
@@ -161,6 +163,7 @@ abstract contract FurnaceTestnet {
         address quoteYield;
         address sealedPot;
         address hearth;
+        address compounder;
     }
 
     function _poolLabel(uint256 i) internal pure returns (string memory) {
@@ -193,6 +196,7 @@ abstract contract FurnaceTestnet {
         pl.quoteYield = _predict(deployer, _salt(deployer, version, "QuoteYield"));
         pl.sealedPot = _predict(deployer, _salt(deployer, version, "SealedPotStream"));
         pl.hearth = _predict(deployer, _salt(deployer, version, "Hearth"));
+        pl.compounder = _predict(deployer, _salt(deployer, version, "Compounder"));
     }
 
     function _create3(Plan memory pl, string memory label, address predicted, bytes memory initCode)
@@ -262,11 +266,13 @@ abstract contract FurnaceTestnet {
         _deployPools(pl, d);
         _deployFlow(pl, d);
         _deployVent(pl, d);
+        _deploySink(pl, d);
         if (o.kindling) _deployKindling(pl, d, o.kindlingStart);
         _deployAsh(pl, d);
         if (o.ignition) _deployIgnition(pl, d, o.ignitionStart);
         _deploySplitters(pl, d);
         _deployHearth(pl, d);
+        _deployCompounder(pl, d);
         _deployEmissionsAndBoost(pl, d);
         d.lens = new ForgeLens();
         _checkWiring(d);
@@ -346,10 +352,9 @@ abstract contract FurnaceTestnet {
         bool[4] memory isLp = [P.FORGE_POOL_0_IS_LP, P.FORGE_POOL_1_IS_LP, P.FORGE_POOL_2_IS_LP, P.FORGE_POOL_3_IS_LP];
         for (uint256 i; i < 4; ++i) {
             // Only the LP pools take Flow's fee-free same-route stake (spec v5.5 §4; ADR 0016) and
-            // the compounder's source-lot additions (ADR 0017): the operator stands in for the
-            // unbuilt compounder, as it does for Flow's.
+            // the Compounder's source-lot additions (ADR 0017): its Casts (ADR 0026).
             address flow = isLp[i] ? pl.flow : address(0);
-            address compounder = isLp[i] ? d.operator : address(0);
+            address compounder = isLp[i] ? pl.compounder : address(0);
             // Kindling's LP is EMBER/USDC, pool 0's receipt (spec v5.5 §3): Kindling or its stand-in.
             // Every pool reads the same founder record for First Flame (ADR 0018).
             address kindling = _kindlingSlot(d, i);
@@ -367,7 +372,7 @@ abstract contract FurnaceTestnet {
     }
 
     /// @notice Flow reads nothing at construction, so it can deploy before or after the pairs.
-    ///         The operator is its compounder (the Stoke-into-LP consumer is not built).
+    ///         Its compounder is the Compounder (ADR 0026).
     function _deployFlow(Plan memory pl, Deployment memory d) internal {
         bytes memory args = abi.encode(
             IERC20(pl.ember),
@@ -376,31 +381,34 @@ abstract contract FurnaceTestnet {
             ForgePool(pl.pool[0]),
             ForgePool(pl.pool[1]),
             IFeeRebate(address(d.rebates)),
-            d.operator
+            pl.compounder
         );
         d.flow = Flow(_create3(pl, "Flow", pl.flow, abi.encodePacked(type(Flow).creationCode, args)));
     }
 
     /// @notice The Vent reads only the Mantle's registrar record at construction, so it deploys
     ///         before or after the pairs. Its Hearth is the real Hearth (ADR 0025), and its stakers'
-    ///         and Quote-yield recipients are the epoch splitters (ADR 0024); the operator stands in
-    ///         for the Treasury, the Deed market and the compounder.
+    ///         and Quote-yield recipients are the epoch splitters (ADR 0024), and its compounder is the
+    ///         Compounder (ADR 0026); the operator stands in for the Treasury and the Deed market.
     function _deployVent(Plan memory pl, Deployment memory d) internal {
         IVentFeePool[4] memory pools;
         for (uint256 i; i < 4; ++i) pools[i] = IVentFeePool(pl.pool[i]);
         IVentPair[2] memory pairs = [IVentPair(pl.pair[0]), IVentPair(pl.pair[1])];
         address op = d.operator;
-        bytes memory args = abi.encode(IERC20(pl.ember), IVentMantle(pl.mantle), pools, pairs, pl.hearth, op, pl.stayers, pl.quoteYield, op, op);
+        bytes memory args = abi.encode(IERC20(pl.ember), IVentMantle(pl.mantle), pools, pairs, pl.hearth, op, pl.stayers, pl.quoteYield, op, pl.compounder);
         d.vent = Vent(_create3(pl, "Vent", pl.vent, abi.encodePacked(type(Vent).creationCode, args)));
     }
 
-    /// @notice The real Kindling (ADR 0021): the sink, then the escrow naming Kindling's predicted
+    /// @notice The permanent LP sink (ADR 0021), in every mode: Kindling's 10% and the Compounder's
+    ///         idle auto-pair (ADR 0026) both end there.
+    function _deploySink(Plan memory pl, Deployment memory d) internal {
+        d.sink = PermanentLiquidity(_create3(pl, "PermanentLiquidity", pl.sink, type(PermanentLiquidity).creationCode));
+    }
+
+    /// @notice The real Kindling (ADR 0021): the escrow naming Kindling's predicted
     ///         address, then Kindling, which reads only the escrow and USDC's decimals. The operator
     ///         is the escrow's Treasury.
     function _deployKindling(Plan memory pl, Deployment memory d, uint256 start) internal {
-        d.sink = PermanentLiquidity(
-            _create3(pl, "PermanentLiquidity", pl.sink, type(PermanentLiquidity).creationCode)
-        );
         bytes memory args = abi.encode(d.pairQuote[0], pl.kindling, d.operator);
         d.escrow = GenesisFeeEscrow(
             _create3(pl, "GenesisFeeEscrow", pl.escrow, abi.encodePacked(type(GenesisFeeEscrow).creationCode, args))
@@ -473,9 +481,27 @@ abstract contract FurnaceTestnet {
         d.hearth = Hearth(_create3(pl, "Hearth", pl.hearth, abi.encodePacked(type(Hearth).creationCode, args)));
     }
 
+    /// @notice The Compounder (ADR 0026) stores addresses only: ForgeEmissions' Cast ledger, the
+    ///         Vent's liquidity lane, the sink, the pairs and their LP pools, and the epoch clock.
+    function _deployCompounder(Plan memory pl, Deployment memory d) internal {
+        bytes memory args = abi.encode(
+            IERC20(pl.ember),
+            ICastLedger(pl.emissions),
+            IMatchVent(pl.vent),
+            pl.sink,
+            [EmberPair(pl.pair[0]), EmberPair(pl.pair[1])],
+            [ForgePool(pl.pool[0]), ForgePool(pl.pool[1])],
+            d.start
+        );
+        d.compounder =
+            Compounder(_create3(pl, "Compounder", pl.compounder, abi.encodePacked(type(Compounder).creationCode, args)));
+    }
+
+    /// @notice ForgeEmissions reads the pools: the LP pools name the Compounder, which is its
+    ///         MATCH_RESERVE, so they cast (ADR 0026).
     function _deployEmissionsAndBoost(Plan memory pl, Deployment memory d) internal {
         bytes memory args =
-            abi.encode(IMantleDistribution(pl.mantle), IERC20(pl.ember), d.pools, pl.boost, d.operator, pl.sealedPot);
+            abi.encode(IMantleDistribution(pl.mantle), IERC20(pl.ember), d.pools, pl.boost, pl.compounder, pl.sealedPot);
         d.emissions = ForgeEmissions(
             _create3(pl, "ForgeEmissions", pl.emissions, abi.encodePacked(type(ForgeEmissions).creationCode, args))
         );
@@ -499,7 +525,7 @@ abstract contract FurnaceTestnet {
             if (p.BOOST() != address(d.boost) || address(p.STAKE_TOKEN()) != address(d.stake[i])) revert Miswired("pool");
             if (p.ANNEX().code.length == 0) revert Miswired("pool annex");
             if (p.FLOW() != (p.IS_LP() ? address(d.flow) : address(0))) revert Miswired("pool FLOW");
-            if (p.COMPOUNDER() != (p.IS_LP() ? d.operator : address(0))) revert Miswired("pool COMPOUNDER");
+            if (p.COMPOUNDER() != (p.IS_LP() ? address(d.compounder) : address(0))) revert Miswired("pool COMPOUNDER");
             if (p.KINDLING() != _kindlingSlot(d, i)) revert Miswired("pool KINDLING");
             if (p.FOUNDERS() != _foundersSlot(d)) revert Miswired("pool FOUNDERS");
             if (p.IGNITION() != _ignitionSlot(d)) revert Miswired("pool IGNITION");
@@ -511,17 +537,31 @@ abstract contract FurnaceTestnet {
         if (address(v.POOL_2()) != address(d.pools[2]) || address(v.POOL_3()) != address(d.pools[3])) revert Miswired("Vent pools");
         if (address(v.PAIR_0()) != address(d.pairs[0]) || address(v.PAIR_1()) != address(d.pairs[1])) revert Miswired("Vent pairs");
         if (v.HEARTH() != address(d.hearth) || v.TREASURY() != d.operator || v.STAKERS() != address(d.stayers)) revert Miswired("Vent recipients");
-        if (v.QUOTE_YIELD() != address(d.quoteYield) || v.DEEDS() != d.operator || v.COMPOUNDER() != d.operator) revert Miswired("Vent slots");
+        if (v.QUOTE_YIELD() != address(d.quoteYield) || v.DEEDS() != d.operator || v.COMPOUNDER() != address(d.compounder)) {
+            revert Miswired("Vent slots");
+        }
         Flow f = d.flow;
         if (address(f.PAIR0()) != address(d.pairs[0]) || address(f.PAIR1()) != address(d.pairs[1])) revert Miswired("Flow pairs");
         if (address(f.POOL0()) != address(d.pools[0]) || address(f.POOL1()) != address(d.pools[1])) revert Miswired("Flow pools");
         if (address(f.EMBER()) != address(d.ember) || address(f.REBATES()) != address(d.rebates)) revert Miswired("Flow tokens");
-        if (f.COMPOUNDER() != d.operator) revert Miswired("Flow compounder");
+        if (f.COMPOUNDER() != address(d.compounder)) revert Miswired("Flow compounder");
         if (d.kindlingLive) _checkKindling(d);
         _checkAsh(d);
         if (d.ignitionLive) _checkIgnition(d);
         _checkSplitters(d);
         _checkHearth(d);
+        _checkCompounder(d);
+    }
+
+    function _checkCompounder(Deployment memory d) internal view {
+        Compounder c = d.compounder;
+        if (d.emissions.MATCH_RESERVE() != address(c) || d.emissions.CAST_POOLS() != 3) revert Miswired("ForgeEmissions casting");
+        if (address(c.EMBER()) != address(d.ember) || address(c.EMISSIONS()) != address(d.emissions)) revert Miswired("Compounder core");
+        if (address(c.VENT()) != address(d.vent) || c.SINK() != address(d.sink) || c.START() != d.emissions.START()) {
+            revert Miswired("Compounder lane, sink or clock");
+        }
+        if (address(c.PAIR_0()) != address(d.pairs[0]) || address(c.PAIR_1()) != address(d.pairs[1])) revert Miswired("Compounder pairs");
+        if (address(c.POOL_0()) != address(d.pools[0]) || address(c.POOL_1()) != address(d.pools[1])) revert Miswired("Compounder pools");
     }
 
     function _checkHearth(Deployment memory d) internal view {
@@ -629,9 +669,6 @@ abstract contract FurnaceTestnet {
                 // deadline allows for the broadcast landing after the script ran.
                 usdc.approve(address(d.flow), type(uint256).max);
                 d.flow.zapAndStake(0, true, 100e6, 0, ids[0], block.timestamp + 1 hours);
-                // The operator, standing in for the compounder, returns 1 LP to that position's
-                // first lot at the lot's own age, fee-free (ADR 0017).
-                d.pools[0].addToLot(ids[0], 0, 1e18);
                 // The operator, standing in for Kindling, opens a contributor position for itself at
                 // the standard fee, then marks itself a founder and refreshes First Flame (ADR 0018).
                 d.pools[0].openKindling(actor, 10e18);
@@ -643,6 +680,11 @@ abstract contract FurnaceTestnet {
                 // defers (no 30-minute TWAP yet): the quote waits, fail closed (ADR 0020).
                 d.vent.collectAll();
                 d.vent.vent(0);
+                // The Compounder draws BlastPool's liquidity lane, and the operator, standing in
+                // for the Treasury's match-seed bucket, funds 100 test EMBER of seed (ADR 0026).
+                d.compounder.refill(0);
+                ember.approve(address(d.compounder), 100e18);
+                d.compounder.fundSeed(100e18);
             }
             d.boost.deposit(d.pairsLive ? 0 : 2, d.pairsLive ? ids[0] : ids[2], 100e18); // a Capstone
         }
@@ -731,7 +773,6 @@ contract DeployTestnet is Script, FurnaceTestnet {
             console2.log("Kindling         ", address(d.kindling));
             console2.log("  opens / closes ", d.kindling.START(), d.kindling.END());
             console2.log("GenesisFeeEscrow ", address(d.escrow));
-            console2.log("PermanentLiquidity", address(d.sink));
         } else {
             console2.log("Kindling: the operator stands in (FURNACE_TESTNET_KINDLING=1 deploys it)");
         }
@@ -750,6 +791,8 @@ contract DeployTestnet is Script, FurnaceTestnet {
         console2.log("QuoteYield       ", address(d.quoteYield));
         console2.log("SealedPotStream  ", address(d.sealedPot));
         console2.log("Hearth           ", address(d.hearth));
+        console2.log("Compounder       ", address(d.compounder));
+        console2.log("PermanentLiquidity", address(d.sink));
         console2.log("TestnetFeeRebate ", address(d.rebates));
         console2.log("TestnetFounders  ", address(d.founders));
         console2.log("ForgeLens        ", address(d.lens));
@@ -792,6 +835,7 @@ contract DeployTestnet is Script, FurnaceTestnet {
         vm.serializeAddress(k, "QuoteYield", address(d.quoteYield));
         vm.serializeAddress(k, "SealedPotStream", address(d.sealedPot));
         vm.serializeAddress(k, "Hearth", address(d.hearth));
+        vm.serializeAddress(k, "Compounder", address(d.compounder));
         vm.serializeAddress(k, "TestnetFeeRebate", address(d.rebates));
         vm.serializeAddress(k, "TestnetFounders", address(d.founders));
         for (uint256 i; i < 4; ++i) {

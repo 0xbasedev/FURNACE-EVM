@@ -26,6 +26,7 @@ const CONTRACTS = [
   ['BookedSplitter', 'BookedSplitter.sol'],
   ['SealedPotStream', 'SealedPotStream.sol'],
   ['Hearth', 'Hearth.sol'],
+  ['Compounder', 'Compounder.sol'],
   // Testnet-only stand-ins (contracts/script/testnet): never part of a canonical deployment.
   ['TestnetToken', 'TestnetStandIns.sol'],
   ['TestnetValuation', 'TestnetStandIns.sol'],
