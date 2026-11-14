@@ -98,5 +98,5 @@ Status: accepted for this repository. Not audited, not deployed.
 ## Consequences
 
 - **ForgePool has every immutable hook ADR 0010 listed.** Deeds, Taps, source-lot additions, Kindling positions, First Flame and the head start are all built. Its remaining dependencies are modules at mined addresses: Ignition, Kindling, the compounder, the Deed market, the Vent and Relics.
-- **Ignition owns the rest of the head-start rules:** the window, the first Deed per wallet, and the retained-value cap in LP terms.
+- **Ignition owns the rest of the head-start rules:** the window, the first Deed per wallet, and the retained-value cap in LP terms. *Update:* Ignition is built (ADR 0023). It grants once per wallet, within 7 days of Kindling's close, to a lot opened from Ignition's close, worth at most the USDC kept. Cold Storage USDC counts at $1; pool-0 LP at its fair TWAP value. The seconds are the lot's open time less Ignition's start.
 - **Not audited or deployed.**

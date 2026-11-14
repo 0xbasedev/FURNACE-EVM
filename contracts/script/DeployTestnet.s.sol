@@ -22,6 +22,7 @@ import {ERC20Burnable} from "@openzeppelin/contracts/token/ERC20/extensions/ERC2
 import {AshToken} from "../src/ash/AshToken.sol";
 import {AshLedger, IAshMint} from "../src/ash/AshLedger.sol";
 import {KindlingAshBonus, IKindlingBonusView, IAshBonusLedger} from "../src/ash/KindlingAshBonus.sol";
+import {Ignition, IIgnitionLedger, IIgnitionKindling, IIgnitionPair} from "../src/ignition/Ignition.sol";
 import {
     TestnetToken, TestnetValuation, TestnetPyreLedger, TestnetFeeRebate, TestnetFounders
 } from "./testnet/TestnetStandIns.sol";
@@ -50,7 +51,13 @@ interface ICreateX {
 ///         Mantle's KINDLING, BlastPool's initializer, pool 0's openKindling), so the smoke run can
 ///         seed the pairs at once. With FURNACE_TESTNET_KINDLING=1 the real Kindling, its
 ///         GenesisFeeEscrow and the permanent LP sink deploy at their predicted addresses and hold
-///         those slots: no EMBER exists until the event settles. Not audited.
+///         those slots: no EMBER exists until the event settles.
+///
+///         Ignition (ADR 0023) runs before Kindling. With FURNACE_TESTNET_IGNITION=1 (which needs
+///         the real Kindling too) the real Ignition deploys at its predicted address and is every
+///         pool's IGNITION and FOUNDERS and the ASH ledger's IGNITION; it farms tUSDC, tWETH and a
+///         tWBTC stand-in, its LP pool unbound. Kindling then opens after Ignition's free-exit
+///         window. Not audited.
 ///
 ///         The EMBER pairs (BlastPool, SmelterPool; ADR 0015) are an add-on: Forge pools 0 and 1
 ///         stake their CREATE3-predicted addresses, so the pairs can deploy in the same run (the
@@ -86,6 +93,9 @@ abstract contract FurnaceTestnet {
         AshToken ash; // ASH and its issuance ledger (ADR 0022)
         AshLedger ashLedger;
         KindlingAshBonus ashBonus; // with the real Kindling only; zero otherwise
+        bool ignitionLive; // the real Ignition holds its slots (else the operator stands in)
+        Ignition ignition; // at its predicted address in that mode; zero otherwise
+        IERC20 wbtc; // Ignition's tWBTC stand-in, in that mode
         TestnetFeeRebate rebates;
         TestnetFounders founders;
         TestnetValuation valuation;
@@ -99,6 +109,7 @@ abstract contract FurnaceTestnet {
     error Miswired(string what);
     error SaltVersionUsed(string version, address existing);
     error PairsAlreadyLive(address blastPool);
+    error IgnitionNeedsKindling();
 
     /// @notice Testnet chains this kit deploys to. Anything else is refused.
     function _isTestnet(uint256 chainId) internal pure returns (bool) {
@@ -134,6 +145,7 @@ abstract contract FurnaceTestnet {
         address ash;
         address ashLedger;
         address ashBonus;
+        address ignition;
     }
 
     function _poolLabel(uint256 i) internal pure returns (string memory) {
@@ -160,6 +172,7 @@ abstract contract FurnaceTestnet {
         pl.ash = _predict(deployer, _salt(deployer, version, "AshToken"));
         pl.ashLedger = _predict(deployer, _salt(deployer, version, "AshLedger"));
         pl.ashBonus = _predict(deployer, _salt(deployer, version, "KindlingAshBonus"));
+        pl.ignition = _predict(deployer, _salt(deployer, version, "Ignition"));
     }
 
     function _create3(Plan memory pl, string memory label, address predicted, bytes memory initCode)
@@ -180,6 +193,8 @@ abstract contract FurnaceTestnet {
         bool pairsNow; // deploy the EMBER pairs in this run (else later, with DeployTestnetPairs)
         bool kindling; // deploy the real Kindling, escrow and sink (else the operator stands in)
         uint256 kindlingStart; // when Kindling opens (its 24 h runs from here)
+        bool ignition; // deploy the real Ignition (needs the real Kindling)
+        uint256 ignitionStart; // when Ignition opens (its 120 h run from here)
     }
 
     /// @notice Deploy and wire everything. Every call must come from `deployer` (a broadcast or a
@@ -189,6 +204,9 @@ abstract contract FurnaceTestnet {
         if (address(CREATEX).codehash != CREATEX_CODEHASH) revert CreateXMissing(address(CREATEX).codehash);
         (d.deployer, d.operator, d.saltVersion, d.start) = (deployer, o.operator, o.version, o.start);
         d.kindlingLive = o.kindling;
+        d.ignitionLive = o.ignition;
+        // Genesis runs Ignition, then Kindling: the real Ignition reads Kindling's close.
+        if (o.ignition && !o.kindling) revert IgnitionNeedsKindling();
 
         // 1. Stand-ins (plain CREATE: nothing names them before they exist).
         d.valuation = new TestnetValuation(o.operator);
@@ -202,6 +220,7 @@ abstract contract FurnaceTestnet {
             ? IERC20(o.weth)
             : IERC20(address(new TestnetToken("Furnace Testnet WETH (stand-in)", "tWETH", 18, 1_000_000e18)));
         d.stake[3] = d.pairQuote[0]; // usdc-single
+        if (o.ignition) d.wbtc = IERC20(address(new TestnetToken("Furnace Testnet WBTC (stand-in)", "tWBTC", 8, 100e8)));
 
         // 2. Predict the core: each constructor names addresses deployed after it.
         Plan memory pl = _plan(deployer, o.version);
@@ -213,6 +232,7 @@ abstract contract FurnaceTestnet {
             d.stake[i] = IERC20(pl.pair[i]); // pools 0 and 1 stake the pairs' receipts, live or not
         }
         if (o.kindling) d.kindling = Kindling(pl.kindling); // BlastPool and pool 0 name it
+        if (o.ignition) d.ignition = Ignition(pl.ignition); // every pool and the ASH ledger name it
 
         // 3. Deploy in constructor-dependency order: EMBER and the Mantle store addresses only;
         //    the pairs read EMBER's and their quote's decimals; ForgeEmissions reads the Mantle and
@@ -224,6 +244,7 @@ abstract contract FurnaceTestnet {
         _deployVent(pl, d);
         if (o.kindling) _deployKindling(pl, d, o.kindlingStart);
         _deployAsh(pl, d);
+        if (o.ignition) _deployIgnition(pl, d, o.ignitionStart);
         _deployEmissionsAndBoost(pl, d);
         d.lens = new ForgeLens();
         _checkWiring(d);
@@ -289,6 +310,16 @@ abstract contract FurnaceTestnet {
         return address(d.kindling) != address(0) ? address(d.kindling) : d.operator;
     }
 
+    /// @notice Who grants the head start on every pool, and takes ASH's Ignition leaf.
+    function _ignitionSlot(Deployment memory d) internal pure returns (address) {
+        return address(d.ignition) != address(0) ? address(d.ignition) : d.operator;
+    }
+
+    /// @notice Every pool's founder record: Ignition's, else the TestnetFounders stand-in.
+    function _foundersSlot(Deployment memory d) internal pure returns (address) {
+        return address(d.ignition) != address(0) ? address(d.ignition) : address(d.founders);
+    }
+
     function _deployPools(Plan memory pl, Deployment memory d) internal {
         bool[4] memory isLp = [P.FORGE_POOL_0_IS_LP, P.FORGE_POOL_1_IS_LP, P.FORGE_POOL_2_IS_LP, P.FORGE_POOL_3_IS_LP];
         for (uint256 i; i < 4; ++i) {
@@ -300,19 +331,13 @@ abstract contract FurnaceTestnet {
             // Kindling's LP is EMBER/USDC, pool 0's receipt (spec v5.5 §3): Kindling or its stand-in.
             // Every pool reads the same founder record for First Flame (ADR 0018).
             address kindling = _kindlingSlot(d, i);
-            // The operator stands in for Ignition, the head start's granter, on every pool (ADR 0019).
+            // Ignition grants the head start (ADR 0019) and keeps the founder record (ADR 0018) on
+            // every pool; without it the operator and the TestnetFounders stand-in do.
             // The Vent collects every pool's fees (ADR 0020).
-            bytes memory args = abi.encode(
-                d.stake[i],
-                isLp[i],
-                pl.vent,
-                pl.boost,
-                d.operator,
-                flow,
-                compounder,
-                kindling,
-                address(d.founders),
-                d.operator
+            // Every argument is static, so the two halves concatenate to the full encoding.
+            bytes memory args = bytes.concat(
+                abi.encode(d.stake[i], isLp[i], pl.vent, pl.boost, d.operator),
+                abi.encode(flow, compounder, kindling, _foundersSlot(d), _ignitionSlot(d))
             );
             d.pools[i] =
                 ForgePool(_create3(pl, _poolLabel(i), pl.pool[i], abi.encodePacked(type(ForgePool).creationCode, args)));
@@ -371,12 +396,12 @@ abstract contract FurnaceTestnet {
     }
 
     /// @notice ASH (ADR 0022): the token names its ledger and the ledger its recipients, all by
-    ///         address. The operator stands in for Ignition and for the Forge's ASH distributor
-    ///         (neither is built); the Kindling bonus is real with the real Kindling.
+    ///         address. The operator stands in for the Forge's ASH distributor (not built), and for
+    ///         Ignition unless it is real; the Kindling bonus is real with the real Kindling.
     function _deployAsh(Plan memory pl, Deployment memory d) internal {
         d.ash = AshToken(_create3(pl, "AshToken", pl.ash, abi.encodePacked(type(AshToken).creationCode, abi.encode(pl.ashLedger))));
         address bonus = d.kindlingLive ? pl.ashBonus : d.operator;
-        bytes memory args = abi.encode(IAshMint(pl.ash), d.operator, bonus, d.operator, d.start);
+        bytes memory args = abi.encode(IAshMint(pl.ash), _ignitionSlot(d), bonus, d.operator, d.start);
         d.ashLedger = AshLedger(_create3(pl, "AshLedger", pl.ashLedger, abi.encodePacked(type(AshLedger).creationCode, args)));
         if (d.kindlingLive) {
             args = abi.encode(IKindlingBonusView(address(d.kindling)), ERC20Burnable(pl.ash), IAshBonusLedger(pl.ashLedger));
@@ -384,6 +409,18 @@ abstract contract FurnaceTestnet {
                 _create3(pl, "KindlingAshBonus", pl.ashBonus, abi.encodePacked(type(KindlingAshBonus).creationCode, args))
             );
         }
+    }
+
+    /// @notice The real Ignition (ADR 0023). It stores addresses only. It farms tUSDC (BlastPool's
+    ///         quote), tWETH (SmelterPool's) and tWBTC; the WETH/USDC LP stays unbound, and its
+    ///         weight goes to the other three. The operator is its Treasury.
+    function _deployIgnition(Plan memory pl, Deployment memory d, uint256 start) internal {
+        Ignition.Config memory c;
+        (c.usdc, c.weth, c.wbtc, c.lp) = (d.pairQuote[0], d.pairQuote[1], d.wbtc, IERC20(address(0)));
+        (c.ash, c.ledger, c.treasury) = (ERC20Burnable(pl.ash), IIgnitionLedger(pl.ashLedger), d.operator);
+        (c.coldStorage, c.lpPool, c.blastPool) = (ForgePool(pl.pool[3]), ForgePool(pl.pool[0]), IIgnitionPair(pl.pair[0]));
+        (c.kindling, c.start) = (IIgnitionKindling(pl.kindling), start);
+        d.ignition = Ignition(_create3(pl, "Ignition", pl.ignition, abi.encodePacked(type(Ignition).creationCode, abi.encode(c))));
     }
 
     function _deployEmissionsAndBoost(Plan memory pl, Deployment memory d) internal {
@@ -414,8 +451,8 @@ abstract contract FurnaceTestnet {
             if (p.FLOW() != (p.IS_LP() ? address(d.flow) : address(0))) revert Miswired("pool FLOW");
             if (p.COMPOUNDER() != (p.IS_LP() ? d.operator : address(0))) revert Miswired("pool COMPOUNDER");
             if (p.KINDLING() != _kindlingSlot(d, i)) revert Miswired("pool KINDLING");
-            if (p.FOUNDERS() != address(d.founders)) revert Miswired("pool FOUNDERS");
-            if (p.IGNITION() != d.operator) revert Miswired("pool IGNITION");
+            if (p.FOUNDERS() != _foundersSlot(d)) revert Miswired("pool FOUNDERS");
+            if (p.IGNITION() != _ignitionSlot(d)) revert Miswired("pool IGNITION");
             if (p.FEE_COLLECTOR() != address(d.vent)) revert Miswired("pool FEE_COLLECTOR");
         }
         Vent v = d.vent;
@@ -432,12 +469,25 @@ abstract contract FurnaceTestnet {
         if (f.COMPOUNDER() != d.operator) revert Miswired("Flow compounder");
         if (d.kindlingLive) _checkKindling(d);
         _checkAsh(d);
+        if (d.ignitionLive) _checkIgnition(d);
+    }
+
+    function _checkIgnition(Deployment memory d) internal view {
+        Ignition g = d.ignition;
+        if (address(g.USDC()) != address(d.pairQuote[0]) || address(g.WETH()) != address(d.pairQuote[1])) revert Miswired("Ignition tokens");
+        if (address(g.WBTC()) != address(d.wbtc) || address(g.LP()) != address(0)) revert Miswired("Ignition WBTC and LP");
+        if (address(g.ASH()) != address(d.ash) || address(g.LEDGER()) != address(d.ashLedger)) revert Miswired("Ignition ASH");
+        if (address(g.COLD_STORAGE()) != address(d.pools[3]) || address(g.LP_POOL()) != address(d.pools[0])) revert Miswired("Ignition pools");
+        if (address(g.BLASTPOOL()) != address(d.pairs[0]) || address(g.KINDLING()) != address(d.kindling)) revert Miswired("Ignition venue");
+        if (g.TREASURY() != d.operator) revert Miswired("Ignition Treasury");
+        // Kindling opens only after Ignition's free-exit window (spec v5.5 §2, §3).
+        if (d.kindling.START() < g.END() + P.IGNITION_EXIT_WINDOW) revert Miswired("Kindling before Ignition's exit window");
     }
 
     function _checkAsh(Deployment memory d) internal view {
         AshLedger l = d.ashLedger;
         if (d.ash.LEDGER() != address(l) || address(l.TOKEN()) != address(d.ash)) revert Miswired("ASH ledger");
-        if (l.IGNITION() != d.operator || l.FORGE() != d.operator || l.START() != d.start) revert Miswired("ASH recipients");
+        if (l.IGNITION() != _ignitionSlot(d) || l.FORGE() != d.operator || l.START() != d.start) revert Miswired("ASH recipients");
         if (l.KINDLING_BONUS() != (d.kindlingLive ? address(d.ashBonus) : d.operator)) revert Miswired("ASH bonus slot");
         if (d.kindlingLive) {
             KindlingAshBonus b = d.ashBonus;
@@ -465,6 +515,15 @@ abstract contract FurnaceTestnet {
         usdc.mint(actor, 1_000_000e6);
         usdc.approve(address(d.pools[3]), type(uint256).max);
         ids[3] = d.pools[3].open(100e6);
+        if (d.ignitionLive && block.timestamp >= d.ignition.START() && block.timestamp < d.ignition.END()) {
+            // Ignition is open: farm 1,000 tUSDC (auto-staked into Cold Storage at close) and
+            // 0.1 tWBTC.
+            usdc.approve(address(d.ignition), type(uint256).max);
+            d.ignition.deposit(0, 1_000e6, false);
+            TestnetToken(address(d.wbtc)).mint(actor, 1e8);
+            d.wbtc.approve(address(d.ignition), type(uint256).max);
+            d.ignition.deposit(2, 0.1e8, false);
+        }
         if (d.kindlingLive) {
             // No EMBER exists before Kindling settles: contribute the wallet cap to the genesis
             // event instead. Its minimum needs at least four such wallets (KindlingSettle).
@@ -511,7 +570,7 @@ abstract contract FurnaceTestnet {
         }
         d.pools[3].requestCooling(ids[3], 1e6);
         // The operator, standing in for Ignition, takes Ignition's 41,000 test ASH (ADR 0022).
-        if (actor == d.operator) d.ashLedger.releaseIgnition();
+        if (actor == d.operator && !d.ignitionLive) d.ashLedger.releaseIgnition();
     }
 
     /// @notice First liquidity: 50,000 EMBER with 50,000 tUSDC (1 USDC per EMBER) and 20,000
@@ -536,8 +595,11 @@ abstract contract FurnaceTestnet {
 ///         FURNACE_TESTNET_USDC and FURNACE_TESTNET_WETH (existing testnet tokens instead of the
 ///         stand-ins), FURNACE_TESTNET_PAIRS=later (leave the EMBER pairs for DeployTestnetPairs),
 ///         FURNACE_TESTNET_KINDLING=1 (the real Kindling, escrow and sink; KindlingSettle ends it)
-///         with FURNACE_TESTNET_KINDLING_START (default: the Mantle START), and
-///         FURNACE_TESTNET_SMOKE=1 (also run the smoke actions).
+///         with FURNACE_TESTNET_KINDLING_START (default: the Mantle START),
+///         FURNACE_TESTNET_IGNITION=1 (the real Ignition before it, with Kindling; IgnitionClose
+///         closes it) with FURNACE_TESTNET_IGNITION_START (default: now; Kindling and the Mantle
+///         then default to its free-exit window's end), and FURNACE_TESTNET_SMOKE=1 (also run the
+///         smoke actions).
 contract DeployTestnet is Script, FurnaceTestnet {
     function run() external returns (Deployment memory d) {
         vm.startBroadcast();
@@ -545,12 +607,16 @@ contract DeployTestnet is Script, FurnaceTestnet {
         Options memory o;
         o.operator = vm.envOr("FURNACE_TESTNET_OPERATOR", deployer);
         o.version = vm.envOr("FURNACE_TESTNET_SALT_VERSION", string("1"));
-        o.start = vm.envOr("FURNACE_TESTNET_START", block.timestamp);
+        o.ignition = vm.envOr("FURNACE_TESTNET_IGNITION", false);
+        o.ignitionStart = vm.envOr("FURNACE_TESTNET_IGNITION_START", block.timestamp);
+        // With Ignition, genesis continues where its free-exit window ends.
+        uint256 genesis = o.ignition ? o.ignitionStart + P.IGNITION_DURATION + P.IGNITION_EXIT_WINDOW : block.timestamp;
+        o.start = vm.envOr("FURNACE_TESTNET_START", genesis);
         o.usdc = vm.envOr("FURNACE_TESTNET_USDC", address(0));
         o.weth = vm.envOr("FURNACE_TESTNET_WETH", address(0));
         o.pairsNow = keccak256(bytes(vm.envOr("FURNACE_TESTNET_PAIRS", string("now")))) != keccak256("later");
-        o.kindling = vm.envOr("FURNACE_TESTNET_KINDLING", false);
-        o.kindlingStart = vm.envOr("FURNACE_TESTNET_KINDLING_START", o.start);
+        o.kindling = vm.envOr("FURNACE_TESTNET_KINDLING", o.ignition);
+        o.kindlingStart = vm.envOr("FURNACE_TESTNET_KINDLING_START", o.ignition ? genesis : o.start);
         d = _deploy(deployer, o);
         if (vm.envOr("FURNACE_TESTNET_SMOKE", false)) _smoke(d, deployer);
         vm.stopBroadcast();
@@ -589,6 +655,13 @@ contract DeployTestnet is Script, FurnaceTestnet {
         console2.log("AshToken         ", address(d.ash));
         console2.log("AshLedger        ", address(d.ashLedger));
         if (d.kindlingLive) console2.log("KindlingAshBonus ", address(d.ashBonus));
+        if (d.ignitionLive) {
+            console2.log("Ignition         ", address(d.ignition));
+            console2.log("  opens / closes ", d.ignition.START(), d.ignition.END());
+            console2.log("  tWBTC          ", address(d.wbtc));
+        } else {
+            console2.log("Ignition: the operator stands in (FURNACE_TESTNET_IGNITION=1 deploys it)");
+        }
         console2.log("TestnetFeeRebate ", address(d.rebates));
         console2.log("TestnetFounders  ", address(d.founders));
         console2.log("ForgeLens        ", address(d.lens));
@@ -623,6 +696,9 @@ contract DeployTestnet is Script, FurnaceTestnet {
         vm.serializeAddress(k, "AshToken", address(d.ash));
         vm.serializeAddress(k, "AshLedger", address(d.ashLedger));
         vm.serializeAddress(k, "KindlingAshBonus", address(d.ashBonus));
+        vm.serializeBool(k, "ignitionLive", d.ignitionLive);
+        vm.serializeAddress(k, "Ignition", address(d.ignition));
+        vm.serializeAddress(k, "IgnitionWbtc", address(d.wbtc));
         vm.serializeAddress(k, "TestnetFeeRebate", address(d.rebates));
         vm.serializeAddress(k, "TestnetFounders", address(d.founders));
         for (uint256 i; i < 4; ++i) {
@@ -714,5 +790,38 @@ contract KindlingSettle is Script {
         console2.log("Kindling status (0 live, 1 settled, 2 failed)", uint256(status));
         console2.log("accepted gross   ", k.accepted());
         console2.log("closedAt         ", k.closedAt());
+    }
+}
+
+/// @notice Closes the real testnet Ignition (ADR 0023): `forge script
+///         contracts/script/DeployTestnet.s.sol:IgnitionClose --rpc-url liteforge --broadcast
+///         --account <any keystore>`. Anyone may run it. From END it finalizes the farm (taking the
+///         41,000 test ASH and burning what accrued to nobody) and claims the caller's ASH; after
+///         the free-exit window it also stakes the caller's USDC into Cold Storage, unless the
+///         caller opted out. Reads `deployments/testnet-<chain id>.json`.
+contract IgnitionClose is Script {
+    error NoIgnition();
+
+    function run() external returns (uint256 claimed, uint256 positionId) {
+        string memory json = vm.readFile(_manifestPath());
+        if (!vm.keyExistsJson(json, ".Ignition")) revert NoIgnition();
+        Ignition g = Ignition(vm.parseJsonAddress(json, ".Ignition"));
+        if (address(g) == address(0)) revert NoIgnition();
+        vm.startBroadcast();
+        (, address me,) = vm.readCallers();
+        if (block.timestamp < g.END()) {
+            console2.log("Ignition is open until", g.END());
+        } else {
+            if (!g.finalized()) g.finalize();
+            if (g.pending(me) != 0) claimed = g.claim(me);
+            (bool optedOut,,,,,) = g.wallets(me);
+            if (block.timestamp >= g.END() + P.IGNITION_EXIT_WINDOW && !optedOut && g.accountOf(me, 0).principal != 0) {
+                (positionId,) = g.stakeUsdc(me);
+            }
+        }
+        vm.stopBroadcast();
+        console2.log("ASH burned at close", g.burned());
+        console2.log("ASH claimed       ", claimed);
+        console2.log("Cold Storage position", positionId);
     }
 }

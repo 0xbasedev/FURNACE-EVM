@@ -199,6 +199,19 @@ library FurnaceParams {
     uint256 internal constant KINDLING_CLOSE_BOUNTY_BPS = 5; // of accepted gross less cancellations, from the fees
     uint256 internal constant KINDLING_MIN_CONTRIBUTION_USD = 1; // whole dollars of gross per contribution [P]
 
+    // ── Ignition: the genesis farm, First Flame and the head start (spec v5.5 §2; ADR 0023) ──
+    uint256 internal constant IGNITION_DURATION = 432000; // 120 h; deposits and rewards stop exactly at END
+    uint256 internal constant IGNITION_FEE_BPS = 300; // 3% of each deposit to the Treasury at once, never refunded; floored
+    uint256 internal constant IGNITION_EXIT_WINDOW = 86400; // after END: every asset may leave fee-free; then USDC auto-stakes
+    uint256 internal constant IGNITION_EARLY_BIRD_PPM = 100000; // +10% at START, linear to +0% at END
+    uint256 internal constant IGNITION_WEIGHT_USDC = 100;
+    uint256 internal constant IGNITION_WEIGHT_WETH = 100;
+    uint256 internal constant IGNITION_WEIGHT_WBTC = 100;
+    uint256 internal constant IGNITION_WEIGHT_LP = 150; // an unbound LP pool gives its weight to the others [P]
+    uint256 internal constant IGNITION_HEAD_START_WINDOW = 7 days; // from Kindling's close
+    uint256 internal constant IGNITION_TWAP_SECONDS = 1800; // BlastPool's TWAP values pool-0 LP for the head-start cap [P]
+    uint256 internal constant IGNITION_ORACLE_MAX_AGE = 3600; // a longer TWAP span is stale: refuse [P]
+
     // ── Deterministic deployment registry (CREATE3). PROVISIONAL while the deployer is 0x1111111111111111111111111111111111111111 ──
     //    Only MINED entries become constants; unmined modules are constructor/initializer inputs.
     address internal constant CREATEX = 0xba5Ed099633D3B313e4D5F7bdc1305d3c28ba5Ed;

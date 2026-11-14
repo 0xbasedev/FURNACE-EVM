@@ -118,6 +118,15 @@ contract ForgePool is ForgePoolBase {
         return _open(owner, amount, false);
     }
 
+    /// @notice IGNITION only: open the auto-staked Cold Storage position of an Ignition depositor
+    ///         who did not opt out, with USDC pulled from Ignition, at the standard 1% deposit fee
+    ///         (spec v5.5 §2; ADR 0023). It starts like any position: age 0, a Streak from now.
+    function openIgnition(address owner, uint256 amount) external nonReentrant returns (uint256 id) {
+        if (msg.sender != IGNITION || IGNITION == address(0)) revert NotIgnition();
+        if (owner == address(0)) revert ZeroAddress();
+        return _open(owner, amount, false);
+    }
+
     /// @notice FLOW only: add a fee-free lot of same-route LP to `owner`'s own position; the
     ///         listing lock, a closed position and the bonus dilution apply as to `deposit`.
     function depositFor(uint256 id, address owner, uint256 amount) external nonReentrant {

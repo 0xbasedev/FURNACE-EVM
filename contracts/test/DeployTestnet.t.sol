@@ -14,6 +14,8 @@ import {Vent} from "../src/vent/Vent.sol";
 import {Mantle} from "../src/Mantle.sol";
 import {Kindling} from "../src/kindling/Kindling.sol";
 import {KindlingAshBonus} from "../src/ash/KindlingAshBonus.sol";
+import {Ignition} from "../src/ignition/Ignition.sol";
+import {ForgePoolBase} from "../src/forge/ForgePoolBase.sol";
 
 using ForgeView for ForgePool;
 
@@ -41,14 +43,39 @@ contract DeployTestnetTest is Test, FurnaceTestnet {
         returns (Deployment memory d)
     {
         vm.startPrank(who);
-        d = _deploy(who, Options(op, version, block.timestamp, address(0), address(0), pairsNow, false, 0));
+        d = _deploy(who, Options(op, version, block.timestamp, address(0), address(0), pairsNow, false, 0, false, 0));
         vm.stopPrank();
     }
 
     /// @dev The real-Kindling mode (ADR 0021), opening `start`.
     function _deployWithKindling(uint256 start) internal returns (Deployment memory d) {
         vm.startPrank(operator);
-        d = _deploy(operator, Options(operator, "1", block.timestamp, address(0), address(0), true, true, start));
+        d = _deploy(operator, Options(operator, "1", block.timestamp, address(0), address(0), true, true, start, false, 0));
+        vm.stopPrank();
+    }
+
+    /// @dev The full genesis (ADR 0023): Ignition at `ignitionStart`, then Kindling and the Mantle
+    ///         where its free-exit window ends.
+    function _deployWithIgnition(uint256 ignitionStart) internal returns (Deployment memory d) {
+        uint256 genesis = ignitionStart + P.IGNITION_DURATION + P.IGNITION_EXIT_WINDOW;
+        vm.startPrank(operator);
+        d = _deploy(operator, Options(operator, "1", genesis, address(0), address(0), true, true, genesis, true, ignitionStart));
+        vm.stopPrank();
+    }
+
+    /// @dev External, so a revert inside `_deploy` can be expected.
+    function deployIgnitionWithoutKindling() external {
+        vm.startPrank(operator);
+        _deploy(operator, Options(operator, "2", block.timestamp, address(0), address(0), true, false, 0, true, block.timestamp));
+        vm.stopPrank();
+    }
+
+    function _farm(Deployment memory d, address who, uint8 pool, uint256 gross) internal {
+        IERC20 token = pool == 0 ? d.pairQuote[0] : pool == 1 ? d.pairQuote[1] : d.wbtc;
+        vm.startPrank(who);
+        TestnetToken(address(token)).mint(who, gross);
+        token.approve(address(d.ignition), gross);
+        d.ignition.deposit(pool, gross, false);
         vm.stopPrank();
     }
 
@@ -381,5 +408,75 @@ contract DeployTestnetTest is Test, FurnaceTestnet {
         vm.expectRevert(KindlingAshBonus.NotSettled.selector);
         d.ashBonus.claim(c1);
         assertFalse(d.ashLedger.bonusReleased(), "and the ASH bonus is never minted");
+    }
+
+    /// The real Ignition: it farms, closes, auto-stakes USDC into the real Cold Storage, founds
+    /// First Flame, and dates a lot back to its start once Kindling has closed.
+    function test_theRealIgnitionRunsTheWholeGenesis() public {
+        uint256 t0 = block.timestamp + 1 hours;
+        Deployment memory d = _deployWithIgnition(t0);
+        Plan memory pl = _plan(operator, "1");
+        Ignition g = d.ignition;
+        assertTrue(d.ignitionLive);
+        assertEq(address(g), pl.ignition, "Ignition at its predicted address");
+        for (uint256 i; i < 4; ++i) {
+            assertEq(d.pools[i].IGNITION(), address(g), "every pool's head-start granter");
+            assertEq(d.pools[i].FOUNDERS(), address(g), "every pool's founder record");
+        }
+        assertEq(d.ashLedger.IGNITION(), address(g), "ASH's Ignition leaf");
+        assertEq(g.budgetOf(3), 0, "the LP pool is unbound");
+        assertEq(g.budgetOf(0), P.ASH_IGNITION_ALLOCATION / 3, "its weight goes to the three bound pools");
+        assertEq(d.kindling.START(), g.END() + P.IGNITION_EXIT_WINDOW, "Kindling opens after the free-exit window");
+
+        // The smoke run farms while Ignition is open.
+        vm.warp(t0);
+        vm.startPrank(operator);
+        uint256[4] memory ids = _smoke(d, operator);
+        vm.stopPrank();
+        assertEq(g.accountOf(operator, 0).principal, 970e6, "1,000 tUSDC less the 3% fee");
+        assertEq(g.accountOf(operator, 2).principal, 0.1e8 - 0.003e8);
+        address farmer = makeAddr("farmer");
+        _farm(d, farmer, 0, 20_000e6);
+        _farm(d, farmer, 1, 5e18);
+        vm.warp(t0 + P.IGNITION_DURATION / 2);
+        address late = makeAddr("late");
+        _farm(d, late, 1, 5e18);
+
+        // The close: the farm finalizes and pays; ASH outside the three pools' accrual burns.
+        vm.warp(g.END());
+        assertTrue(g.isFounder(farmer), "kept principal through close");
+        assertFalse(g.isFounder(makeAddr("nobody")));
+        uint256 paid = g.claim(farmer);
+        assertGt(g.claim(late), 0);
+        assertLt(g.claim(operator), paid, "the operator farmed less");
+        assertEq(d.ash.totalSupply(), P.ASH_IGNITION_ALLOCATION - g.burned(), "only the Ignition leaf, less its burn");
+
+        // After the free-exit window USDC auto-stakes into Cold Storage: the farmer's own position.
+        vm.warp(g.END() + P.IGNITION_EXIT_WINDOW);
+        (uint256 cold, uint256 staked) = g.stakeUsdc(farmer);
+        assertEq(staked, 19_400e6);
+        assertEq(d.pools[3].ownerOf(cold), farmer);
+        assertEq(d.pools[3].custodyOf(cold), 19_400e6 - 194e6, "at the standard 1% fee");
+        vm.prank(farmer);
+        g.withdraw(1, 4.85e18); // WETH is claimable fee-free
+
+        // Kindling runs and settles; its close opens the head-start window.
+        address[4] memory crowd = [makeAddr("c0"), makeAddr("c1"), makeAddr("c2"), makeAddr("c3")];
+        for (uint256 i; i < 4; ++i) _contributeTo(d, crowd[i], 25_000e6);
+        vm.warp(d.kindling.END());
+        d.kindling.settle();
+        vm.prank(farmer);
+        uint256 s = g.grantHeadStart(d.pools[3], cold, 0);
+        assertEq(s, g.END() + P.IGNITION_EXIT_WINDOW - t0, "dated back to Ignition's start");
+        ForgePoolBase.Position memory p = d.pools[3].positionOf(cold);
+        assertTrue(p.headStartActive);
+        assertEq(p.headStart, s);
+        // First Flame, read from Ignition's record.
+        assertTrue(d.pools[3].refreshFounder(cold));
+        assertTrue(d.pools[3].positionOf(cold).founder);
+        assertTrue(ids[3] != 0, "the smoke run opened its USDC position");
+        // Genesis order: the real Ignition reads Kindling's close, so it never deploys alone.
+        vm.expectRevert(IgnitionNeedsKindling.selector);
+        this.deployIgnitionWithoutKindling();
     }
 }

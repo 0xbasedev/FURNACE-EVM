@@ -10,6 +10,7 @@
 //   contracts/test/fixtures/flow-vectors.json    Flow zap scenarios (scripts/flow-model.ts)
 //   contracts/test/fixtures/vent-vectors.json    Vent scenarios (scripts/vent-model.ts)
 //   contracts/test/fixtures/kindling-vectors.json Kindling scenarios (scripts/kindling-model.ts)
+//   contracts/test/fixtures/ignition-vectors.json Ignition scenarios (scripts/ignition-model.ts)
 // Integer references (accounting.ts, BigInt) are matched EXACTLY by the Solidity
 // ports; the float display helper heatMultiplier within 1e-12.
 // pnpm gen --check exits non-zero if either output is stale (CI gate).
@@ -29,6 +30,7 @@ import { pairVectors, LP_PPM, BUY, SELL, D as PPM_ONE } from './pair-model';
 import { flowVectors } from './flow-model';
 import { ventVectors } from './vent-model';
 import { kindlingVectors } from './kindling-model';
+import { ignitionVectors } from './ignition-model';
 import { keccak_256 } from '@noble/hashes/sha3.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
 
@@ -41,6 +43,7 @@ const PAIR_VECTORS = 'contracts/test/fixtures/pair-vectors.json';
 const FLOW_VECTORS = 'contracts/test/fixtures/flow-vectors.json';
 const VENT_VECTORS = 'contracts/test/fixtures/vent-vectors.json';
 const KINDLING_VECTORS = 'contracts/test/fixtures/kindling-vectors.json';
+const IGNITION_VECTORS = 'contracts/test/fixtures/ignition-vectors.json';
 const DAY = 86_400n;
 
 /** Exact decimal → fixed-point integer string (shortest round-trip, never toFixed noise). */
@@ -502,6 +505,48 @@ c('uint256', 'KINDLING_MIN_CONTRIBUTION_USD', KINDLING_MIN_CONTRIBUTION_USD, 'wh
   if (staked < parseUnits(f.minStakeLp, 18)) throw new Error(`a $${KINDLING_MIN_CONTRIBUTION_USD} Kindling entitlement (${staked}) is below forge.minStakeLp`);
 }
 
+section('Ignition: the genesis farm, First Flame and the head start (spec v5.5 §2; ADR 0023)');
+{
+  const ig = cfg.ignition, pc = ig.principalAtClose;
+  const ignitionPolicy: [string, unknown, unknown][] = [
+    ['ignition.feeDestination', ig.feeDestination, 'treasury'],
+    ['ignition.withdrawDuringWindow.enabled', ig.withdrawDuringWindow.enabled, true],
+    ['ignition.withdrawDuringWindow.refundFee', ig.withdrawDuringWindow.refundFee, false],
+    ['ignition.exitFeePct', ig.exitFeePct, 0],
+    ['ignition.rewards.token', ig.rewards.token, 'ASH'],
+    ['ignition.rewards.mode', ig.rewards.mode, 'per-second-pro-rata'],
+    ['ignition.rewards.vesting', ig.rewards.vesting, 'none'],
+    ['ignition.founderBadge.enabled', ig.founderBadge.enabled, true],
+    ['ignition.heatHeadStart', ig.heatHeadStart, 'ignitionStart'],
+    ['ignition.principalAtClose.usdc', pc.usdc, 'autoStakeColdStorage'],
+    ['ignition.principalAtClose.usdcOptOutAtDeposit', pc.usdcOptOutAtDeposit, true],
+    ['ignition.principalAtClose.otherAssets', pc.otherAssets, 'claimableFeeFree'],
+    ['ignition.principalAtClose.headStartCappedToUsdKept', pc.headStartCappedToUsdKept, true],
+    ['ignition.earlyBird.enabled', ig.earlyBird.enabled, true],
+    ['ignition.earlyBird.shape', ig.earlyBird.shape, 'linear'],
+    ['ignition.pools', ig.pools.map((p) => p.stakeToken).join(), 'USDC,WETH,WBTC,WETH/USDC'],
+  ];
+  for (const [path, got, want] of ignitionPolicy) if (got !== want) throw new Error(`Ignition implements ${path} = ${String(want)}, config has ${String(got)}`);
+  if (ig.rewards.total !== cfg.shareToken.allocations.launch.ignition) throw new Error('ignition.rewards.total must equal the ASH Ignition leaf');
+  if (!(Number.isInteger(ig.durationHours) && ig.durationHours >= ig.minDurationHours && ig.durationHours <= ig.maxDurationHours)) throw new Error('ignition.durationHours must be whole hours within its bounds');
+  if (!(Number.isInteger(ig.depositFeePct) && ig.depositFeePct > 0 && ig.depositFeePct <= cfg.security.feeCeilings.genesisPct)) throw new Error('ignition.depositFeePct must be a whole percent within the genesis ceiling');
+  if (!(Number.isInteger(ig.exitWindowHours) && ig.exitWindowHours > 0)) throw new Error('ignition.exitWindowHours must be whole hours');
+  if (!(Number.isInteger(pc.headStartWindowDays) && pc.headStartWindowDays > 0)) throw new Error('ignition.principalAtClose.headStartWindowDays must be whole days');
+  if (!(Number.isInteger(ig.earlyBird.maxBonusPct) && ig.earlyBird.maxBonusPct > 0 && ig.earlyBird.maxBonusPct < 100)) throw new Error('ignition.earlyBird.maxBonusPct must be a whole percent');
+  for (const p of ig.pools) if (!(Number.isInteger(p.weight) && p.weight > 0)) throw new Error(`ignition pool ${p.id} weight must be a positive integer`);
+  c('uint256', 'IGNITION_DURATION', BigInt(ig.durationHours) * 3600n, `${ig.durationHours} h; deposits and rewards stop exactly at END`);
+  c('uint256', 'IGNITION_FEE_BPS', BigInt(ig.depositFeePct) * 100n, `${ig.depositFeePct}% of each deposit to the Treasury at once, never refunded; floored`);
+  c('uint256', 'IGNITION_EXIT_WINDOW', BigInt(ig.exitWindowHours) * 3600n, 'after END: every asset may leave fee-free; then USDC auto-stakes');
+  c('uint256', 'IGNITION_EARLY_BIRD_PPM', BigInt(ig.earlyBird.maxBonusPct) * 10_000n, `+${ig.earlyBird.maxBonusPct}% at START, linear to +0% at END`);
+  c('uint256', 'IGNITION_WEIGHT_USDC', ig.pools[0].weight);
+  c('uint256', 'IGNITION_WEIGHT_WETH', ig.pools[1].weight);
+  c('uint256', 'IGNITION_WEIGHT_WBTC', ig.pools[2].weight);
+  c('uint256', 'IGNITION_WEIGHT_LP', ig.pools[3].weight, 'an unbound LP pool gives its weight to the others [P]');
+  c('uint256', 'IGNITION_HEAD_START_WINDOW', `${pc.headStartWindowDays} days`, "from Kindling's close");
+  c('uint256', 'IGNITION_TWAP_SECONDS', twap, "BlastPool's TWAP values pool-0 LP for the head-start cap [P]");
+  c('uint256', 'IGNITION_ORACLE_MAX_AGE', 2 * twap, 'a longer TWAP span is stale: refuse [P]');
+}
+
 section(`Deterministic deployment registry (CREATE3). PROVISIONAL while the deployer is ${cfg.deployment.evm.deployer}`);
 lines.push('    //    Only MINED entries become constants; unmined modules are constructor/initializer inputs.');
 c('address', 'CREATEX', CREATEX_FACTORY);
@@ -651,7 +696,7 @@ vectors.squaredPrimitive.ray = vectors.squaredPrimitive.ageSeconds.map((a, i) =>
 const vectorsJson = JSON.stringify(vectors, null, 2) + '\n';
 
 // ── write or check ───────────────────────────────────────────────────────
-const outputs: [string, string][] = [[PARAMS, params], [SCHEDULE, scheduleSol], [VECTORS, vectorsJson], [FORGE_VECTORS, JSON.stringify(forgeVectors(), null, 1) + '\n'], [SETTLEMENT_VECTORS, JSON.stringify(settlementVectors(), null, 1) + '\n'], [PAIR_VECTORS, JSON.stringify(pairVectors(), null, 1) + '\n'], [FLOW_VECTORS, JSON.stringify(flowVectors(), null, 1) + '\n'], [VENT_VECTORS, JSON.stringify(ventVectors(), null, 1) + '\n'], [KINDLING_VECTORS, JSON.stringify(kindlingVectors(), null, 1) + '\n']];
+const outputs: [string, string][] = [[PARAMS, params], [SCHEDULE, scheduleSol], [VECTORS, vectorsJson], [FORGE_VECTORS, JSON.stringify(forgeVectors(), null, 1) + '\n'], [SETTLEMENT_VECTORS, JSON.stringify(settlementVectors(), null, 1) + '\n'], [PAIR_VECTORS, JSON.stringify(pairVectors(), null, 1) + '\n'], [FLOW_VECTORS, JSON.stringify(flowVectors(), null, 1) + '\n'], [VENT_VECTORS, JSON.stringify(ventVectors(), null, 1) + '\n'], [KINDLING_VECTORS, JSON.stringify(kindlingVectors(), null, 1) + '\n'], [IGNITION_VECTORS, JSON.stringify(ignitionVectors(), null, 1) + '\n']];
 if (process.argv.includes('--check')) {
   let stale = 0;
   for (const [p, body] of outputs) {
