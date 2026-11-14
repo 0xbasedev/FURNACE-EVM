@@ -59,6 +59,10 @@
     "file": "KindlingAshBonus.json",
     "testnetOnly": false
   },
+  "Ignition": {
+    "file": "Ignition.json",
+    "testnetOnly": false
+  },
   "TestnetToken": {
     "file": "TestnetToken.json",
     "testnetOnly": true

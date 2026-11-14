@@ -41,8 +41,8 @@ const TESTNET_NOTE: Record<(typeof MODULE_SLOTS)[number], string> = {
   Valuation: 'on the testnet it is a stand-in the operator sets',
   PyreLedger: "Relics' Pyre ledger; on the testnet it is a stand-in the operator sets",
   FeeRebate: "Relics' fee-rebate perk, read by Flow; on the testnet it is a stand-in the operator sets",
-  Founders: "Ignition's First Flame record, read by every pool (ADR 0018); on the testnet it is a stand-in the operator sets",
-  Ignition: "the head start's granter in every pool (ADR 0019), which keeps its 7-day window and value cap; on the testnet it is the operator's wallet",
+  Founders: "built (ADR 0023): Ignition itself keeps the First Flame record every pool reads (ADR 0018), so this slot holds Ignition's address; the testnet kit deploys it with FURNACE_TESTNET_IGNITION=1 (else a stand-in the operator sets)",
+  Ignition: "built (ADR 0023): the genesis farm paying ASH's 41,000 leaf, the head start's granter in every pool (ADR 0019) and Cold Storage's openIgnition caller; the testnet kit deploys it with FURNACE_TESTNET_IGNITION=1 (else the operator stands in), the mainnet needs its mined address, a START before Kindling's and the bound WETH/USDC LP",
 };
 const RECORD_KEYS = ['network', 'status', 'chainId', 'rpcUrl', 'explorerUrl', 'sources', 'pairsTrustWindow', 'usdc', 'smelterQuote', 'deployer', 'modules', 'audits'];
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;

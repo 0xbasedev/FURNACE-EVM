@@ -34,6 +34,7 @@
     "testnet:pairs:dry-run": "node tools/forge.mjs script contracts/script/DeployTestnet.s.sol:DeployTestnetPairs --rpc-url liteforge",
     "testnet:pairs:deploy": "node tools/forge.mjs script contracts/script/DeployTestnet.s.sol:DeployTestnetPairs --rpc-url liteforge --broadcast --slow",
     "testnet:kindling:settle": "node tools/forge.mjs script contracts/script/DeployTestnet.s.sol:KindlingSettle --rpc-url liteforge --broadcast --slow",
+    "testnet:ignition:close": "node tools/forge.mjs script contracts/script/DeployTestnet.s.sol:IgnitionClose --rpc-url liteforge --broadcast --slow",
     "mainnet:gate": "tsx scripts/mainnet-gate.ts",
     "mainnet:gate:check": "tsx scripts/mainnet-gate.ts --expect-blocked"
   },
