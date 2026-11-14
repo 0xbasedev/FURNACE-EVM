@@ -75,6 +75,10 @@
     "file": "SealedPotStream.json",
     "testnetOnly": false
   },
+  "Hearth": {
+    "file": "Hearth.json",
+    "testnetOnly": false
+  },
   "TestnetToken": {
     "file": "TestnetToken.json",
     "testnetOnly": true

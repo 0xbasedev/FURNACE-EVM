@@ -30,7 +30,7 @@ const TESTNET_NOTE: Record<(typeof MODULE_SLOTS)[number], string> = {
   GenesisFeeEscrow: "built (ADR 0021): Kindling's dedicated immutable fee and principal custody, naming Kindling and the Treasury; the mainnet needs its mined address",
   PermanentLiquidity: "built (ADR 0021): the irretrievable LP sink for Kindling's 10% and the later idle auto-pairing; the mainnet needs its mined address",
   FeeRouter: 'the Vent, built (ADR 0020); the testnet kit deploys it, the mainnet needs its mined address, registered with the Mantle as a Protocol burner',
-  Hearth: "the Vent's 10% Hearth share of Forge fees; on the testnet it is the operator's wallet",
+  Hearth: "built (ADR 0025): the Vent's HEARTH, paying its 10% share of Forge fees to staked ASH by per-asset indexes, with the 24 h exit cooldown; the testnet kit deploys it, the mainnet needs it at its mined CREATE3 address (0xEA27…)",
   Stakers: "built (ADR 0024): the Vent's STAKERS, a BookedSplitter paying the stayers' share of emergency-exit fees by stake-seconds; the mainnet needs its mined address",
   QuoteYield: "built (ADR 0024): the Vent's QUOTE_YIELD, a BookedSplitter paying the sell side's Quote yield by the Ashfall Heat² weight; the mainnet needs its mined address",
   Flow: 'built (ADR 0016); the testnet kit deploys it, the mainnet needs its mined address',

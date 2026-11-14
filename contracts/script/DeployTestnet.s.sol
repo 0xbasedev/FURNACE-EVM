@@ -27,6 +27,7 @@ import {EpochSplitter, IEpochMeasures} from "../src/yield/EpochSplitter.sol";
 import {ForgeAsh, IAshForgeLedger} from "../src/yield/ForgeAsh.sol";
 import {BookedSplitter} from "../src/yield/BookedSplitter.sol";
 import {SealedPotStream} from "../src/yield/SealedPotStream.sol";
+import {Hearth} from "../src/hearth/Hearth.sol";
 import {
     TestnetToken, TestnetValuation, TestnetPyreLedger, TestnetFeeRebate, TestnetFounders
 } from "./testnet/TestnetStandIns.sol";
@@ -104,6 +105,7 @@ abstract contract FurnaceTestnet {
         BookedSplitter stayers; // the Vent's STAKERS
         BookedSplitter quoteYield; // the Vent's QUOTE_YIELD
         SealedPotStream sealedPot; // ForgeEmissions' SEALED_POT
+        Hearth hearth; // the Vent's HEARTH (ADR 0025): staked ASH earns its fee share
         TestnetFeeRebate rebates;
         TestnetFounders founders;
         TestnetValuation valuation;
@@ -158,6 +160,7 @@ abstract contract FurnaceTestnet {
         address stayers;
         address quoteYield;
         address sealedPot;
+        address hearth;
     }
 
     function _poolLabel(uint256 i) internal pure returns (string memory) {
@@ -189,6 +192,7 @@ abstract contract FurnaceTestnet {
         pl.stayers = _predict(deployer, _salt(deployer, version, "Stayers"));
         pl.quoteYield = _predict(deployer, _salt(deployer, version, "QuoteYield"));
         pl.sealedPot = _predict(deployer, _salt(deployer, version, "SealedPotStream"));
+        pl.hearth = _predict(deployer, _salt(deployer, version, "Hearth"));
     }
 
     function _create3(Plan memory pl, string memory label, address predicted, bytes memory initCode)
@@ -262,6 +266,7 @@ abstract contract FurnaceTestnet {
         _deployAsh(pl, d);
         if (o.ignition) _deployIgnition(pl, d, o.ignitionStart);
         _deploySplitters(pl, d);
+        _deployHearth(pl, d);
         _deployEmissionsAndBoost(pl, d);
         d.lens = new ForgeLens();
         _checkWiring(d);
@@ -377,15 +382,15 @@ abstract contract FurnaceTestnet {
     }
 
     /// @notice The Vent reads only the Mantle's registrar record at construction, so it deploys
-    ///         before or after the pairs. Its stakers' and Quote-yield recipients are the epoch
-    ///         splitters (ADR 0024); the operator stands in for the Hearth, the Treasury, the Deed
-    ///         market and the compounder.
+    ///         before or after the pairs. Its Hearth is the real Hearth (ADR 0025), and its stakers'
+    ///         and Quote-yield recipients are the epoch splitters (ADR 0024); the operator stands in
+    ///         for the Treasury, the Deed market and the compounder.
     function _deployVent(Plan memory pl, Deployment memory d) internal {
         IVentFeePool[4] memory pools;
         for (uint256 i; i < 4; ++i) pools[i] = IVentFeePool(pl.pool[i]);
         IVentPair[2] memory pairs = [IVentPair(pl.pair[0]), IVentPair(pl.pair[1])];
         address op = d.operator;
-        bytes memory args = abi.encode(IERC20(pl.ember), IVentMantle(pl.mantle), pools, pairs, op, op, pl.stayers, pl.quoteYield, op, op);
+        bytes memory args = abi.encode(IERC20(pl.ember), IVentMantle(pl.mantle), pools, pairs, pl.hearth, op, pl.stayers, pl.quoteYield, op, op);
         d.vent = Vent(_create3(pl, "Vent", pl.vent, abi.encodePacked(type(Vent).creationCode, args)));
     }
 
@@ -458,6 +463,16 @@ abstract contract FurnaceTestnet {
         );
     }
 
+    /// @notice The Hearth (ADR 0025): staked test ASH earns the Vent's Hearth share in its fee
+    ///         assets, EMBER and each pair's quote. It stores addresses only. The operator is its
+    ///         Treasury, for batches booked while nothing is staked.
+    function _deployHearth(Plan memory pl, Deployment memory d) internal {
+        address[] memory assets = new address[](3);
+        (assets[0], assets[1], assets[2]) = (pl.ember, address(d.pairQuote[0]), address(d.pairQuote[1]));
+        bytes memory args = abi.encode(IERC20(pl.ash), d.operator, assets);
+        d.hearth = Hearth(_create3(pl, "Hearth", pl.hearth, abi.encodePacked(type(Hearth).creationCode, args)));
+    }
+
     function _deployEmissionsAndBoost(Plan memory pl, Deployment memory d) internal {
         bytes memory args =
             abi.encode(IMantleDistribution(pl.mantle), IERC20(pl.ember), d.pools, pl.boost, d.operator, pl.sealedPot);
@@ -495,7 +510,7 @@ abstract contract FurnaceTestnet {
         if (address(v.POOL_0()) != address(d.pools[0]) || address(v.POOL_1()) != address(d.pools[1])) revert Miswired("Vent pools");
         if (address(v.POOL_2()) != address(d.pools[2]) || address(v.POOL_3()) != address(d.pools[3])) revert Miswired("Vent pools");
         if (address(v.PAIR_0()) != address(d.pairs[0]) || address(v.PAIR_1()) != address(d.pairs[1])) revert Miswired("Vent pairs");
-        if (v.HEARTH() != d.operator || v.TREASURY() != d.operator || v.STAKERS() != address(d.stayers)) revert Miswired("Vent recipients");
+        if (v.HEARTH() != address(d.hearth) || v.TREASURY() != d.operator || v.STAKERS() != address(d.stayers)) revert Miswired("Vent recipients");
         if (v.QUOTE_YIELD() != address(d.quoteYield) || v.DEEDS() != d.operator || v.COMPOUNDER() != d.operator) revert Miswired("Vent slots");
         Flow f = d.flow;
         if (address(f.PAIR0()) != address(d.pairs[0]) || address(f.PAIR1()) != address(d.pairs[1])) revert Miswired("Flow pairs");
@@ -506,6 +521,15 @@ abstract contract FurnaceTestnet {
         _checkAsh(d);
         if (d.ignitionLive) _checkIgnition(d);
         _checkSplitters(d);
+        _checkHearth(d);
+    }
+
+    function _checkHearth(Deployment memory d) internal view {
+        Hearth h = d.hearth;
+        if (address(h.ASH()) != address(d.ash) || h.TREASURY() != d.operator || h.ASSET_COUNT() != 3) revert Miswired("Hearth");
+        if (h.assetAt(0) != address(d.ember) || h.assetAt(1) != address(d.pairQuote[0]) || h.assetAt(2) != address(d.pairQuote[1])) {
+            revert Miswired("Hearth assets");
+        }
     }
 
     function _checkSplitters(Deployment memory d) internal view {
@@ -624,7 +648,12 @@ abstract contract FurnaceTestnet {
         }
         d.pools[3].requestCooling(ids[3], 1e6);
         // The operator, standing in for Ignition, takes Ignition's 41,000 test ASH (ADR 0022).
-        if (actor == d.operator && !d.ignitionLive) d.ashLedger.releaseIgnition();
+        if (actor == d.operator && !d.ignitionLive) {
+            d.ashLedger.releaseIgnition();
+            // ...and stakes 1,000 of it in the Hearth, which then earns the Vent's Hearth share (ADR 0025).
+            IERC20(address(d.ash)).approve(address(d.hearth), 1_000e18);
+            d.hearth.stake(1_000e18);
+        }
     }
 
     /// @notice First liquidity: 50,000 EMBER with 50,000 tUSDC (1 USDC per EMBER) and 20,000
@@ -720,6 +749,7 @@ contract DeployTestnet is Script, FurnaceTestnet {
         console2.log("Stayers          ", address(d.stayers));
         console2.log("QuoteYield       ", address(d.quoteYield));
         console2.log("SealedPotStream  ", address(d.sealedPot));
+        console2.log("Hearth           ", address(d.hearth));
         console2.log("TestnetFeeRebate ", address(d.rebates));
         console2.log("TestnetFounders  ", address(d.founders));
         console2.log("ForgeLens        ", address(d.lens));
@@ -761,6 +791,7 @@ contract DeployTestnet is Script, FurnaceTestnet {
         vm.serializeAddress(k, "Stayers", address(d.stayers));
         vm.serializeAddress(k, "QuoteYield", address(d.quoteYield));
         vm.serializeAddress(k, "SealedPotStream", address(d.sealedPot));
+        vm.serializeAddress(k, "Hearth", address(d.hearth));
         vm.serializeAddress(k, "TestnetFeeRebate", address(d.rebates));
         vm.serializeAddress(k, "TestnetFounders", address(d.founders));
         for (uint256 i; i < 4; ++i) {

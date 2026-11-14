@@ -4,7 +4,7 @@
 
 Each entry is a gap or ambiguity in the sealed spec (`canonical/`, v5.5.0, pinned by `SHA256SUMS.json` and the config hash; see [SPEC-SEAL.md](SPEC-SEAL.md)). Each was read as recommended, under the owner's standing rule ("Always choose your recommendations"), and marked [P] in its ADR. **Every entry is a deploy blocker until the owner confirms it.** To confirm or change one, edit its ADR (drop the [P] and record the decision), then run `pnpm provisional`. `pnpm check` fails while this file is stale.
 
-**92 provisional readings across 17 ADRs.**
+**97 provisional readings across 18 ADRs.**
 
 ## [ADR 0004](adr/0004-forge-custody.md): Forge custody core
 
@@ -148,3 +148,11 @@ Each entry is a gap or ambiguity in the sealed spec (`canonical/`, v5.5.0, pinne
 5. `P-0024-5` **Shares follow the position:** they are paid to its owner at claim time and wait while it is listed, as base rewards do.
 6. `P-0024-6` **An epoch with a zero total rolls its whole budget to the next,** and only when someone rolls it.
 7. `P-0024-7` **Unclaimed shares never expire.**
+
+## [ADR 0025](adr/0025-hearth.md): The Hearth, where staked ASH earns the Vent's fee share
+
+1. `P-0025-1` **A batch booked while nothing is staked is owed to the Treasury.** Anyone may release it with `releaseToTreasury(asset)`. It had no stakeholder when it was realized, and the first staker after it must not capture it.
+2. `P-0025-2` **A wallet has one pending exit.** A second request adds to it and restarts the 24 h clock for the whole amount.
+3. `P-0025-3` **A pending exit can be cancelled back into stake** at any time until it is withdrawn. It earns again from the cancel, not for its time in the cooldown.
+4. `P-0025-4` **The fee assets are fixed at deployment.** Anything else sent to the Hearth, ASH included, stays there: there is no rescue path to abuse.
+5. `P-0025-5` **Claims pay the staker that calls,** for any asset or all of them. Unclaimed fees never expire.

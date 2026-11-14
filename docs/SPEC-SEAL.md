@@ -24,6 +24,7 @@ Sealed 2026-11-14, at the owner's word: "Seal the specs now and finish it."
 | GenesisFeeEscrow, Kindling and the permanent LP sink | built (ADR 0021) |
 | Ignition | built (ADR 0023; PR #24) |
 | ForgeAsh, the stayers' share, Quote yield and the Sealed-pot stream | built (ADR 0024; PR #25) |
+| Hearth | built (ADR 0025; PR #26) |
 | BlastPool / SmelterPool | built (ADR 0015) |
 | FeeRouter (the Vent) | built (ADR 0020) |
 | Flow | built (ADR 0016) |
@@ -44,7 +45,7 @@ Each step is one PR, held to the same bar as every module so far:
    - `ForgeAsh` streams the Forge's 28,000 ASH to Forge stakers by the pools' ASH weights (500/200/300/0).
    - `Stakers` gets emergency-exit fees, `QuoteYield` is the Heat²-weighted sell-side yield, and `SealedPot` streams Seal forfeits.
    - These are four slots with one shape: pull fixed inflows, distribute by a published weight.
-3. **Hearth**: ASH staking with funded local fee-asset indexes, fed by the Vent's 10%.
+3. ~~**Hearth**~~ (done; PR #26, ADR 0025): ASH staking with funded local fee-asset indexes, fed by the Vent's 10%.
 4. **The match reserve and the compounder.**
    - The match reserve is the Vent's reserved quote, plus ForgeEmissions' match ledger and the idle auto-pairing into the permanent sink.
    - The compounder is Casting and Stoke into LP, through Flow's waiver and the pools' `addToLot`.
