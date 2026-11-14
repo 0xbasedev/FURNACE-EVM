@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
+import {Vm} from "forge-std/Vm.sol";
 import {ERC20Burnable} from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
 import {FurnaceParams as P} from "../src/generated/FurnaceParams.sol";
 import {AshToken} from "../src/ash/AshToken.sol";
@@ -189,7 +190,17 @@ contract AshTest is KindlingRig {
         w; // the world is only needed for its settled Kindling
         address[] memory page = new address[](6);
         for (uint256 i; i < 6; ++i) page[i] = _wallet(i);
+        vm.recordLogs();
         assertEq(a.bonus.claimMany(page), P.ASH_KINDLING_BONUS, "four equal shares, no remainder");
+        // Wallets that never contributed are skipped outright: never marked, no Claimed event.
+        assertFalse(a.bonus.claimed(_wallet(4)), "a non-contributor is not marked");
+        assertFalse(a.bonus.claimed(_wallet(5)));
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        uint256 events;
+        for (uint256 i; i < logs.length; ++i) {
+            if (logs[i].emitter == address(a.bonus) && logs[i].topics[0] == KindlingAshBonus.Claimed.selector) ++events;
+        }
+        assertEq(events, 4, "one Claimed per contributor, none for the others");
         assertEq(a.bonus.claimMany(page), 0, "a second page pays nothing");
     }
 
