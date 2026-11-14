@@ -52,7 +52,7 @@ The spec (§8, §12) and config (`emissions.ashfall`, `execution.ashfall`) defin
 
 **5. Every held ledger has one consumer.**
 - **[P] Burn lane.** Permissionless `burnForfeits()` burns it through the Mantle's distributor-only `burnForfeited`. That is a recognized burn (the ledger shrinks, headroom reopens) with **no Ashfall credit**, because Seal forfeits are not among the config's Ashfall sources.
-- **Pulls.** The Capstone (`takeCapstone(pool, id)`), the match reserve (`takeMatchReserve()`) and the Sealed-pot stream (`takeSealedPot(pool)`) pull their ledgers.
+- **Pulls.** The Capstone (`takeCapstone(pool, id)`), the match reserve (`takeMatchReserve()`) and the Sealed-pot stream (`takeSealedPot(pool)`) pull their ledgers. *Update:* the Sealed-pot stream is built (`SealedPotStream`, ADR 0024): `pull(pool)` streams a pool's pot over the next 30 epochs [P, recorded in ADR 0024] to running Seals by their Conviction measure, never as a new mint.
   - Their addresses are immutable and must be nonzero at deployment.
   - Until a consumer exists, its EMBER stays in `ForgeEmissions`.
   - No consumer address is invented: these identities are not in the registry and still have to be mined.
@@ -75,7 +75,7 @@ The spec (§8, §12) and config (`emissions.ashfall`, `execution.ashfall`) defin
 These were found or confirmed here and are **not built**:
 - ~~**The Capstone Heat bonus.**~~ The hook is built in [ADR 0008](0008-ordinary-bonus.md): ForgePool's records carry an ordinary bonus (Capstone + Pyre) that `BOOST` sets. The Boost and Capstone contracts are still required.
 - **The Capstone, the matching and match-reserve contracts, and the Sealed-pot stream contract,** at mined addresses.
-- **The emergency exit's "stayers" share** (25% of the 8% fee) goes to `FEE_COLLECTOR` with the rest of the fee. The Vent, the collector, owes it to an immutable `STAKERS` distributor, which is not built (ADR 0020 [P]).
+- **The emergency exit's "stayers" share** (25% of the 8% fee) goes to `FEE_COLLECTOR` with the rest of the fee. The Vent, the collector, owes it to an immutable `STAKERS` distributor, which ADR 0024 builds: a `BookedSplitter` paying by stake-seconds (ADR 0020 [P]).
 - **Relic perks** (shorter claim timers), **Quote yield** and **Pyre**.
 
 ## Gas (`pnpm gas`: forge `--isolate`, optimizer 500 runs, solc-js 0.8.28)

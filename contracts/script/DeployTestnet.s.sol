@@ -23,6 +23,10 @@ import {AshToken} from "../src/ash/AshToken.sol";
 import {AshLedger, IAshMint} from "../src/ash/AshLedger.sol";
 import {KindlingAshBonus, IKindlingBonusView, IAshBonusLedger} from "../src/ash/KindlingAshBonus.sol";
 import {Ignition, IIgnitionLedger, IIgnitionKindling, IIgnitionPair} from "../src/ignition/Ignition.sol";
+import {EpochSplitter, IEpochMeasures} from "../src/yield/EpochSplitter.sol";
+import {ForgeAsh, IAshForgeLedger} from "../src/yield/ForgeAsh.sol";
+import {BookedSplitter} from "../src/yield/BookedSplitter.sol";
+import {SealedPotStream} from "../src/yield/SealedPotStream.sol";
 import {
     TestnetToken, TestnetValuation, TestnetPyreLedger, TestnetFeeRebate, TestnetFounders
 } from "./testnet/TestnetStandIns.sol";
@@ -96,6 +100,10 @@ abstract contract FurnaceTestnet {
         bool ignitionLive; // the real Ignition holds its slots (else the operator stands in)
         Ignition ignition; // at its predicted address in that mode; zero otherwise
         IERC20 wbtc; // Ignition's tWBTC stand-in, in that mode
+        ForgeAsh forgeAsh; // the epoch splitters (ADR 0024): the ASH ledger's FORGE
+        BookedSplitter stayers; // the Vent's STAKERS
+        BookedSplitter quoteYield; // the Vent's QUOTE_YIELD
+        SealedPotStream sealedPot; // ForgeEmissions' SEALED_POT
         TestnetFeeRebate rebates;
         TestnetFounders founders;
         TestnetValuation valuation;
@@ -146,6 +154,10 @@ abstract contract FurnaceTestnet {
         address ashLedger;
         address ashBonus;
         address ignition;
+        address forgeAsh;
+        address stayers;
+        address quoteYield;
+        address sealedPot;
     }
 
     function _poolLabel(uint256 i) internal pure returns (string memory) {
@@ -173,6 +185,10 @@ abstract contract FurnaceTestnet {
         pl.ashLedger = _predict(deployer, _salt(deployer, version, "AshLedger"));
         pl.ashBonus = _predict(deployer, _salt(deployer, version, "KindlingAshBonus"));
         pl.ignition = _predict(deployer, _salt(deployer, version, "Ignition"));
+        pl.forgeAsh = _predict(deployer, _salt(deployer, version, "ForgeAsh"));
+        pl.stayers = _predict(deployer, _salt(deployer, version, "Stayers"));
+        pl.quoteYield = _predict(deployer, _salt(deployer, version, "QuoteYield"));
+        pl.sealedPot = _predict(deployer, _salt(deployer, version, "SealedPotStream"));
     }
 
     function _create3(Plan memory pl, string memory label, address predicted, bytes memory initCode)
@@ -245,6 +261,7 @@ abstract contract FurnaceTestnet {
         if (o.kindling) _deployKindling(pl, d, o.kindlingStart);
         _deployAsh(pl, d);
         if (o.ignition) _deployIgnition(pl, d, o.ignitionStart);
+        _deploySplitters(pl, d);
         _deployEmissionsAndBoost(pl, d);
         d.lens = new ForgeLens();
         _checkWiring(d);
@@ -360,14 +377,15 @@ abstract contract FurnaceTestnet {
     }
 
     /// @notice The Vent reads only the Mantle's registrar record at construction, so it deploys
-    ///         before or after the pairs. The operator stands in for the Hearth, the Treasury, the
-    ///         stakers' and Quote-yield distributors, the Deed market and the compounder.
+    ///         before or after the pairs. Its stakers' and Quote-yield recipients are the epoch
+    ///         splitters (ADR 0024); the operator stands in for the Hearth, the Treasury, the Deed
+    ///         market and the compounder.
     function _deployVent(Plan memory pl, Deployment memory d) internal {
         IVentFeePool[4] memory pools;
         for (uint256 i; i < 4; ++i) pools[i] = IVentFeePool(pl.pool[i]);
         IVentPair[2] memory pairs = [IVentPair(pl.pair[0]), IVentPair(pl.pair[1])];
         address op = d.operator;
-        bytes memory args = abi.encode(IERC20(pl.ember), IVentMantle(pl.mantle), pools, pairs, op, op, op, op, op, op);
+        bytes memory args = abi.encode(IERC20(pl.ember), IVentMantle(pl.mantle), pools, pairs, op, op, pl.stayers, pl.quoteYield, op, op);
         d.vent = Vent(_create3(pl, "Vent", pl.vent, abi.encodePacked(type(Vent).creationCode, args)));
     }
 
@@ -396,12 +414,12 @@ abstract contract FurnaceTestnet {
     }
 
     /// @notice ASH (ADR 0022): the token names its ledger and the ledger its recipients, all by
-    ///         address. The operator stands in for the Forge's ASH distributor (not built), and for
+    ///         address. ForgeAsh (ADR 0024) receives the Forge's vesting; the operator stands in for
     ///         Ignition unless it is real; the Kindling bonus is real with the real Kindling.
     function _deployAsh(Plan memory pl, Deployment memory d) internal {
         d.ash = AshToken(_create3(pl, "AshToken", pl.ash, abi.encodePacked(type(AshToken).creationCode, abi.encode(pl.ashLedger))));
         address bonus = d.kindlingLive ? pl.ashBonus : d.operator;
-        bytes memory args = abi.encode(IAshMint(pl.ash), _ignitionSlot(d), bonus, d.operator, d.start);
+        bytes memory args = abi.encode(IAshMint(pl.ash), _ignitionSlot(d), bonus, pl.forgeAsh, d.start);
         d.ashLedger = AshLedger(_create3(pl, "AshLedger", pl.ashLedger, abi.encodePacked(type(AshLedger).creationCode, args)));
         if (d.kindlingLive) {
             args = abi.encode(IKindlingBonusView(address(d.kindling)), ERC20Burnable(pl.ash), IAshBonusLedger(pl.ashLedger));
@@ -423,9 +441,26 @@ abstract contract FurnaceTestnet {
         d.ignition = Ignition(_create3(pl, "Ignition", pl.ignition, abi.encodePacked(type(Ignition).creationCode, abi.encode(c))));
     }
 
+    /// @notice The epoch splitters (ADR 0024). Each stores ForgeEmissions' predicted address and
+    ///         reads it only when paying, so they deploy before it.
+    function _deploySplitters(Plan memory pl, Deployment memory d) internal {
+        IEpochMeasures m = IEpochMeasures(pl.emissions);
+        bytes memory args = abi.encode(m, IERC20(pl.ash), IAshForgeLedger(pl.ashLedger));
+        d.forgeAsh = ForgeAsh(_create3(pl, "ForgeAsh", pl.forgeAsh, abi.encodePacked(type(ForgeAsh).creationCode, args)));
+        args = abi.encode(m, EpochSplitter.Measure.Stake);
+        d.stayers = BookedSplitter(_create3(pl, "Stayers", pl.stayers, abi.encodePacked(type(BookedSplitter).creationCode, args)));
+        args = abi.encode(m, EpochSplitter.Measure.Ashfall);
+        d.quoteYield =
+            BookedSplitter(_create3(pl, "QuoteYield", pl.quoteYield, abi.encodePacked(type(BookedSplitter).creationCode, args)));
+        args = abi.encode(m, IERC20(pl.ember));
+        d.sealedPot = SealedPotStream(
+            _create3(pl, "SealedPotStream", pl.sealedPot, abi.encodePacked(type(SealedPotStream).creationCode, args))
+        );
+    }
+
     function _deployEmissionsAndBoost(Plan memory pl, Deployment memory d) internal {
         bytes memory args =
-            abi.encode(IMantleDistribution(pl.mantle), IERC20(pl.ember), d.pools, pl.boost, d.operator, d.operator);
+            abi.encode(IMantleDistribution(pl.mantle), IERC20(pl.ember), d.pools, pl.boost, d.operator, pl.sealedPot);
         d.emissions = ForgeEmissions(
             _create3(pl, "ForgeEmissions", pl.emissions, abi.encodePacked(type(ForgeEmissions).creationCode, args))
         );
@@ -460,8 +495,8 @@ abstract contract FurnaceTestnet {
         if (address(v.POOL_0()) != address(d.pools[0]) || address(v.POOL_1()) != address(d.pools[1])) revert Miswired("Vent pools");
         if (address(v.POOL_2()) != address(d.pools[2]) || address(v.POOL_3()) != address(d.pools[3])) revert Miswired("Vent pools");
         if (address(v.PAIR_0()) != address(d.pairs[0]) || address(v.PAIR_1()) != address(d.pairs[1])) revert Miswired("Vent pairs");
-        if (v.HEARTH() != d.operator || v.TREASURY() != d.operator || v.STAKERS() != d.operator) revert Miswired("Vent recipients");
-        if (v.QUOTE_YIELD() != d.operator || v.DEEDS() != d.operator || v.COMPOUNDER() != d.operator) revert Miswired("Vent slots");
+        if (v.HEARTH() != d.operator || v.TREASURY() != d.operator || v.STAKERS() != address(d.stayers)) revert Miswired("Vent recipients");
+        if (v.QUOTE_YIELD() != address(d.quoteYield) || v.DEEDS() != d.operator || v.COMPOUNDER() != d.operator) revert Miswired("Vent slots");
         Flow f = d.flow;
         if (address(f.PAIR0()) != address(d.pairs[0]) || address(f.PAIR1()) != address(d.pairs[1])) revert Miswired("Flow pairs");
         if (address(f.POOL0()) != address(d.pools[0]) || address(f.POOL1()) != address(d.pools[1])) revert Miswired("Flow pools");
@@ -470,6 +505,25 @@ abstract contract FurnaceTestnet {
         if (d.kindlingLive) _checkKindling(d);
         _checkAsh(d);
         if (d.ignitionLive) _checkIgnition(d);
+        _checkSplitters(d);
+    }
+
+    function _checkSplitters(Deployment memory d) internal view {
+        if (d.emissions.SEALED_POT() != address(d.sealedPot)) revert Miswired("ForgeEmissions.SEALED_POT");
+        EpochSplitter[4] memory s = [EpochSplitter(d.forgeAsh), d.stayers, d.quoteYield, d.sealedPot];
+        EpochSplitter.Measure[4] memory m = [
+            EpochSplitter.Measure.Ordinary,
+            EpochSplitter.Measure.Stake,
+            EpochSplitter.Measure.Ashfall,
+            EpochSplitter.Measure.Conviction
+        ];
+        for (uint256 i; i < 4; ++i) {
+            if (address(s[i].EMISSIONS()) != address(d.emissions) || s[i].MEASURE() != m[i]) revert Miswired("splitter");
+        }
+        if (address(d.forgeAsh.ASH()) != address(d.ash) || address(d.forgeAsh.LEDGER()) != address(d.ashLedger)) revert Miswired("ForgeAsh");
+        if (address(d.sealedPot.EMBER()) != address(d.ember)) revert Miswired("SealedPotStream");
+        // ForgeAsh slices the ledger's curve on ForgeEmissions' clock: the two must start together.
+        if (d.ashLedger.START() != d.emissions.START()) revert Miswired("ASH vesting and epoch clocks");
     }
 
     function _checkIgnition(Deployment memory d) internal view {
@@ -487,7 +541,7 @@ abstract contract FurnaceTestnet {
     function _checkAsh(Deployment memory d) internal view {
         AshLedger l = d.ashLedger;
         if (d.ash.LEDGER() != address(l) || address(l.TOKEN()) != address(d.ash)) revert Miswired("ASH ledger");
-        if (l.IGNITION() != _ignitionSlot(d) || l.FORGE() != d.operator || l.START() != d.start) revert Miswired("ASH recipients");
+        if (l.IGNITION() != _ignitionSlot(d) || l.FORGE() != address(d.forgeAsh) || l.START() != d.start) revert Miswired("ASH recipients");
         if (l.KINDLING_BONUS() != (d.kindlingLive ? address(d.ashBonus) : d.operator)) revert Miswired("ASH bonus slot");
         if (d.kindlingLive) {
             KindlingAshBonus b = d.ashBonus;
@@ -662,6 +716,10 @@ contract DeployTestnet is Script, FurnaceTestnet {
         } else {
             console2.log("Ignition: the operator stands in (FURNACE_TESTNET_IGNITION=1 deploys it)");
         }
+        console2.log("ForgeAsh         ", address(d.forgeAsh));
+        console2.log("Stayers          ", address(d.stayers));
+        console2.log("QuoteYield       ", address(d.quoteYield));
+        console2.log("SealedPotStream  ", address(d.sealedPot));
         console2.log("TestnetFeeRebate ", address(d.rebates));
         console2.log("TestnetFounders  ", address(d.founders));
         console2.log("ForgeLens        ", address(d.lens));
@@ -699,6 +757,10 @@ contract DeployTestnet is Script, FurnaceTestnet {
         vm.serializeBool(k, "ignitionLive", d.ignitionLive);
         vm.serializeAddress(k, "Ignition", address(d.ignition));
         vm.serializeAddress(k, "IgnitionWbtc", address(d.wbtc));
+        vm.serializeAddress(k, "ForgeAsh", address(d.forgeAsh));
+        vm.serializeAddress(k, "Stayers", address(d.stayers));
+        vm.serializeAddress(k, "QuoteYield", address(d.quoteYield));
+        vm.serializeAddress(k, "SealedPotStream", address(d.sealedPot));
         vm.serializeAddress(k, "TestnetFeeRebate", address(d.rebates));
         vm.serializeAddress(k, "TestnetFounders", address(d.founders));
         for (uint256 i; i < 4; ++i) {

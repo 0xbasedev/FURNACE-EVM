@@ -11,6 +11,7 @@
 //   contracts/test/fixtures/vent-vectors.json    Vent scenarios (scripts/vent-model.ts)
 //   contracts/test/fixtures/kindling-vectors.json Kindling scenarios (scripts/kindling-model.ts)
 //   contracts/test/fixtures/ignition-vectors.json Ignition scenarios (scripts/ignition-model.ts)
+//   contracts/test/fixtures/splitter-vectors.json the epoch splitters (scripts/splitter-model.ts)
 // Integer references (accounting.ts, BigInt) are matched EXACTLY by the Solidity
 // ports; the float display helper heatMultiplier within 1e-12.
 // pnpm gen --check exits non-zero if either output is stale (CI gate).
@@ -31,6 +32,7 @@ import { flowVectors } from './flow-model';
 import { ventVectors } from './vent-model';
 import { kindlingVectors } from './kindling-model';
 import { ignitionVectors } from './ignition-model';
+import { splitterVectors } from './splitter-model';
 import { keccak_256 } from '@noble/hashes/sha3.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
 
@@ -44,6 +46,7 @@ const FLOW_VECTORS = 'contracts/test/fixtures/flow-vectors.json';
 const VENT_VECTORS = 'contracts/test/fixtures/vent-vectors.json';
 const KINDLING_VECTORS = 'contracts/test/fixtures/kindling-vectors.json';
 const IGNITION_VECTORS = 'contracts/test/fixtures/ignition-vectors.json';
+const SPLITTER_VECTORS = 'contracts/test/fixtures/splitter-vectors.json';
 const DAY = 86_400n;
 
 /** Exact decimal → fixed-point integer string (shortest round-trip, never toFixed noise). */
@@ -291,6 +294,17 @@ f.pools.forEach((pool, i) => {
   c('uint256', `FORGE_POOL_${i}_ALLOC_POINTS`, pool.allocPoints, pool.id);
   c('bool', `FORGE_POOL_${i}_IS_LP`, String(pool.stakeKind === 'lp'));
 });
+
+section('Epoch splitters: ForgeAsh, the stayers, Quote yield and the Sealed pot (spec v5.5 §1, §11, §12; ADR 0024)');
+{
+  const ashTotal = f.pools.reduce((n, pool) => n + pool.ashAllocPoints, 0);
+  if (ashTotal === 0) throw new Error('pool ASH points must not all be zero');
+  for (const pool of f.pools) if (!(Number.isInteger(pool.ashAllocPoints) && pool.ashAllocPoints >= 0)) throw new Error(`pool ${pool.id} ASH points must be a non-negative integer`);
+  c('uint256', 'FORGE_ASH_POINTS_TOTAL', ashTotal, "the Forge's ASH by pool (spec v5.5 §4's ASH weight)");
+  f.pools.forEach((pool, i) => c('uint256', `FORGE_POOL_${i}_ASH_POINTS`, pool.ashAllocPoints, pool.id));
+  // The Sealed pot streams each pull over this many epochs (ADR 0007 left it to the stream) [P].
+  c('uint256', 'SEALED_POT_STREAM_EPOCHS', 30, 'each pull is streamed over 30 epochs to running Seals [P]');
+}
 
 section('Seals: Conviction tracks, escrow and forfeiture (spec v5.5 §10)');
 const ct = f.convictionTracks;
@@ -696,7 +710,7 @@ vectors.squaredPrimitive.ray = vectors.squaredPrimitive.ageSeconds.map((a, i) =>
 const vectorsJson = JSON.stringify(vectors, null, 2) + '\n';
 
 // ── write or check ───────────────────────────────────────────────────────
-const outputs: [string, string][] = [[PARAMS, params], [SCHEDULE, scheduleSol], [VECTORS, vectorsJson], [FORGE_VECTORS, JSON.stringify(forgeVectors(), null, 1) + '\n'], [SETTLEMENT_VECTORS, JSON.stringify(settlementVectors(), null, 1) + '\n'], [PAIR_VECTORS, JSON.stringify(pairVectors(), null, 1) + '\n'], [FLOW_VECTORS, JSON.stringify(flowVectors(), null, 1) + '\n'], [VENT_VECTORS, JSON.stringify(ventVectors(), null, 1) + '\n'], [KINDLING_VECTORS, JSON.stringify(kindlingVectors(), null, 1) + '\n'], [IGNITION_VECTORS, JSON.stringify(ignitionVectors(), null, 1) + '\n']];
+const outputs: [string, string][] = [[PARAMS, params], [SCHEDULE, scheduleSol], [VECTORS, vectorsJson], [FORGE_VECTORS, JSON.stringify(forgeVectors(), null, 1) + '\n'], [SETTLEMENT_VECTORS, JSON.stringify(settlementVectors(), null, 1) + '\n'], [PAIR_VECTORS, JSON.stringify(pairVectors(), null, 1) + '\n'], [FLOW_VECTORS, JSON.stringify(flowVectors(), null, 1) + '\n'], [VENT_VECTORS, JSON.stringify(ventVectors(), null, 1) + '\n'], [KINDLING_VECTORS, JSON.stringify(kindlingVectors(), null, 1) + '\n'], [IGNITION_VECTORS, JSON.stringify(ignitionVectors(), null, 1) + '\n'], [SPLITTER_VECTORS, JSON.stringify(splitterVectors(), null, 1) + '\n']];
 if (process.argv.includes('--check')) {
   let stale = 0;
   for (const [p, body] of outputs) {

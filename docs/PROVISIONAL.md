@@ -4,7 +4,7 @@
 
 Each entry is a gap or ambiguity in the sealed spec (`canonical/`, v5.5.0, pinned by `SHA256SUMS.json` and the config hash; see [SPEC-SEAL.md](SPEC-SEAL.md)). Each was read as recommended, under the owner's standing rule ("Always choose your recommendations"), and marked [P] in its ADR. **Every entry is a deploy blocker until the owner confirms it.** To confirm or change one, edit its ADR (drop the [P] and record the decision), then run `pnpm provisional`. `pnpm check` fails while this file is stale.
 
-**85 provisional readings across 16 ADRs.**
+**92 provisional readings across 17 ADRs.**
 
 ## [ADR 0004](adr/0004-forge-custody.md): Forge custody core
 
@@ -37,7 +37,7 @@ Each entry is a gap or ambiguity in the sealed spec (`canonical/`, v5.5.0, pinne
 4. `P-0007-4` **"Pending" Ashfall is what has not been credited yet.** A position that left by emergency exit forfeits any Ashfall not credited when the credit page reaches it. Ashfall credited before the exit stays its own, like base rewards. The outcome therefore depends on when the keeper runs relative to the exit.
 5. `P-0007-5` **Burn lane.** Permissionless `burnForfeits()` burns it through the Mantle's distributor-only `burnForfeited`. That is a recognized burn (the ledger shrinks, headroom reopens) with **no Ashfall credit**, because Seal forfeits are not among the config's Ashfall sources.
 6. `P-0007-6` **Sealed-pot stream period.** The config does not define it, and this repo does not choose one. The stream contract decides it.
-7. `P-0007-7` **The emergency exit's "stayers" share** (25% of the 8% fee) goes to `FEE_COLLECTOR` with the rest of the fee. The Vent, the collector, owes it to an immutable `STAKERS` distributor, which is not built (ADR 0020).
+7. `P-0007-7` **The emergency exit's "stayers" share** (25% of the 8% fee) goes to `FEE_COLLECTOR` with the rest of the fee. The Vent, the collector, owes it to an immutable `STAKERS` distributor, which ADR 0024 builds: a `BookedSplitter` paying by stake-seconds (ADR 0020).
 8. `P-0007-8` **Not audited or deployed.** Matching the models proves consistency with this ADR, not canonical conformance of any rule.
 
 ## [ADR 0008](adr/0008-ordinary-bonus.md): The ordinary Heat bonus (Capstone + Pyre) in ForgePool
@@ -93,7 +93,7 @@ Each entry is a gap or ambiguity in the sealed spec (`canonical/`, v5.5.0, pinne
 ## [ADR 0020](adr/0020-vent.md): The Vent, the fee router
 
 1. `P-0020-1` **Fee assets.** LP fees are unwound and routed in kind, the Hearth's and Treasury's shares included. The liquidity lane burns EMBER and holds quote, for every asset. Pool 3's USDC buys back in BlastPool. The spec defines the unwind for LP only.
-2. `P-0020-2` **The emergency stakers' 25%** is owed to an immutable `STAKERS` distributor, which is not built. ADR 0007 had left it with the collector.
+2. `P-0020-2` **The emergency stakers' 25%** is owed to an immutable `STAKERS` distributor (built in ADR 0024). ADR 0007 had left it with the collector.
 3. `P-0020-3` **The batch threshold** applies only to BlastPool, whose quote is a USD stablecoin: 5,000 whole units. SmelterPool uses the 24-hour clock alone. No USD oracle is invented.
 4. `P-0020-4` **Windows are aligned** (`block.timestamp / 1800`), so two windows can meet at a boundary. Each is still capped against its own fixed base.
 5. `P-0020-5` **The oracle is stale** when `consult`'s span exceeds twice the window. Keepers checkpoint the pairs; the Vent never does.
@@ -138,3 +138,13 @@ Each entry is a gap or ambiguity in the sealed spec (`canonical/`, v5.5.0, pinne
 10. `P-0023-10` **Only Cold Storage and pool-0 LP are eligible for the head start.** Those are the two pools a USD value can be given without the valuation source.
 11. `P-0023-11` **"New capital" means a lot whose age-zero time is from `END`.** The window runs from Kindling's close. A Kindling that never settles opens no window.
 12. `P-0023-12` **The accumulator scale is 1e24.** It is exact enough for 6-, 8- and 18-decimal stakes; the model bounds the dust.
+
+## [ADR 0024](adr/0024-epoch-splitters.md): The epoch splitters: ForgeAsh, the stayers' share, Quote yield and the Sealed pot
+
+1. `P-0024-1` **ForgeAsh shares a pool's slice as base rewards do,** 30% by stake-seconds and 70% by Heat. The spec gives only the pool weights.
+2. `P-0024-2` **The stayers' share and Quote yield are split over the pools by the base weights.** The Vent's in-kind shares no longer say which pool paid them, so no per-pool attribution exists to honour.
+3. `P-0024-3` **The stayers' share pays by stake-seconds,** "everyone who stayed", with no Heat or eligibility test.
+4. `P-0024-4` **The Sealed pot streams over 30 epochs** (`SEALED_POT_STREAM_EPOCHS`), starting with the epoch of the pull. ADR 0007 left the period to the stream.
+5. `P-0024-5` **Shares follow the position:** they are paid to its owner at claim time and wait while it is listed, as base rewards do.
+6. `P-0024-6` **An epoch with a zero total rolls its whole budget to the next,** and only when someone rolls it.
+7. `P-0024-7` **Unclaimed shares never expire.**

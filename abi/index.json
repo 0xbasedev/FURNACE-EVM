@@ -63,6 +63,18 @@
     "file": "Ignition.json",
     "testnetOnly": false
   },
+  "ForgeAsh": {
+    "file": "ForgeAsh.json",
+    "testnetOnly": false
+  },
+  "BookedSplitter": {
+    "file": "BookedSplitter.json",
+    "testnetOnly": false
+  },
+  "SealedPotStream": {
+    "file": "SealedPotStream.json",
+    "testnetOnly": false
+  },
   "TestnetToken": {
     "file": "TestnetToken.json",
     "testnetOnly": true
