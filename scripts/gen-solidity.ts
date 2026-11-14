@@ -12,6 +12,7 @@
 //   contracts/test/fixtures/kindling-vectors.json Kindling scenarios (scripts/kindling-model.ts)
 //   contracts/test/fixtures/ignition-vectors.json Ignition scenarios (scripts/ignition-model.ts)
 //   contracts/test/fixtures/splitter-vectors.json the epoch splitters (scripts/splitter-model.ts)
+//   contracts/test/fixtures/hearth-vectors.json   the Hearth (scripts/hearth-model.ts)
 // Integer references (accounting.ts, BigInt) are matched EXACTLY by the Solidity
 // ports; the float display helper heatMultiplier within 1e-12.
 // pnpm gen --check exits non-zero if either output is stale (CI gate).
@@ -33,6 +34,7 @@ import { ventVectors } from './vent-model';
 import { kindlingVectors } from './kindling-model';
 import { ignitionVectors } from './ignition-model';
 import { splitterVectors } from './splitter-model';
+import { hearthVectors } from './hearth-model';
 import { keccak_256 } from '@noble/hashes/sha3.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
 
@@ -47,6 +49,7 @@ const VENT_VECTORS = 'contracts/test/fixtures/vent-vectors.json';
 const KINDLING_VECTORS = 'contracts/test/fixtures/kindling-vectors.json';
 const IGNITION_VECTORS = 'contracts/test/fixtures/ignition-vectors.json';
 const SPLITTER_VECTORS = 'contracts/test/fixtures/splitter-vectors.json';
+const HEARTH_VECTORS = 'contracts/test/fixtures/hearth-vectors.json';
 const DAY = 86_400n;
 
 /** Exact decimal → fixed-point integer string (shortest round-trip, never toFixed noise). */
@@ -464,6 +467,18 @@ c('uint256', 'VENT_MIN_BATCH_USD', fl.feeVault.minBatchUsd, 'whole dollars, in a
 c('uint256', 'VENT_MAX_WAIT', BigInt(fl.feeVault.maxWaitHours) * 3600n, `${fl.feeVault.maxWaitHours} h`);
 c('uint256', 'VENT_ALERT_AFTER', BigInt(bl.maxDeferralHours) * 3600n, `${bl.maxDeferralHours} h: an alert, never a weaker guard`);
 
+section('The Hearth: staked ASH earns the Vent\'s fee share (spec v5.5 §15; ADR 0025)');
+{
+  // The Hearth pays only this chain's funded fee liabilities, by per-asset indexes; it implements
+  // no cross-chain aggregation and no governance weight.
+  const hearth = cfg.execution.hearth;
+  if (hearth.feeScope !== 'chainLocalFundedLiabilities') throw new Error(`the Hearth implements chain-local funded fees, config has ${hearth.feeScope}`);
+  if (hearth.crossChainFeeAggregation !== false) throw new Error('the Hearth implements no cross-chain fee aggregation');
+  if (fl.vent.hearthPct === 0) throw new Error('the Hearth needs a share of the Vent');
+  // §15: "The 24h ASH exit cooldown is retained." The config carries no field for it.
+  c('uint256', 'HEARTH_EXIT_COOLDOWN', '24 hours', 'spec v5.5 §15: the retained ASH exit cooldown');
+}
+
 section('Kindling: the genesis event, its escrow and the LP sink (spec v5.5 §3; ADR 0021)');
 // One 24 h USDC raise. Contributions pay 3% into the GenesisFeeEscrow; success initializes
 // BlastPool with the 420,000-EMBER seed and the net quote, 90% of the LP to contributors' positions
@@ -710,7 +725,7 @@ vectors.squaredPrimitive.ray = vectors.squaredPrimitive.ageSeconds.map((a, i) =>
 const vectorsJson = JSON.stringify(vectors, null, 2) + '\n';
 
 // ── write or check ───────────────────────────────────────────────────────
-const outputs: [string, string][] = [[PARAMS, params], [SCHEDULE, scheduleSol], [VECTORS, vectorsJson], [FORGE_VECTORS, JSON.stringify(forgeVectors(), null, 1) + '\n'], [SETTLEMENT_VECTORS, JSON.stringify(settlementVectors(), null, 1) + '\n'], [PAIR_VECTORS, JSON.stringify(pairVectors(), null, 1) + '\n'], [FLOW_VECTORS, JSON.stringify(flowVectors(), null, 1) + '\n'], [VENT_VECTORS, JSON.stringify(ventVectors(), null, 1) + '\n'], [KINDLING_VECTORS, JSON.stringify(kindlingVectors(), null, 1) + '\n'], [IGNITION_VECTORS, JSON.stringify(ignitionVectors(), null, 1) + '\n'], [SPLITTER_VECTORS, JSON.stringify(splitterVectors(), null, 1) + '\n']];
+const outputs: [string, string][] = [[PARAMS, params], [SCHEDULE, scheduleSol], [VECTORS, vectorsJson], [FORGE_VECTORS, JSON.stringify(forgeVectors(), null, 1) + '\n'], [SETTLEMENT_VECTORS, JSON.stringify(settlementVectors(), null, 1) + '\n'], [PAIR_VECTORS, JSON.stringify(pairVectors(), null, 1) + '\n'], [FLOW_VECTORS, JSON.stringify(flowVectors(), null, 1) + '\n'], [VENT_VECTORS, JSON.stringify(ventVectors(), null, 1) + '\n'], [KINDLING_VECTORS, JSON.stringify(kindlingVectors(), null, 1) + '\n'], [IGNITION_VECTORS, JSON.stringify(ignitionVectors(), null, 1) + '\n'], [SPLITTER_VECTORS, JSON.stringify(splitterVectors(), null, 1) + '\n'], [HEARTH_VECTORS, JSON.stringify(hearthVectors(), null, 1) + '\n']];
 if (process.argv.includes('--check')) {
   let stale = 0;
   for (const [p, body] of outputs) {

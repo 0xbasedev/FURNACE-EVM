@@ -137,7 +137,14 @@ contract DeployTestnetTest is Test, FurnaceTestnet {
         assertEq(uint8(d.mantle.registrarCategory(address(d.vent))), uint8(Mantle.BurnCategory.Protocol), "the Vent's burns are registered");
         assertEq(address(d.vent.PAIR_0()), address(d.pairs[0]));
         assertEq(address(d.vent.POOL_3()), address(d.pools[3]));
-        assertEq(d.vent.TREASURY(), operator, "the operator stands in for every recipient");
+        assertEq(d.vent.TREASURY(), operator, "the operator stands in for the Treasury");
+        // The Hearth (ADR 0025): the Vent's Hearth share goes to staked test ASH.
+        assertEq(address(d.hearth), pl.hearth, "the Hearth at its predicted address");
+        assertEq(d.vent.HEARTH(), address(d.hearth));
+        assertEq(address(d.hearth.ASH()), address(d.ash));
+        assertEq(d.hearth.assetAt(0), address(d.ember));
+        assertEq(d.hearth.assetAt(1), address(d.pairQuote[0]));
+        assertEq(d.hearth.assetAt(2), address(d.pairQuote[1]));
         assertEq(d.vent.COMPOUNDER(), operator);
         // ASH (ADR 0022): the ledger is the token's only minter; the operator stands in for Ignition and the Forge.
         assertEq(address(d.ash), pl.ash, "ASH at its predicted address");
@@ -249,7 +256,7 @@ contract DeployTestnetTest is Test, FurnaceTestnet {
         // day's vested ASH, by the pools' ASH weights; Cold Storage's weight is zero.
         uint256 ash = d.forgeAsh.claim(0, 0, ids[0], address(d.ash));
         assertGt(ash, 0, "the pool-0 position's ASH for epoch 0");
-        assertEq(IERC20(address(d.ash)).balanceOf(operator), ash + P.ASH_IGNITION_ALLOCATION, "paid to the owner");
+        assertEq(IERC20(address(d.ash)).balanceOf(operator), ash + P.ASH_IGNITION_ALLOCATION - 1_000e18, "paid to the owner");
         assertEq(d.ashLedger.forgeReleased(), d.ashLedger.vestedAt(block.timestamp), "released exactly V(now)");
         assertEq(d.forgeAsh.shareOf(0, 3, ids[3], address(d.ash)), 0);
         // The Vent's Quote-yield lane pays the splitter, which books it into the running epoch.
@@ -261,6 +268,16 @@ contract DeployTestnetTest is Test, FurnaceTestnet {
             assertEq(d.quoteYield.book(address(d.pairQuote[0])), owed, "booked what the Vent released");
             assertEq(d.quoteYield.liability(address(d.pairQuote[0])), owed);
         }
+        // The Hearth (ADR 0025): the smoke run staked 1,000 test ASH, so the Vent's Hearth share of
+        // the smoke run's fees goes to that stake when it arrives.
+        assertEq(d.hearth.stakeOf(operator), 1_000e18);
+        owed = d.vent.owed(Vent.Recipient.Hearth, IERC20(address(d.ember)));
+        assertGt(owed, 0, "the smoke run's fees owe the Hearth EMBER");
+        d.vent.release(Vent.Recipient.Hearth, IERC20(address(d.ember)));
+        vm.prank(operator);
+        uint256 got = d.hearth.claim(address(d.ember));
+        assertApproxEqAbs(got, owed, 1, "the staker is paid the Hearth's share, to the wei");
+        assertEq(d.hearth.treasuryOwed(address(d.ember)), 0, "nothing went to the Treasury while ASH was staked");
     }
 
     /// The add-on (ADR 0015): before the pairs exist, pools 0 and 1 refuse deposits and an epoch

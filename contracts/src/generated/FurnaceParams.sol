@@ -196,6 +196,9 @@ library FurnaceParams {
     uint256 internal constant VENT_MAX_WAIT = 86400; // 24 h
     uint256 internal constant VENT_ALERT_AFTER = 259200; // 72 h: an alert, never a weaker guard
 
+    // ── The Hearth: staked ASH earns the Vent's fee share (spec v5.5 §15; ADR 0025) ──
+    uint256 internal constant HEARTH_EXIT_COOLDOWN = 24 hours; // spec v5.5 §15: the retained ASH exit cooldown
+
     // ── Kindling: the genesis event, its escrow and the LP sink (spec v5.5 §3; ADR 0021) ──
     uint256 internal constant KINDLING_DURATION = 86400; // 24 h; deposits stop exactly at the deadline
     uint256 internal constant KINDLING_SETTLE_WINDOW = 259200; // after the deadline; unsettled by then, the event fails
