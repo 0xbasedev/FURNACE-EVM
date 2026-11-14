@@ -297,6 +297,28 @@ contract HearthTest is HearthRig {
         assertEq(w.hearth.claim(address(w.ember)), 2e18);
     }
 
+    /// What a stake change settles stays visible: `pending` shows the settled amount, and the claim
+    /// pays exactly that, though the ASH has left the stake.
+    function test_pendingShowsWhatAStakeChangeSettled() public {
+        vm.warp(T0);
+        World memory w = _world();
+        address a = _wallet(0);
+        vm.prank(a);
+        w.hearth.stake(30e18);
+        vm.prank(_wallet(1));
+        w.hearth.stake(10e18);
+        w.weth.mint(address(w.hearth), 8e18);
+        vm.prank(a);
+        w.hearth.requestExit(30e18);
+        uint256 settled = w.hearth.owedOf(a, address(w.weth));
+        assertEq(settled, 6e18, "three quarters of the batch, settled at the request");
+        assertEq(w.hearth.stakeOf(a), 0);
+        assertEq(w.hearth.pending(a, address(w.weth)), settled, "the view shows what was settled");
+        vm.prank(a);
+        assertEq(w.hearth.claim(address(w.weth)), settled);
+        assertEq(w.hearth.pending(a, address(w.weth)), 0);
+    }
+
     function test_claimsNeverPassWhatWasBooked(uint256 seed) public {
         vm.warp(T0);
         World memory w = _world();

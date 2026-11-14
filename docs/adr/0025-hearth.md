@@ -86,13 +86,21 @@ Status: accepted for this repository. Not audited, not deployed.
   - a cancelled exit earns again from its cancel;
   - claims never pass what was booked, short only by the floors (fuzzed);
   - the constructor refuses zero, duplicate, too many and ASH assets;
-  - a fee-on-transfer ASH is refused.
+  - a fee-on-transfer ASH is refused;
+  - `pending` shows what a stake change settled, and the claim pays exactly that.
 - **Invariants** (`HearthInvariant.t.sol`, 3, 128 runs × 64 calls):
   - every asset's balance covers its liability, and stakers' pending fees plus the Treasury's never exceed it;
   - ASH held equals stake plus exits, and the totals are the wallets' sums;
   - every exit unlocks within 24 h of its last request.
   - **The handler also asserts** that a fresh stake captures nothing, and that every matured exit pays in full.
   - **Coverage:** claims in every run (1,068 in all), matured withdrawals in 59 runs, and 266 fresh stakes.
+- **Mutations:** 41 planted bugs, run in separate worktrees:
+  - every booking rule: the zero and unknown-asset refusals, the liability, the Treasury branch, the index's rounding, and what counts as unbooked;
+  - the booking before every claim and stake change, and every checkpoint;
+  - the exit's amount, clock, cooldown and totals, cancels, and every withdrawal gate;
+  - every payment's zeroing and liability, and the Treasury release;
+  - the constructor's refusals, the `pending` view, and the kit's wiring and smoke stake.
+  - **40 were caught.** The 41st, dropping what a wallet has already settled from `pending`, survived: no test read the view after a stake change had settled fees. `test_pendingShowsWhatAStakeChangeSettled` now does, and fails against the mutant.
 - **Kit.**
   - The first-epoch test has the Vent release its Hearth EMBER to the real Hearth. The staker claims it, to the wei, and nothing goes to the Treasury.
   - **LiteForge fork dry runs, smoke on:**
