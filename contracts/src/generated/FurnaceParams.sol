@@ -126,6 +126,14 @@ library FurnaceParams {
     uint256 internal constant FORGE_POOL_3_ALLOC_POINTS = 200; // usdc-single
     bool internal constant FORGE_POOL_3_IS_LP = false;
 
+    // ── Epoch splitters: ForgeAsh, the stayers, Quote yield and the Sealed pot (spec v5.5 §1, §11, §12; ADR 0024) ──
+    uint256 internal constant FORGE_ASH_POINTS_TOTAL = 1000; // the Forge's ASH by pool (spec v5.5 §4's ASH weight)
+    uint256 internal constant FORGE_POOL_0_ASH_POINTS = 500; // ember-usdc-lp
+    uint256 internal constant FORGE_POOL_1_ASH_POINTS = 200; // ember-weth-lp
+    uint256 internal constant FORGE_POOL_2_ASH_POINTS = 300; // ember-single
+    uint256 internal constant FORGE_POOL_3_ASH_POINTS = 0; // usdc-single
+    uint256 internal constant SEALED_POT_STREAM_EPOCHS = 30; // each pull is streamed over 30 epochs to running Seals [P]
+
     // ── Seals: Conviction tracks, escrow and forfeiture (spec v5.5 §10) ──
     uint256 internal constant SEAL_TRACK_COUNT = 4;
     uint256 internal constant SEAL_TRACK_0_SECONDS = 30 days; // Ember
