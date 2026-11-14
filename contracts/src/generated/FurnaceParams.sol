@@ -15,6 +15,15 @@ library FurnaceParams {
     uint256 internal constant EMBER_TREASURY_ALLOCATION = 500000e18;
     uint256 internal constant EMBER_TREASURY_VESTING = 365 days;
 
+    // ── ASH: 70,000 cumulative economic issuance (spec v5.5 §1; ADR 0022) ──
+    string internal constant ASH_NAME = "Ash";
+    string internal constant ASH_SYMBOL = "ASH";
+    uint256 internal constant ASH_MAX_SUPPLY = 70000e18; // cumulative: nothing re-issues what is burned
+    uint256 internal constant ASH_IGNITION_ALLOCATION = 41000e18;
+    uint256 internal constant ASH_KINDLING_BONUS = 1000e18; // minted only if Kindling settles [P]
+    uint256 internal constant ASH_FORGE_ALLOCATION = 28000e18;
+    uint256 internal constant ASH_FORGE_VESTING = 730 days; // V(t) = floor(alloc · min(elapsed, duration) / duration)
+
     // ── Emissions and base-epoch settlement (spec v5.5 §settlement) ──
     uint256 internal constant EPOCH_SECONDS = 86400;
     uint256 internal constant EMISSION_START_PER_DAY = 21600e18;
