@@ -120,6 +120,6 @@ Materializing positions lazily or in pages is Kindling's own design. Each call o
 - **The pools' remaining immutable hook is the head start.**
   - It must be scoped to the principal present when it is granted, so later deposits cannot reuse it (§49). The flag and the amount already exist; the per-lot scoping is unbuilt.
   - It needs Ignition's retained-value record.
-- **Kindling itself is unbuilt:** the aggregate settlement, lazy entitlements, the GenesisFeeEscrow and the LP sink. So is Ignition's founder record. Both are mainnet gate slots. *Update:* Kindling, the GenesisFeeEscrow and the LP sink are built in ADR 0021. Kindling calls `openKindling` once per wallet, on demand or in pages, at this ADR's 1% fee. Ignition's founder record is still unbuilt.
+- **Kindling itself is unbuilt:** the aggregate settlement, lazy entitlements, the GenesisFeeEscrow and the LP sink. So is Ignition's founder record. Both are mainnet gate slots. *Update:* Kindling, the GenesisFeeEscrow and the LP sink are built in ADR 0021. Kindling calls `openKindling` once per wallet, on demand or in pages, at this ADR's 1% fee. Ignition's founder record is still unbuilt. *Update:* Ignition is built (ADR 0023) and is every pool's `FOUNDERS`: a wallet that kept principal in it through its close is a founder.
 - **The deployment-verification list gains `KINDLING` and `FOUNDERS`** for every pool and its annex.
 - **Not audited or deployed.**
