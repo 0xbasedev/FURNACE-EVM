@@ -47,6 +47,18 @@
     "file": "PermanentLiquidity.json",
     "testnetOnly": false
   },
+  "AshToken": {
+    "file": "AshToken.json",
+    "testnetOnly": false
+  },
+  "AshLedger": {
+    "file": "AshLedger.json",
+    "testnetOnly": false
+  },
+  "KindlingAshBonus": {
+    "file": "KindlingAshBonus.json",
+    "testnetOnly": false
+  },
   "TestnetToken": {
     "file": "TestnetToken.json",
     "testnetOnly": true

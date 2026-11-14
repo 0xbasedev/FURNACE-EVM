@@ -52,6 +52,7 @@ The stand-ins live in `contracts/script/testnet/` and never in `contracts/src`. 
 - is the Deed market, the only caller of `list` and `settle`;
 - is ForgeEmissions' match reserve and Sealed-pot consumer;
 - is each pair's **initializer** (Kindling's slot: the first deposit, which sets the price; in the real Kindling mode, BlastPool's is Kindling) and its **guardian** (it can pause swaps, never redemptions);
+- stands in for Ignition and the Forge's ASH distributor in the ASH ledger ([ADR 0022](../adr/0022-ash.md)): `AshLedger.releaseIgnition()` sends it Ignition's 41,000 test ASH, and `releaseForge()` the Forge's vested share; with the real Kindling, `KindlingAshBonus.claim(wallet)` pays each contributor its share of the 1,000-ASH bonus after settlement;
 - receives what the Vent owes the Hearth, the Treasury, the emergency stakers and the Quote-yield distributor, and is the Vent's Deed market and compounder (the only one who may draw its match reserve);
 - is Flow's **compounder**, the only caller of the Compound waiver (the Stoke-into-LP consumer is not built).
 

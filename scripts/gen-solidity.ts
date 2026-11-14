@@ -79,6 +79,22 @@ c('uint256', 'EMBER_KINDLING_SEED', `${cfg.token.allocations.kindlingPool}e18`);
 c('uint256', 'EMBER_TREASURY_ALLOCATION', `${cfg.token.allocations.treasury.amount}e18`);
 c('uint256', 'EMBER_TREASURY_VESTING', `${cfg.token.allocations.treasury.vestingDays} days`);
 
+section('ASH: 70,000 cumulative economic issuance (spec v5.5 §1; ADR 0022)');
+{
+  const st = cfg.shareToken;
+  const leaves = [st.allocations.launch.ignition, st.allocations.launch.kindling, st.allocations.forge].map((x) => parseUnits(x, 18));
+  if (leaves.reduce((a, b) => a + b, 0n) !== parseUnits(st.maxSupply, 18)) throw new Error('shareToken allocations must sum exactly to maxSupply');
+  if (st.decimals.evm !== 18) throw new Error('ASH is 18 decimals on EVM');
+  if (!(Number.isInteger(st.forgeTrickleDays) && st.forgeTrickleDays > 0)) throw new Error('shareToken.forgeTrickleDays must be whole days');
+  c('string', 'ASH_NAME', JSON.stringify(st.name));
+  c('string', 'ASH_SYMBOL', JSON.stringify(st.symbol));
+  c('uint256', 'ASH_MAX_SUPPLY', `${st.maxSupply}e18`, 'cumulative: nothing re-issues what is burned');
+  c('uint256', 'ASH_IGNITION_ALLOCATION', `${st.allocations.launch.ignition}e18`);
+  c('uint256', 'ASH_KINDLING_BONUS', `${st.allocations.launch.kindling}e18`, 'minted only if Kindling settles [P]');
+  c('uint256', 'ASH_FORGE_ALLOCATION', `${st.allocations.forge}e18`);
+  c('uint256', 'ASH_FORGE_VESTING', `${st.forgeTrickleDays} days`, 'V(t) = floor(alloc · min(elapsed, duration) / duration)');
+}
+
 section('Emissions and base-epoch settlement (spec v5.5 §settlement)');
 c('uint256', 'EPOCH_SECONDS', cfg.emissions.epochSeconds);
 c('uint256', 'EMISSION_START_PER_DAY', `${cfg.emissions.base.startPerDay}e18`);
@@ -568,6 +584,11 @@ const budgets = Array.from({ length: 12 }, (_, i) => {
 });
 const vestTotal = parseUnits(cfg.token.allocations.treasury.amount, 18);
 const vestDuration = BigInt(cfg.token.allocations.treasury.vestingDays) * DAY_N;
+const ashTotal = parseUnits(cfg.shareToken.allocations.forge, 18);
+const ashDuration = BigInt(cfg.shareToken.forgeTrickleDays) * DAY_N;
+// Fixed points (no draw from the shared generator, so no other fixture moves): edges, round days and odd seconds.
+const ashElapsed = [0n, 1n, 59n, DAY_N, 7n * DAY_N, 30n * DAY_N, 365n * DAY_N, ashDuration / 3n, ashDuration / 2n, ashDuration - 1n, ashDuration,
+  ashDuration + 1n, 10n * ashDuration, 12_345_678n, 33_333_333n, 61_234_567n];
 const vestElapsed = [0n, 1n, 59n, DAY_N, 7n * DAY_N, vestDuration / 2n, vestDuration - 1n, vestDuration, vestDuration + 1n, 10n * vestDuration,
   ...Array.from({ length: 16 }, () => rnd(vestDuration + DAY_N))];
 const emissionDays = [...Array.from({ length: 1701 }, (_, d) => d), 2000, 5000, 9124, 9125, 100000, 1000000];
@@ -616,6 +637,8 @@ const vectors = {
     outBase: S(mints.map((m) => m.out.base)), outAshfall: S(mints.map((m) => m.out.ashfall)), outResidue: S(mints.map((m) => m.out.unmintedResidue)),
   },
   vesting: { elapsed: S(vestElapsed), out: S(vestElapsed.map((t) => vested(vestTotal, t, vestDuration))) },
+  // ASH's Forge allocation (spec v5.5 §1): the same canonical V(t), over 730 days.
+  ashVesting: { elapsed: S(ashElapsed), out: S(ashElapsed.map((t) => vested(ashTotal, t, ashDuration))) },
   poolBudget: { target: S(budgets.map((x) => x.target)), occupied: S(budgets.map((x) => x.occ)), out: S(budgets.map((x) => x.out)) },
   // Float display helper (no integer reference exists): compared within 1e-12 relative.
   lotHeat: { ageSeconds: heatDays.map((d) => String(Math.round(d * 86_400))), ray: heatDays.map((d) => fixed(heatMultiplier(Math.round(d * 86_400) / 86_400), 27)) },

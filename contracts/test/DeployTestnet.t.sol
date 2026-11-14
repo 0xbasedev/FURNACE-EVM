@@ -13,6 +13,7 @@ import {EmberPair} from "../src/pairs/EmberPair.sol";
 import {Vent} from "../src/vent/Vent.sol";
 import {Mantle} from "../src/Mantle.sol";
 import {Kindling} from "../src/kindling/Kindling.sol";
+import {KindlingAshBonus} from "../src/ash/KindlingAshBonus.sol";
 
 using ForgeView for ForgePool;
 
@@ -111,6 +112,13 @@ contract DeployTestnetTest is Test, FurnaceTestnet {
         assertEq(address(d.vent.POOL_3()), address(d.pools[3]));
         assertEq(d.vent.TREASURY(), operator, "the operator stands in for every recipient");
         assertEq(d.vent.COMPOUNDER(), operator);
+        // ASH (ADR 0022): the ledger is the token's only minter; the operator stands in for Ignition and the Forge.
+        assertEq(address(d.ash), pl.ash, "ASH at its predicted address");
+        assertEq(d.ash.LEDGER(), address(d.ashLedger));
+        assertEq(d.ashLedger.IGNITION(), operator);
+        assertEq(d.ashLedger.KINDLING_BONUS(), operator, "no bonus while the operator stands in for Kindling");
+        assertEq(d.ashLedger.START(), d.start);
+        assertEq(address(d.ashBonus), address(0));
     }
 
     /// The Vent (ADR 0020) on the real pools and pairs: the smoke run's fees are collected; once the
@@ -325,6 +333,11 @@ contract DeployTestnetTest is Test, FurnaceTestnet {
         for (uint256 i; i < 4; ++i) page[i] = crowd[i];
         assertEq(d.kindling.materializeMany(page), 4);
         assertEq(d.kindling.lpPaid(), d.kindling.contributorLp(), "every unit of the 90% placed");
+        // The 1,000-ASH bonus (ADR 0022), pro rata on the same net principal.
+        assertEq(d.ashLedger.KINDLING_BONUS(), address(d.ashBonus));
+        uint256 bonus = d.ashBonus.claim(crowd[0]);
+        assertEq(bonus, (P.ASH_KINDLING_BONUS * 19_400e6) / d.kindling.totalNet(), "floor(1,000 x net / totalNet)");
+        assertEq(IERC20(address(d.ash)).balanceOf(crowd[0]), bonus);
         assertEq(d.pairs[0].balanceOf(address(d.kindling)), 0, "Kindling keeps nothing");
 
         // Kindling's 24 h are epoch 0, so its positions open as epoch 0 ends and earn from epoch 1.
@@ -365,5 +378,8 @@ contract DeployTestnetTest is Test, FurnaceTestnet {
         assertEq(IERC20(address(d.pairQuote[0])).balanceOf(address(d.escrow)), 0);
         assertEq(d.pairs[0].totalSupply(), 0, "BlastPool never opened");
         assertFalse(d.mantle.seedReserved() == 0, "the seed stays reserved (ADR 0003)");
+        vm.expectRevert(KindlingAshBonus.NotSettled.selector);
+        d.ashBonus.claim(c1);
+        assertFalse(d.ashLedger.bonusReleased(), "and the ASH bonus is never minted");
     }
 }

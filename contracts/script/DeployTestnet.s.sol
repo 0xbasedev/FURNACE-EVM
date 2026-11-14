@@ -18,6 +18,10 @@ import {Vent, IVentFeePool, IVentPair, IVentMantle} from "../src/vent/Vent.sol";
 import {GenesisFeeEscrow} from "../src/kindling/GenesisFeeEscrow.sol";
 import {PermanentLiquidity} from "../src/kindling/PermanentLiquidity.sol";
 import {Kindling, IKindlingMantle, IKindlingPair, IKindlingPool} from "../src/kindling/Kindling.sol";
+import {ERC20Burnable} from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
+import {AshToken} from "../src/ash/AshToken.sol";
+import {AshLedger, IAshMint} from "../src/ash/AshLedger.sol";
+import {KindlingAshBonus, IKindlingBonusView, IAshBonusLedger} from "../src/ash/KindlingAshBonus.sol";
 import {
     TestnetToken, TestnetValuation, TestnetPyreLedger, TestnetFeeRebate, TestnetFounders
 } from "./testnet/TestnetStandIns.sol";
@@ -79,6 +83,9 @@ abstract contract FurnaceTestnet {
         Kindling kindling; // at its predicted address in that mode; zero otherwise
         GenesisFeeEscrow escrow;
         PermanentLiquidity sink;
+        AshToken ash; // ASH and its issuance ledger (ADR 0022)
+        AshLedger ashLedger;
+        KindlingAshBonus ashBonus; // with the real Kindling only; zero otherwise
         TestnetFeeRebate rebates;
         TestnetFounders founders;
         TestnetValuation valuation;
@@ -124,6 +131,9 @@ abstract contract FurnaceTestnet {
         address kindling;
         address escrow;
         address sink;
+        address ash;
+        address ashLedger;
+        address ashBonus;
     }
 
     function _poolLabel(uint256 i) internal pure returns (string memory) {
@@ -147,6 +157,9 @@ abstract contract FurnaceTestnet {
         pl.kindling = _predict(deployer, _salt(deployer, version, "Kindling"));
         pl.escrow = _predict(deployer, _salt(deployer, version, "GenesisFeeEscrow"));
         pl.sink = _predict(deployer, _salt(deployer, version, "PermanentLiquidity"));
+        pl.ash = _predict(deployer, _salt(deployer, version, "AshToken"));
+        pl.ashLedger = _predict(deployer, _salt(deployer, version, "AshLedger"));
+        pl.ashBonus = _predict(deployer, _salt(deployer, version, "KindlingAshBonus"));
     }
 
     function _create3(Plan memory pl, string memory label, address predicted, bytes memory initCode)
@@ -210,6 +223,7 @@ abstract contract FurnaceTestnet {
         _deployFlow(pl, d);
         _deployVent(pl, d);
         if (o.kindling) _deployKindling(pl, d, o.kindlingStart);
+        _deployAsh(pl, d);
         _deployEmissionsAndBoost(pl, d);
         d.lens = new ForgeLens();
         _checkWiring(d);
@@ -356,6 +370,22 @@ abstract contract FurnaceTestnet {
         d.kindling = Kindling(_create3(pl, "Kindling", pl.kindling, abi.encodePacked(type(Kindling).creationCode, args)));
     }
 
+    /// @notice ASH (ADR 0022): the token names its ledger and the ledger its recipients, all by
+    ///         address. The operator stands in for Ignition and for the Forge's ASH distributor
+    ///         (neither is built); the Kindling bonus is real with the real Kindling.
+    function _deployAsh(Plan memory pl, Deployment memory d) internal {
+        d.ash = AshToken(_create3(pl, "AshToken", pl.ash, abi.encodePacked(type(AshToken).creationCode, abi.encode(pl.ashLedger))));
+        address bonus = d.kindlingLive ? pl.ashBonus : d.operator;
+        bytes memory args = abi.encode(IAshMint(pl.ash), d.operator, bonus, d.operator, d.start);
+        d.ashLedger = AshLedger(_create3(pl, "AshLedger", pl.ashLedger, abi.encodePacked(type(AshLedger).creationCode, args)));
+        if (d.kindlingLive) {
+            args = abi.encode(IKindlingBonusView(address(d.kindling)), ERC20Burnable(pl.ash), IAshBonusLedger(pl.ashLedger));
+            d.ashBonus = KindlingAshBonus(
+                _create3(pl, "KindlingAshBonus", pl.ashBonus, abi.encodePacked(type(KindlingAshBonus).creationCode, args))
+            );
+        }
+    }
+
     function _deployEmissionsAndBoost(Plan memory pl, Deployment memory d) internal {
         bytes memory args =
             abi.encode(IMantleDistribution(pl.mantle), IERC20(pl.ember), d.pools, pl.boost, d.operator, d.operator);
@@ -401,6 +431,19 @@ abstract contract FurnaceTestnet {
         if (address(f.EMBER()) != address(d.ember) || address(f.REBATES()) != address(d.rebates)) revert Miswired("Flow tokens");
         if (f.COMPOUNDER() != d.operator) revert Miswired("Flow compounder");
         if (d.kindlingLive) _checkKindling(d);
+        _checkAsh(d);
+    }
+
+    function _checkAsh(Deployment memory d) internal view {
+        AshLedger l = d.ashLedger;
+        if (d.ash.LEDGER() != address(l) || address(l.TOKEN()) != address(d.ash)) revert Miswired("ASH ledger");
+        if (l.IGNITION() != d.operator || l.FORGE() != d.operator || l.START() != d.start) revert Miswired("ASH recipients");
+        if (l.KINDLING_BONUS() != (d.kindlingLive ? address(d.ashBonus) : d.operator)) revert Miswired("ASH bonus slot");
+        if (d.kindlingLive) {
+            KindlingAshBonus b = d.ashBonus;
+            if (address(b.KINDLING()) != address(d.kindling) || address(b.ASH()) != address(d.ash)) revert Miswired("bonus");
+            if (address(b.LEDGER()) != address(l)) revert Miswired("bonus ledger");
+        }
     }
 
     function _checkKindling(Deployment memory d) internal view {
@@ -467,6 +510,8 @@ abstract contract FurnaceTestnet {
             d.boost.deposit(d.pairsLive ? 0 : 2, d.pairsLive ? ids[0] : ids[2], 100e18); // a Capstone
         }
         d.pools[3].requestCooling(ids[3], 1e6);
+        // The operator, standing in for Ignition, takes Ignition's 41,000 test ASH (ADR 0022).
+        if (actor == d.operator) d.ashLedger.releaseIgnition();
     }
 
     /// @notice First liquidity: 50,000 EMBER with 50,000 tUSDC (1 USDC per EMBER) and 20,000
@@ -541,6 +586,9 @@ contract DeployTestnet is Script, FurnaceTestnet {
         } else {
             console2.log("Kindling: the operator stands in (FURNACE_TESTNET_KINDLING=1 deploys it)");
         }
+        console2.log("AshToken         ", address(d.ash));
+        console2.log("AshLedger        ", address(d.ashLedger));
+        if (d.kindlingLive) console2.log("KindlingAshBonus ", address(d.ashBonus));
         console2.log("TestnetFeeRebate ", address(d.rebates));
         console2.log("TestnetFounders  ", address(d.founders));
         console2.log("ForgeLens        ", address(d.lens));
@@ -572,6 +620,9 @@ contract DeployTestnet is Script, FurnaceTestnet {
         vm.serializeAddress(k, "Kindling", address(d.kindling));
         vm.serializeAddress(k, "GenesisFeeEscrow", address(d.escrow));
         vm.serializeAddress(k, "PermanentLiquidity", address(d.sink));
+        vm.serializeAddress(k, "AshToken", address(d.ash));
+        vm.serializeAddress(k, "AshLedger", address(d.ashLedger));
+        vm.serializeAddress(k, "KindlingAshBonus", address(d.ashBonus));
         vm.serializeAddress(k, "TestnetFeeRebate", address(d.rebates));
         vm.serializeAddress(k, "TestnetFounders", address(d.founders));
         for (uint256 i; i < 4; ++i) {

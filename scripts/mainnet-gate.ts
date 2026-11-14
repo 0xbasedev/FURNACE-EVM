@@ -18,12 +18,15 @@ import cfg, { CREATEX_FACTORY, DEPLOYER as PLACEHOLDER_DEPLOYER } from '../canon
 export const CREATEX_CODEHASH = '0xbd8a7ea8cfca7b4e5f5041d7d4b17bc317c5ce42cfbc42066a00cf26b43eb53f';
 /** The testnet kit's chains, which can never be the mainnet. */
 const TESTNET_CHAIN_IDS = new Set([4441, 31337]);
-const MODULE_SLOTS = ['Treasury', 'Guardian', 'Kindling', 'GenesisFeeEscrow', 'PermanentLiquidity', 'FeeRouter', 'Hearth', 'Stakers', 'QuoteYield', 'Flow', 'Compounder', 'Deeds', 'MatchReserve', 'SealedPot', 'Valuation', 'PyreLedger', 'FeeRebate', 'Founders', 'Ignition'] as const;
+const MODULE_SLOTS = ['Treasury', 'Guardian', 'Kindling', 'GenesisFeeEscrow', 'PermanentLiquidity', 'AshLedger', 'KindlingAshBonus', 'ForgeAsh', 'FeeRouter', 'Hearth', 'Stakers', 'QuoteYield', 'Flow', 'Compounder', 'Deeds', 'MatchReserve', 'SealedPot', 'Valuation', 'PyreLedger', 'FeeRebate', 'Founders', 'Ignition'] as const;
 /** What each slot is on the testnet, for the blocker's wording. */
 const TESTNET_NOTE: Record<(typeof MODULE_SLOTS)[number], string> = {
   Treasury: "on the testnet it is the operator's wallet",
   Guardian: "on the testnet it is the operator's wallet",
   Kindling: "built (ADR 0021): the Mantle's KINDLING, BlastPool's initializer and pool 0's openKindling caller; the testnet kit deploys it with FURNACE_TESTNET_KINDLING=1 (else the operator stands in), the mainnet needs its mined address and a START after Ignition",
+  AshLedger: "built (ADR 0022): ASH's only minter, holding the 41,000 / 1,000 / 28,000 allocations with immutable recipients; the mainnet needs its mined address (AshToken's is mined)",
+  KindlingAshBonus: "built (ADR 0022): pays Kindling's 1,000-ASH bonus pro rata once Kindling settles; the mainnet needs its mined address",
+  ForgeAsh: "the Forge's ASH distributor, which receives the 28,000 vesting over 730 days and streams it to Forge stakers by ASH weight (500/200/300/0); not built, and on the testnet it is the operator's wallet",
   GenesisFeeEscrow: "built (ADR 0021): Kindling's dedicated immutable fee and principal custody, naming Kindling and the Treasury; the mainnet needs its mined address",
   PermanentLiquidity: "built (ADR 0021): the irretrievable LP sink for Kindling's 10% and the later idle auto-pairing; the mainnet needs its mined address",
   FeeRouter: 'the Vent, built (ADR 0020); the testnet kit deploys it, the mainnet needs its mined address, registered with the Mantle as a Protocol burner',
