@@ -341,6 +341,28 @@ contract SplittersTest is SplitterRig {
         assertEq(w.s[3].budgetOf(1, 1, e), 0, "nothing before the pull");
     }
 
+    /// A rolled budget is spent: it pays nobody in its own epoch, even if its source later reports
+    /// measures there. ForgeEmissions never changes a settled epoch; the guard holds without it.
+    function test_aRolledBudgetIsNeverAlsoPaid() public {
+        World memory w = _world(T0);
+        address e = address(w.ember);
+        vm.warp(T0 + 1);
+        w.ember.mint(address(w.s[1]), 2_000);
+        BookedSplitter(address(w.s[1])).book(e);
+        vm.warp(T0 + P.EPOCH_SECONDS);
+        w.measures.settle(0, 0, _measuresOf(0, 0, 1 << 16)); // nobody earned in pool 0
+        assertEq(w.s[1].roll(0, 0, e), 1_000);
+        assertEq(w.s[1].budgetOf(1, 0, e), 1_000, "the next epoch carries it");
+        w.measures.settle(0, 0, _measuresOf(0, 0, 1)); // a source that rewrites a settled epoch
+        assertEq(w.s[1].shareOf(0, 0, 1, e), 0, "no share of a rolled budget");
+        vm.expectRevert(abi.encodeWithSelector(EpochSplitter.NothingOwed.selector, 0, 0, 1, e));
+        w.s[1].claim(0, 0, 1, e);
+        uint256[] memory epochs = new uint256[](1);
+        assertEq(w.s[1].claimMany(epochs, 0, 1, e), 0);
+        assertEq(IERC20(e).balanceOf(address(w.s[1])), 2_000, "nothing left the splitter");
+        assertEq(w.s[1].liability(e), 2_000);
+    }
+
     function test_constructorsRefuseZeroInputs() public {
         World memory w = _world(T0);
         IEpochMeasures m = IEpochMeasures(address(w.measures));

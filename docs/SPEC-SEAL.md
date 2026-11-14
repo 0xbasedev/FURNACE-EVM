@@ -23,6 +23,7 @@ Sealed 2026-11-14, at the owner's word: "Seal the specs now and finish it."
 | Forge: custody, settlement, Seals, Ashfall, Capstone/Boost, Stoke, Taps, and the Deed, Kindling, First Flame and head-start hooks | built (ADR 0004–0014, 0017–0019) |
 | GenesisFeeEscrow, Kindling and the permanent LP sink | built (ADR 0021) |
 | Ignition | built (ADR 0023; PR #24) |
+| ForgeAsh, the stayers' share, Quote yield and the Sealed-pot stream | built (ADR 0024; PR #25) |
 | BlastPool / SmelterPool | built (ADR 0015) |
 | FeeRouter (the Vent) | built (ADR 0020) |
 | Flow | built (ADR 0016) |
@@ -38,8 +39,8 @@ Each step is one PR, held to the same bar as every module so far:
 - the ABIs, the gate's slots, and the docs;
 - a clean `pnpm check` and green CI.
 
-1. **Ignition** (PR #24): merge.
-2. **ForgeAsh and the Vent's distributors.**
+1. ~~**Ignition**~~ (done; PR #24, ADR 0023).
+2. ~~**ForgeAsh and the Vent's distributors.**~~ (done; PR #25, ADR 0024: one abstract `EpochSplitter` paying ForgeEmissions' own settled measures, deployed four times.)
    - `ForgeAsh` streams the Forge's 28,000 ASH to Forge stakers by the pools' ASH weights (500/200/300/0).
    - `Stakers` gets emergency-exit fees, `QuoteYield` is the Heat²-weighted sell-side yield, and `SealedPot` streams Seal forfeits.
    - These are four slots with one shape: pull fixed inflows, distribute by a published weight.
