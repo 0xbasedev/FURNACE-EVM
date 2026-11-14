@@ -210,6 +210,10 @@ Foundry's installer, GitHub releases and the solc binary host are blocked in the
 
 EVM target: `cancun`.
 
+## The spec seal
+
+The scope is sealed ([docs/SPEC-SEAL.md](docs/SPEC-SEAL.md)). The spec is canonical v5.5.0 and nothing else, and no new feature enters. What remains is a fixed, ordered finish line, ending in a `v1.0.0` code-complete tag. Every gap the spec leaves is listed in one generated register of provisional readings, [docs/PROVISIONAL.md](docs/PROVISIONAL.md), for the owner to confirm; `pnpm check` fails if it falls out of date with the ADRs.
+
 ## Deploy blockers (v5.5 deployment gate; see `canonical/DEPLOYMENT.md`)
 
 - The real Ethereum deployer. The current one is a placeholder, so every mined address and `FurnaceParams` are provisional. Seven modules still need salts.
