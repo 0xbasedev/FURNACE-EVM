@@ -86,6 +86,16 @@ It also keeps the pool's totals of each.
   - booked and streamed splitters always hold what they owe;
   - no budget is ever overpaid;
   - ForgeAsh never runs ahead of the curve, and ASH is minted only as it releases.
+- **Mutations:** 39 planted bugs, run in separate worktrees:
+  - every claim gate (settlement, once, listings, the owner, the roll), the debit and the paid record;
+  - every roll gate and its target epoch;
+  - each measure's total and share, and the base's 30/70 shape;
+  - the liability on assignment, the points split and its remainder, the epoch clock and the share view;
+  - every booking rule, ForgeAsh's slice, weights, release and token, and the stream's length, remainder and zero refusal;
+  - the kit's wiring of the four slots.
+  - **37 were caught.** Two survived and are now caught:
+    - *Dropping the rolled check from a claim.* It is equivalent while ForgeEmissions never rewrites a settled epoch: a rolled epoch's total is zero, so its shares are zero. `test_aRolledBudgetIsNeverAlsoPaid` rewrites one, and fails against the mutant.
+    - *Dropping the claimed check from `shareOf`.* No test read the view after a claim. The release test now asserts the view shows exactly what the claim pays, and nothing once claimed.
 - **Kit.** The first-epoch test claims a real ForgeAsh share on the real core, paid to the owner and released to exactly `V(now)`. It also books a real Quote-yield release from the Vent.
   - **LiteForge fork dry runs, smoke on:**
     - 59 transactions and 101.8M gas by default;
