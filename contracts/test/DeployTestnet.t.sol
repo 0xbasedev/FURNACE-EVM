@@ -12,6 +12,7 @@ import {TestnetToken, TestnetValuation} from "../script/testnet/TestnetStandIns.
 import {EmberPair} from "../src/pairs/EmberPair.sol";
 import {Vent} from "../src/vent/Vent.sol";
 import {Mantle} from "../src/Mantle.sol";
+import {Kindling} from "../src/kindling/Kindling.sol";
 
 using ForgeView for ForgePool;
 
@@ -39,7 +40,23 @@ contract DeployTestnetTest is Test, FurnaceTestnet {
         returns (Deployment memory d)
     {
         vm.startPrank(who);
-        d = _deploy(who, Options(op, version, block.timestamp, address(0), address(0), pairsNow));
+        d = _deploy(who, Options(op, version, block.timestamp, address(0), address(0), pairsNow, false, 0));
+        vm.stopPrank();
+    }
+
+    /// @dev The real-Kindling mode (ADR 0021), opening `start`.
+    function _deployWithKindling(uint256 start) internal returns (Deployment memory d) {
+        vm.startPrank(operator);
+        d = _deploy(operator, Options(operator, "1", block.timestamp, address(0), address(0), true, true, start));
+        vm.stopPrank();
+    }
+
+    function _contributeTo(Deployment memory d, address who, uint256 gross) internal {
+        TestnetToken usdc = TestnetToken(address(d.pairQuote[0]));
+        vm.startPrank(who);
+        usdc.mint(who, gross);
+        usdc.approve(address(d.kindling), gross);
+        d.kindling.contribute(gross);
         vm.stopPrank();
     }
 
@@ -255,5 +272,98 @@ contract DeployTestnetTest is Test, FurnaceTestnet {
                 d.emissions.advance(epoch, i);
             }
         }
+    }
+
+    // ── the real Kindling (ADR 0021) ──────────────────────────────────────
+
+    /// The genesis event end to end on the real core: Kindling holds the Mantle's seed, BlastPool's
+    /// first deposit and pool 0's Kindling slot; it raises, settles, opens BlastPool at the raise's
+    /// price, sinks 10% of the LP, and its contributors' positions earn in pool 0's first epoch.
+    function test_theRealKindlingOpensBlastPoolAndItsPositionsEarn() public {
+        Deployment memory d = _deployWithKindling(block.timestamp);
+        Plan memory pl = _plan(operator, "1");
+        assertTrue(d.kindlingLive);
+        assertEq(address(d.kindling), pl.kindling, "Kindling at its predicted address");
+        assertEq(address(d.escrow), pl.escrow);
+        assertEq(address(d.sink), pl.sink);
+        assertEq(d.mantle.KINDLING(), address(d.kindling), "the seed is Kindling's");
+        assertEq(d.pairs[0].INITIALIZER(), address(d.kindling), "Kindling opens BlastPool");
+        assertEq(d.pairs[1].INITIALIZER(), operator, "SmelterPool's seeding is a separate event");
+        assertEq(d.pools[0].KINDLING(), address(d.kindling), "Kindling opens pool 0 positions");
+        for (uint256 i = 1; i < 4; ++i) assertEq(d.pools[i].KINDLING(), address(0));
+        assertEq(d.escrow.TREASURY(), operator, "the operator stands in for the Treasury");
+        assertEq(uint256(d.kindling.venueCheck()), uint256(Kindling.Venue.None), "BlastPool is untouched");
+        vm.expectRevert(Mantle.NotKindling.selector);
+        vm.prank(operator);
+        d.mantle.mintKindlingSeed();
+
+        // The smoke run contributes the operator's wallet cap; four more wallets reach the minimum.
+        vm.startPrank(operator);
+        uint256[4] memory ids = _smoke(d, operator);
+        vm.stopPrank();
+        assertEq(d.kindling.accepted(), 25_000e6, "the smoke run contributed the cap");
+        address[4] memory crowd = [makeAddr("c0"), makeAddr("c1"), makeAddr("c2"), makeAddr("c3")];
+        for (uint256 i; i < 4; ++i) _contributeTo(d, crowd[i], 20_000e6);
+        vm.warp(d.kindling.END());
+        address keeper = makeAddr("keeper");
+        vm.prank(keeper);
+        uint256 g = gasleft();
+        uint256 minted = d.kindling.settle();
+        emit log_named_uint("settle on the real core", g - gasleft());
+        (uint112 rE, uint112 rQ,) = d.pairs[0].getReserves();
+        assertEq(rE, P.EMBER_KINDLING_SEED);
+        assertEq(rQ, 101_850e6, "the net raise: 105,000 less 3%");
+        assertEq(d.pairs[0].balanceOf(address(d.sink)), minted - (minted * 90) / 100, "10% sunk");
+        assertEq(IERC20(address(d.pairQuote[0])).balanceOf(keeper), 52_500_000, "5 bps of $105,000");
+        assertEq(d.kindling.closedAt(), block.timestamp, "Ignition's head-start clock");
+
+        g = gasleft();
+        uint256 id = d.kindling.materialize(operator);
+        emit log_named_uint("materialize into the real pool 0", g - gasleft());
+        assertEq(d.pools[0].ownerOf(id), operator);
+        address[] memory page = new address[](4);
+        for (uint256 i; i < 4; ++i) page[i] = crowd[i];
+        assertEq(d.kindling.materializeMany(page), 4);
+        assertEq(d.kindling.lpPaid(), d.kindling.contributorLp(), "every unit of the 90% placed");
+        assertEq(d.pairs[0].balanceOf(address(d.kindling)), 0, "Kindling keeps nothing");
+
+        // Kindling's 24 h are epoch 0, so its positions open as epoch 0 ends and earn from epoch 1.
+        for (uint256 e; e < 2; ++e) {
+            vm.warp(d.start + (e + 1) * P.EPOCH_SECONDS);
+            d.mantle.finalizeEpoch();
+            d.emissions.openEpoch();
+            for (uint256 i; i < 4; ++i) {
+                for (uint256 n; d.emissions.poolEpoch(e, i).phase != ForgeEmissions.Phase.Done; ++n) {
+                    assertLt(n, 16, "bounded pages");
+                    d.emissions.advance(e, i);
+                }
+            }
+        }
+        assertGt(d.emissions.unclaimed(0, id), 0, "a contributor's position earned");
+        assertGt(d.emissions.unclaimed(3, ids[3]), 0, "and the USDC pool's");
+    }
+
+    /// Below the minimum at the deadline, the real event fails and refunds principal plus every fee.
+    function test_theRealKindlingRefundsAFailedEvent() public {
+        Deployment memory d = _deployWithKindling(block.timestamp + 1 hours);
+        vm.startPrank(operator);
+        _smoke(d, operator); // before START: no contribution
+        vm.stopPrank();
+        assertEq(d.kindling.accepted(), 0);
+        vm.warp(d.kindling.START());
+        _contributeTo(d, makeAddr("c0"), 25_000e6);
+        address c1 = makeAddr("c1");
+        _contributeTo(d, c1, 10_000e6);
+        vm.prank(c1);
+        d.kindling.cancel(9_700e6);
+        vm.warp(d.kindling.END());
+        vm.expectRevert(abi.encodeWithSelector(Kindling.BelowMinimumRaise.selector, 25_000e6, 100_000e6));
+        d.kindling.settle();
+        assertEq(uint256(d.kindling.fail()), uint256(Kindling.Failure.BelowMinimum));
+        assertEq(d.kindling.refund(makeAddr("c0")), 25_000e6);
+        assertEq(d.kindling.refund(c1), 300e6, "the cancelled contribution's fee comes back too");
+        assertEq(IERC20(address(d.pairQuote[0])).balanceOf(address(d.escrow)), 0);
+        assertEq(d.pairs[0].totalSupply(), 0, "BlastPool never opened");
+        assertFalse(d.mantle.seedReserved() == 0, "the seed stays reserved (ADR 0003)");
     }
 }

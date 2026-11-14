@@ -179,6 +179,17 @@ library FurnaceParams {
     uint256 internal constant VENT_MAX_WAIT = 86400; // 24 h
     uint256 internal constant VENT_ALERT_AFTER = 259200; // 72 h: an alert, never a weaker guard
 
+    // ── Kindling: the genesis event, its escrow and the LP sink (spec v5.5 §3; ADR 0021) ──
+    uint256 internal constant KINDLING_DURATION = 86400; // 24 h; deposits stop exactly at the deadline
+    uint256 internal constant KINDLING_SETTLE_WINDOW = 259200; // after the deadline; unsettled by then, the event fails
+    uint256 internal constant KINDLING_MIN_RAISE_USD = 100000; // whole dollars of accepted gross, at settlement [P]
+    uint256 internal constant KINDLING_MAX_RAISE_USD = 5000000; // whole dollars of accepted gross, at admission [P]
+    uint256 internal constant KINDLING_WALLET_CAP_USD = 25000; // whole dollars of accepted gross per wallet, at admission [P]
+    uint256 internal constant KINDLING_FEE_BPS = 300; // 3%, floored (accounting.ts KindlingEscrow)
+    uint256 internal constant KINDLING_CONTRIBUTOR_LP_PCT = 90; // floored; the permanent sink takes the rest
+    uint256 internal constant KINDLING_CLOSE_BOUNTY_BPS = 5; // of accepted gross less cancellations, from the fees
+    uint256 internal constant KINDLING_MIN_CONTRIBUTION_USD = 1; // whole dollars of gross per contribution [P]
+
     // ── Deterministic deployment registry (CREATE3). PROVISIONAL while the deployer is 0x1111111111111111111111111111111111111111 ──
     //    Only MINED entries become constants; unmined modules are constructor/initializer inputs.
     address internal constant CREATEX = 0xba5Ed099633D3B313e4D5F7bdc1305d3c28ba5Ed;

@@ -15,6 +15,9 @@ import {ForgeLens} from "../src/forge/ForgeLens.sol";
 import {EmberPair} from "../src/pairs/EmberPair.sol";
 import {Flow, IFeeRebate} from "../src/flow/Flow.sol";
 import {Vent, IVentFeePool, IVentPair, IVentMantle} from "../src/vent/Vent.sol";
+import {GenesisFeeEscrow} from "../src/kindling/GenesisFeeEscrow.sol";
+import {PermanentLiquidity} from "../src/kindling/PermanentLiquidity.sol";
+import {Kindling, IKindlingMantle, IKindlingPair, IKindlingPool} from "../src/kindling/Kindling.sol";
 import {
     TestnetToken, TestnetValuation, TestnetPyreLedger, TestnetFeeRebate, TestnetFounders
 } from "./testnet/TestnetStandIns.sol";
@@ -34,10 +37,16 @@ interface ICreateX {
 ///
 ///         This is NOT the canonical deployment. Salts are bound to the deployer AND the chain (the
 ///         0x01 flag), so they can never reproduce an address on another chain; the canonical
-///         registry's mined salts are not used. Every slot for an unbuilt module (Kindling, the
-///         Treasury, the fee router, the guardian, the compounder, the Deed market, the match
-///         reserve, the Sealed pot) is the testnet operator's wallet; Relics' fee rebate is a
-///         stand-in the operator sets. Flow is built (ADR 0016) and deployed here. Not audited.
+///         registry's mined salts are not used. Every slot for an unbuilt module (the Treasury, the
+///         guardian, the compounder, the Deed market, the match reserve, the Sealed pot, Ignition)
+///         is the testnet operator's wallet; Relics' fee rebate is a stand-in the operator sets.
+///         Flow (ADR 0016) and the Vent (ADR 0020) are built and deployed here.
+///
+///         Kindling (ADR 0021) has two modes. By default the operator stands in for it (the
+///         Mantle's KINDLING, BlastPool's initializer, pool 0's openKindling), so the smoke run can
+///         seed the pairs at once. With FURNACE_TESTNET_KINDLING=1 the real Kindling, its
+///         GenesisFeeEscrow and the permanent LP sink deploy at their predicted addresses and hold
+///         those slots: no EMBER exists until the event settles. Not audited.
 ///
 ///         The EMBER pairs (BlastPool, SmelterPool; ADR 0015) are an add-on: Forge pools 0 and 1
 ///         stake their CREATE3-predicted addresses, so the pairs can deploy in the same run (the
@@ -66,6 +75,10 @@ abstract contract FurnaceTestnet {
         bool pairsLive;
         Flow flow; // at its predicted address; the pairs and pools 0 and 1 name it
         Vent vent; // at its predicted address; every pool's fee collector, every pair's fee router
+        bool kindlingLive; // the real Kindling holds its slots (else the operator stands in)
+        Kindling kindling; // at its predicted address in that mode; zero otherwise
+        GenesisFeeEscrow escrow;
+        PermanentLiquidity sink;
         TestnetFeeRebate rebates;
         TestnetFounders founders;
         TestnetValuation valuation;
@@ -108,6 +121,9 @@ abstract contract FurnaceTestnet {
         address[2] pair;
         address flow;
         address vent;
+        address kindling;
+        address escrow;
+        address sink;
     }
 
     function _poolLabel(uint256 i) internal pure returns (string memory) {
@@ -128,6 +144,9 @@ abstract contract FurnaceTestnet {
         for (uint256 i; i < 2; ++i) pl.pair[i] = _predict(deployer, _salt(deployer, version, _pairLabel(i)));
         pl.flow = _predict(deployer, _salt(deployer, version, "Flow"));
         pl.vent = _predict(deployer, _salt(deployer, version, "Vent"));
+        pl.kindling = _predict(deployer, _salt(deployer, version, "Kindling"));
+        pl.escrow = _predict(deployer, _salt(deployer, version, "GenesisFeeEscrow"));
+        pl.sink = _predict(deployer, _salt(deployer, version, "PermanentLiquidity"));
     }
 
     function _create3(Plan memory pl, string memory label, address predicted, bytes memory initCode)
@@ -146,6 +165,8 @@ abstract contract FurnaceTestnet {
         address usdc; // an existing testnet USDC, or zero for the tUSDC stand-in
         address weth; // an existing testnet WETH, or zero for the tWETH stand-in
         bool pairsNow; // deploy the EMBER pairs in this run (else later, with DeployTestnetPairs)
+        bool kindling; // deploy the real Kindling, escrow and sink (else the operator stands in)
+        uint256 kindlingStart; // when Kindling opens (its 24 h runs from here)
     }
 
     /// @notice Deploy and wire everything. Every call must come from `deployer` (a broadcast or a
@@ -154,6 +175,7 @@ abstract contract FurnaceTestnet {
         if (!_isTestnet(block.chainid)) revert NotATestnet(block.chainid);
         if (address(CREATEX).codehash != CREATEX_CODEHASH) revert CreateXMissing(address(CREATEX).codehash);
         (d.deployer, d.operator, d.saltVersion, d.start) = (deployer, o.operator, o.version, o.start);
+        d.kindlingLive = o.kindling;
 
         // 1. Stand-ins (plain CREATE: nothing names them before they exist).
         d.valuation = new TestnetValuation(o.operator);
@@ -177,6 +199,7 @@ abstract contract FurnaceTestnet {
             d.pairs[i] = EmberPair(pl.pair[i]);
             d.stake[i] = IERC20(pl.pair[i]); // pools 0 and 1 stake the pairs' receipts, live or not
         }
+        if (o.kindling) d.kindling = Kindling(pl.kindling); // BlastPool and pool 0 name it
 
         // 3. Deploy in constructor-dependency order: EMBER and the Mantle store addresses only;
         //    the pairs read EMBER's and their quote's decimals; ForgeEmissions reads the Mantle and
@@ -186,6 +209,7 @@ abstract contract FurnaceTestnet {
         _deployPools(pl, d);
         _deployFlow(pl, d);
         _deployVent(pl, d);
+        if (o.kindling) _deployKindling(pl, d, o.kindlingStart);
         _deployEmissionsAndBoost(pl, d);
         d.lens = new ForgeLens();
         _checkWiring(d);
@@ -201,21 +225,23 @@ abstract contract FurnaceTestnet {
         Mantle.BurnCategory[] memory categories = new Mantle.BurnCategory[](2);
         (registrars[0], categories[0]) = (pl.boost, Mantle.BurnCategory.Protocol);
         (registrars[1], categories[1]) = (pl.vent, Mantle.BurnCategory.Protocol);
+        address kindling = d.kindlingLive ? pl.kindling : d.operator;
         bytes memory args =
-            abi.encode(IEmberMintBurn(pl.ember), pl.emissions, d.operator, d.operator, d.start, registrars, categories);
+            abi.encode(IEmberMintBurn(pl.ember), pl.emissions, kindling, d.operator, d.start, registrars, categories);
         d.mantle = Mantle(_create3(pl, "Mantle", pl.mantle, abi.encodePacked(type(Mantle).creationCode, args)));
     }
 
     /// @notice The two EMBER pairs at their predicted addresses. They name Flow's and the Vent's
-    ///         predicted addresses; the operator holds the guardian and initializer slots
-    ///         (Kindling is not built).
+    ///         predicted addresses; the operator holds the guardian slot. BlastPool's initializer is
+    ///         Kindling in the real mode, else the operator; SmelterPool's is the operator (its own
+    ///         seeding is a separately funded Treasury event, not built).
     function _deployPairs(Plan memory pl, Deployment memory d) internal {
         if (pl.pair[0].code.length != 0) revert PairsAlreadyLive(pl.pair[0]);
         string[2] memory names = ["Furnace Testnet Blast Furnace EMBER/USDC LP", "Furnace Testnet Smelter EMBER/WETH LP"];
         string[2] memory symbols = ["tBLAST-LP", "tSMELT-LP"];
         for (uint256 i; i < 2; ++i) {
             bytes memory args = abi.encode(
-                names[i], symbols[i], IERC20(pl.ember), d.pairQuote[i], pl.vent, pl.flow, d.operator, d.operator
+                names[i], symbols[i], IERC20(pl.ember), d.pairQuote[i], pl.vent, pl.flow, d.operator, _initializer(d, i)
             );
             d.pairs[i] = EmberPair(
                 _create3(pl, _pairLabel(i), pl.pair[i], abi.encodePacked(type(EmberPair).creationCode, args))
@@ -234,8 +260,19 @@ abstract contract FurnaceTestnet {
             if (p.FEE_ROUTER() != _predict(d.deployer, _salt(d.deployer, d.saltVersion, "Vent"))) revert Miswired("pair FEE_ROUTER");
             if (p.GUARDIAN() != d.operator) revert Miswired("pair slots");
             if (p.FLOW() != _predict(d.deployer, _salt(d.deployer, d.saltVersion, "Flow"))) revert Miswired("pair FLOW");
-            if (p.INITIALIZER() != d.operator) revert Miswired("pair initializer");
+            if (p.INITIALIZER() != _initializer(d, i)) revert Miswired("pair initializer");
         }
+    }
+
+    /// @notice Who opens pair `i`: Kindling opens BlastPool in the real mode; the operator otherwise.
+    function _initializer(Deployment memory d, uint256 i) internal pure returns (address) {
+        return i == 0 && address(d.kindling) != address(0) ? address(d.kindling) : d.operator;
+    }
+
+    /// @notice Who may open Kindling positions in pool `i`: only pool 0, by Kindling or its stand-in.
+    function _kindlingSlot(Deployment memory d, uint256 i) internal pure returns (address) {
+        if (i != 0) return address(0);
+        return address(d.kindling) != address(0) ? address(d.kindling) : d.operator;
     }
 
     function _deployPools(Plan memory pl, Deployment memory d) internal {
@@ -246,9 +283,9 @@ abstract contract FurnaceTestnet {
             // unbuilt compounder, as it does for Flow's.
             address flow = isLp[i] ? pl.flow : address(0);
             address compounder = isLp[i] ? d.operator : address(0);
-            // Kindling's LP is EMBER/USDC, pool 0's receipt (spec v5.5 §3); the operator stands in.
+            // Kindling's LP is EMBER/USDC, pool 0's receipt (spec v5.5 §3): Kindling or its stand-in.
             // Every pool reads the same founder record for First Flame (ADR 0018).
-            address kindling = i == 0 ? d.operator : address(0);
+            address kindling = _kindlingSlot(d, i);
             // The operator stands in for Ignition, the head start's granter, on every pool (ADR 0019).
             // The Vent collects every pool's fees (ADR 0020).
             bytes memory args = abi.encode(
@@ -295,6 +332,30 @@ abstract contract FurnaceTestnet {
         d.vent = Vent(_create3(pl, "Vent", pl.vent, abi.encodePacked(type(Vent).creationCode, args)));
     }
 
+    /// @notice The real Kindling (ADR 0021): the sink, then the escrow naming Kindling's predicted
+    ///         address, then Kindling, which reads only the escrow and USDC's decimals. The operator
+    ///         is the escrow's Treasury.
+    function _deployKindling(Plan memory pl, Deployment memory d, uint256 start) internal {
+        d.sink = PermanentLiquidity(
+            _create3(pl, "PermanentLiquidity", pl.sink, type(PermanentLiquidity).creationCode)
+        );
+        bytes memory args = abi.encode(d.pairQuote[0], pl.kindling, d.operator);
+        d.escrow = GenesisFeeEscrow(
+            _create3(pl, "GenesisFeeEscrow", pl.escrow, abi.encodePacked(type(GenesisFeeEscrow).creationCode, args))
+        );
+        args = abi.encode(
+            d.pairQuote[0],
+            IERC20(pl.ember),
+            IKindlingMantle(pl.mantle),
+            IKindlingPair(pl.pair[0]),
+            IKindlingPool(pl.pool[0]),
+            d.escrow,
+            address(d.sink),
+            start
+        );
+        d.kindling = Kindling(_create3(pl, "Kindling", pl.kindling, abi.encodePacked(type(Kindling).creationCode, args)));
+    }
+
     function _deployEmissionsAndBoost(Plan memory pl, Deployment memory d) internal {
         bytes memory args =
             abi.encode(IMantleDistribution(pl.mantle), IERC20(pl.ember), d.pools, pl.boost, d.operator, d.operator);
@@ -311,6 +372,7 @@ abstract contract FurnaceTestnet {
         if (d.ember.CONFIG_HASH() != P.CONFIG_HASH) revert Miswired("EMBER.CONFIG_HASH");
         if (address(d.mantle.EMBER()) != address(d.ember)) revert Miswired("Mantle.EMBER");
         if (d.mantle.DISTRIBUTOR() != address(d.emissions)) revert Miswired("Mantle.DISTRIBUTOR");
+        if (d.mantle.KINDLING() != (d.kindlingLive ? address(d.kindling) : d.operator)) revert Miswired("Mantle.KINDLING");
         if (d.mantle.registrarCategory(address(d.boost)) != Mantle.BurnCategory.Protocol) revert Miswired("Mantle registrar");
         if (d.mantle.registrarCategory(address(d.vent)) != Mantle.BurnCategory.Protocol) revert Miswired("Mantle Vent registrar");
         if (d.emissions.CAPSTONE() != address(d.boost)) revert Miswired("ForgeEmissions.CAPSTONE");
@@ -321,7 +383,7 @@ abstract contract FurnaceTestnet {
             if (p.ANNEX().code.length == 0) revert Miswired("pool annex");
             if (p.FLOW() != (p.IS_LP() ? address(d.flow) : address(0))) revert Miswired("pool FLOW");
             if (p.COMPOUNDER() != (p.IS_LP() ? d.operator : address(0))) revert Miswired("pool COMPOUNDER");
-            if (p.KINDLING() != (i == 0 ? d.operator : address(0))) revert Miswired("pool KINDLING");
+            if (p.KINDLING() != _kindlingSlot(d, i)) revert Miswired("pool KINDLING");
             if (p.FOUNDERS() != address(d.founders)) revert Miswired("pool FOUNDERS");
             if (p.IGNITION() != d.operator) revert Miswired("pool IGNITION");
             if (p.FEE_COLLECTOR() != address(d.vent)) revert Miswired("pool FEE_COLLECTOR");
@@ -338,6 +400,17 @@ abstract contract FurnaceTestnet {
         if (address(f.POOL0()) != address(d.pools[0]) || address(f.POOL1()) != address(d.pools[1])) revert Miswired("Flow pools");
         if (address(f.EMBER()) != address(d.ember) || address(f.REBATES()) != address(d.rebates)) revert Miswired("Flow tokens");
         if (f.COMPOUNDER() != d.operator) revert Miswired("Flow compounder");
+        if (d.kindlingLive) _checkKindling(d);
+    }
+
+    function _checkKindling(Deployment memory d) internal view {
+        Kindling k = d.kindling;
+        if (address(k.USDC()) != address(d.pairQuote[0]) || address(k.EMBER()) != address(d.ember)) revert Miswired("Kindling tokens");
+        if (address(k.MANTLE()) != address(d.mantle) || address(k.PAIR()) != address(d.pairs[0])) revert Miswired("Kindling venue");
+        if (address(k.POOL()) != address(d.pools[0]) || address(k.SINK()) != address(d.sink)) revert Miswired("Kindling pool and sink");
+        GenesisFeeEscrow e = d.escrow;
+        if (address(k.ESCROW()) != address(e) || e.EVENT() != address(k)) revert Miswired("Kindling escrow");
+        if (address(e.QUOTE()) != address(d.pairQuote[0]) || e.TREASURY() != d.operator) revert Miswired("escrow slots");
     }
 
     /// @notice A first exercise of every principal path the deployment allows, as `actor`. The
@@ -349,7 +422,14 @@ abstract contract FurnaceTestnet {
         usdc.mint(actor, 1_000_000e6);
         usdc.approve(address(d.pools[3]), type(uint256).max);
         ids[3] = d.pools[3].open(100e6);
-        if (actor == d.operator) {
+        if (d.kindlingLive) {
+            // No EMBER exists before Kindling settles: contribute the wallet cap to the genesis
+            // event instead. Its minimum needs at least four such wallets (KindlingSettle).
+            if (block.timestamp >= d.kindling.START() && block.timestamp < d.kindling.END()) {
+                usdc.approve(address(d.kindling), type(uint256).max);
+                d.kindling.contribute(d.kindling.WALLET_CAP());
+            }
+        } else if (actor == d.operator) {
             d.mantle.mintKindlingSeed(); // 420,000 test EMBER to the operator
             IERC20 ember = IERC20(address(d.ember));
             ember.approve(address(d.pools[2]), type(uint256).max);
@@ -409,8 +489,10 @@ abstract contract FurnaceTestnet {
 ///         FURNACE_TESTNET_OPERATOR (default: the deployer), FURNACE_TESTNET_SALT_VERSION (default
 ///         "1"; bump it to deploy a fresh set), FURNACE_TESTNET_START (default: now),
 ///         FURNACE_TESTNET_USDC and FURNACE_TESTNET_WETH (existing testnet tokens instead of the
-///         stand-ins), FURNACE_TESTNET_PAIRS=later (leave the EMBER pairs for DeployTestnetPairs)
-///         and FURNACE_TESTNET_SMOKE=1 (also run the smoke actions).
+///         stand-ins), FURNACE_TESTNET_PAIRS=later (leave the EMBER pairs for DeployTestnetPairs),
+///         FURNACE_TESTNET_KINDLING=1 (the real Kindling, escrow and sink; KindlingSettle ends it)
+///         with FURNACE_TESTNET_KINDLING_START (default: the Mantle START), and
+///         FURNACE_TESTNET_SMOKE=1 (also run the smoke actions).
 contract DeployTestnet is Script, FurnaceTestnet {
     function run() external returns (Deployment memory d) {
         vm.startBroadcast();
@@ -422,6 +504,8 @@ contract DeployTestnet is Script, FurnaceTestnet {
         o.usdc = vm.envOr("FURNACE_TESTNET_USDC", address(0));
         o.weth = vm.envOr("FURNACE_TESTNET_WETH", address(0));
         o.pairsNow = keccak256(bytes(vm.envOr("FURNACE_TESTNET_PAIRS", string("now")))) != keccak256("later");
+        o.kindling = vm.envOr("FURNACE_TESTNET_KINDLING", false);
+        o.kindlingStart = vm.envOr("FURNACE_TESTNET_KINDLING_START", o.start);
         d = _deploy(deployer, o);
         if (vm.envOr("FURNACE_TESTNET_SMOKE", false)) _smoke(d, deployer);
         vm.stopBroadcast();
@@ -449,6 +533,14 @@ contract DeployTestnet is Script, FurnaceTestnet {
         }
         console2.log("Flow             ", address(d.flow));
         console2.log("Vent             ", address(d.vent));
+        if (d.kindlingLive) {
+            console2.log("Kindling         ", address(d.kindling));
+            console2.log("  opens / closes ", d.kindling.START(), d.kindling.END());
+            console2.log("GenesisFeeEscrow ", address(d.escrow));
+            console2.log("PermanentLiquidity", address(d.sink));
+        } else {
+            console2.log("Kindling: the operator stands in (FURNACE_TESTNET_KINDLING=1 deploys it)");
+        }
         console2.log("TestnetFeeRebate ", address(d.rebates));
         console2.log("TestnetFounders  ", address(d.founders));
         console2.log("ForgeLens        ", address(d.lens));
@@ -476,6 +568,10 @@ contract DeployTestnet is Script, FurnaceTestnet {
         vm.serializeBool(k, "pairsLive", d.pairsLive);
         vm.serializeAddress(k, "Flow", address(d.flow));
         vm.serializeAddress(k, "Vent", address(d.vent));
+        vm.serializeBool(k, "kindlingLive", d.kindlingLive);
+        vm.serializeAddress(k, "Kindling", address(d.kindling));
+        vm.serializeAddress(k, "GenesisFeeEscrow", address(d.escrow));
+        vm.serializeAddress(k, "PermanentLiquidity", address(d.sink));
         vm.serializeAddress(k, "TestnetFeeRebate", address(d.rebates));
         vm.serializeAddress(k, "TestnetFounders", address(d.founders));
         for (uint256 i; i < 4; ++i) {
@@ -511,7 +607,10 @@ contract DeployTestnetPairs is Script, FurnaceTestnet {
         d.stake[2] = IERC20(vm.parseJsonAddress(json, ".EmberToken"));
         d.pairQuote[0] = IERC20(vm.parseJsonAddress(json, ".BlastPoolQuote"));
         d.pairQuote[1] = IERC20(vm.parseJsonAddress(json, ".SmelterPoolQuote"));
+        // Older manifests predate Kindling: the operator stood in.
+        if (vm.keyExistsJson(json, ".Kindling")) d.kindling = Kindling(vm.parseJsonAddress(json, ".Kindling"));
         Plan memory pl = _plan(d.deployer, d.saltVersion);
+        if (address(d.kindling) != address(0) && address(d.kindling) != pl.kindling) revert Miswired("manifest Kindling");
         if (pl.ember != address(d.stake[2])) revert Miswired("manifest EMBER");
         for (uint256 i; i < 2; ++i) {
             ForgePool pool = ForgePool(vm.parseJsonAddress(json, string.concat(".ForgePool", vm.toString(i))));
@@ -526,5 +625,43 @@ contract DeployTestnetPairs is Script, FurnaceTestnet {
         console2.log("BlastPool        ", address(pairs[0]));
         console2.log("SmelterPool      ", address(pairs[1]));
         if (vm.isContext(VmSafe.ForgeContext.ScriptBroadcast)) vm.writeJson("true", _manifestPath(), ".pairsLive");
+    }
+}
+
+/// @notice Ends the real testnet Kindling once its 24 h are over (ADR 0021): `forge script
+///         contracts/script/DeployTestnet.s.sol:KindlingSettle --rpc-url liteforge --broadcast
+///         --account <any keystore>`. Anyone may run it. It settles when the event can (the caller
+///         earns the close bounty) and fails it when it must, then claims the caller's own
+///         entitlement (a pool 0 position) or refund. Reads `deployments/testnet-<chain id>.json`.
+contract KindlingSettle is Script {
+    error NoKindling();
+
+    function run() external returns (Kindling.Status status) {
+        string memory json = vm.readFile(_manifestPath());
+        if (!vm.keyExistsJson(json, ".Kindling")) revert NoKindling();
+        Kindling k = Kindling(vm.parseJsonAddress(json, ".Kindling"));
+        if (address(k) == address(0)) revert NoKindling();
+        vm.startBroadcast();
+        (, address me,) = vm.readCallers();
+        status = k.status();
+        if (status == Kindling.Status.Live) {
+            if (block.timestamp < k.END()) {
+                console2.log("Kindling is open until", k.END());
+            } else if (k.accepted() < k.MIN_RAISE() || block.timestamp >= k.SETTLE_DEADLINE()) {
+                k.fail();
+            } else if (k.venueCheck() == Kindling.Venue.None) {
+                k.settle();
+            } else {
+                // BlastPool not deployed yet, or the wrong one: settlement waits, never forced.
+                console2.log("Kindling waits on its venue, reason", uint256(k.venueCheck()));
+            }
+            status = k.status();
+        }
+        if (status == Kindling.Status.Settled && k.entitlementOf(me) != 0) k.materialize(me);
+        if (status == Kindling.Status.Failed && k.refundableOf(me) != 0) k.refund(me);
+        vm.stopBroadcast();
+        console2.log("Kindling status (0 live, 1 settled, 2 failed)", uint256(status));
+        console2.log("accepted gross   ", k.accepted());
+        console2.log("closedAt         ", k.closedAt());
     }
 }

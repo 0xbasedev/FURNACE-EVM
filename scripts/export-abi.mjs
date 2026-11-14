@@ -15,6 +15,9 @@ const CONTRACTS = [
   ['EmberPair', 'EmberPair.sol'],
   ['Flow', 'Flow.sol'],
   ['Vent', 'Vent.sol'],
+  ['Kindling', 'Kindling.sol'],
+  ['GenesisFeeEscrow', 'GenesisFeeEscrow.sol'],
+  ['PermanentLiquidity', 'PermanentLiquidity.sol'],
   // Testnet-only stand-ins (contracts/script/testnet): never part of a canonical deployment.
   ['TestnetToken', 'TestnetStandIns.sol'],
   ['TestnetValuation', 'TestnetStandIns.sol'],
